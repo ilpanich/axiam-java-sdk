@@ -2,19 +2,22 @@
 
 Official Java client SDK for [AXIAM](https://github.com/ilpanich/axiam) — Access eXtended Identity and Authorization Management.
 
+Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
+
 ## Package identity
 
-- **Maven coordinates:** `io.github.ilpanich:axiam-sdk`
+- **Maven coordinates:** `io.github.ilpanich:axiam-sdk` (BOM: `io.github.ilpanich:axiam-bom`)
 - **GroupId:** `io.github.ilpanich`
 - **ArtifactId:** `axiam-sdk`
 - **Registry:** Maven Central _(reserved, not yet published)_
+- **API docs:** [javadoc.io](https://javadoc.io/doc/io.github.ilpanich/axiam-sdk) — served automatically from the `-javadoc.jar` on Maven Central
 - **License:** Apache-2.0
 
 ## Contract conformance
 
 This SDK conforms to CONTRACT.md §1-§10.
 
-See [`../CONTRACT.md`](../CONTRACT.md) for the full cross-language behavioral contract.
+See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
 ## Getting started
 
@@ -86,6 +89,21 @@ login+MFA, REST authorization, gRPC `CheckAccess`, the AMQP consumer, and a
 complete Spring Boot 3.x application wiring `AxiamAuthenticationFilter`
 explicitly in a `SecurityFilterChain` bean.
 
+## Building from source
+
+Requires JDK 21+ and Maven 3.9+.
+
+```bash
+mvn -B verify              # build, test, javadoc/sources jars (SDK)
+mvn -B -f bom/pom.xml verify   # the BOM is an independent reactor
+```
+
+gRPC stubs are generated at build time by `protobuf-maven-plugin` from the
+vendored `proto/axiam/v1/*.proto` tree into `target/generated-sources`
+(gitignored, never committed). `proto/` is synced from the
+[AXIAM server repo](https://github.com/ilpanich/axiam); `buf` is not used by
+this SDK.
+
 ## Status
 
-Phase 20 (Java SDK) implementation.
+Java SDK, extracted from the AXIAM monorepo into its own repository.

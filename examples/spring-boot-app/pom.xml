@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
 
   <!-- D-15/D-16: Spring Boot 3.2+/Security 6.x, jakarta.* namespace. Pinned
-       to the same 3.5.6 line as sdks/java/pom.xml's spring-boot-starter-security
+       to the same 3.5.6 line as the SDK pom's spring-boot-starter-security
        (provided/optional) dependency, so the example builds against the same
        Spring Security major/minor the SDK's own filter/AutoConfiguration
        target. -->
@@ -29,10 +29,10 @@
   </properties>
 
   <dependencies>
-    <!-- Built against the phase version installed into the local Maven
-         repository by `mvn -f sdks/java/pom.xml install` (this example is
-         never published standalone; it exists to prove SC#3's "complete
-         working application context"). -->
+    <!-- Built against the version installed into the local Maven repository by
+         `mvn install` at the repo root (this example is never published
+         standalone; it exists to prove SC#3's "complete working application
+         context"). -->
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-sdk</artifactId>

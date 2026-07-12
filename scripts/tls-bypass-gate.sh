@@ -6,11 +6,10 @@
 # "TrustManager that accepts all certs" finding + CONTRACT.md §6's "any other
 # API surface that bypasses TLS verification" absolute prohibition.
 #
-# Scope: sdks/java/src + sdks/java/examples ONLY — deliberately excludes
-# sdks/java/scripts (this script itself) and sdks/java/src/test (so a
-# future reflection-based TLS regression test, which legitimately references
-# these idioms as literal strings to assert their ABSENCE, cannot trip its
-# own gate).
+# Scope: src/ + examples/ ONLY — deliberately excludes scripts/ (this script
+# itself) and src/test (so a future reflection-based TLS regression test, which
+# legitimately references these idioms as literal strings to assert their
+# ABSENCE, cannot trip its own gate).
 #
 # NOTE (20-05 correction): the literal method-name substrings
 # `hostnameVerifier(`/`sslSocketFactory(` were dropped from this pattern.
@@ -33,28 +32,28 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JAVA_SDK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SDK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 PATTERN='setHostnameVerifier|X509TrustManager\s*\(\s*\)\s*\{|checkServerTrusted\s*\([^)]*\)\s*\{\s*\}|TrustAllCerts|ALLOW_ALL_HOSTNAME_VERIFIER|NoopHostnameVerifier|->\s*true\b'
 
 TARGETS=()
-[ -d "${JAVA_SDK_ROOT}/src" ] && TARGETS+=("${JAVA_SDK_ROOT}/src")
-[ -d "${JAVA_SDK_ROOT}/examples" ] && TARGETS+=("${JAVA_SDK_ROOT}/examples")
+[ -d "${SDK_ROOT}/src" ] && TARGETS+=("${SDK_ROOT}/src")
+[ -d "${SDK_ROOT}/examples" ] && TARGETS+=("${SDK_ROOT}/examples")
 
 if [ "${#TARGETS[@]}" -eq 0 ]; then
-  echo "OK: no TLS-bypass patterns found under sdks/java/ (no src/examples dirs yet)"
+  echo "OK: no TLS-bypass patterns found (no src/examples dirs yet)"
   exit 0
 fi
 
-# Exclude sdks/java/src/test — a future reflection-based TLS regression test
-# legitimately asserts the ABSENCE of these idioms and must not self-trip
-# this gate by referencing the literal strings.
+# Exclude src/test — a future reflection-based TLS regression test legitimately
+# asserts the ABSENCE of these idioms and must not self-trip this gate by
+# referencing the literal strings.
 MATCHES=$(grep -rnE "${PATTERN}" "${TARGETS[@]}" --exclude-dir=test 2>/dev/null || true)
 
 if [ -n "${MATCHES}" ]; then
-  echo "FAIL: found a TLS-bypass pattern under sdks/java/"
+  echo "FAIL: found a TLS-bypass pattern in src/ or examples/"
   echo "${MATCHES}"
   exit 1
 fi
 
-echo "OK: no TLS-bypass patterns found under sdks/java/"
+echo "OK: no TLS-bypass patterns found in src/ or examples/"

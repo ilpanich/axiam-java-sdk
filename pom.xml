@@ -11,7 +11,7 @@
 
   <name>axiam-sdk</name>
   <description>Official Java client SDK for AXIAM IAM</description>
-  <url>https://github.com/ilpanich/axiam</url>
+  <url>https://github.com/ilpanich/axiam-java-sdk</url>
 
   <licenses>
     <license>
@@ -26,14 +26,14 @@
   <developers>
     <developer>
       <name>AXIAM Maintainers</name>
-      <url>https://github.com/ilpanich/axiam</url>
+      <url>https://github.com/ilpanich/axiam-java-sdk</url>
     </developer>
   </developers>
 
   <scm>
-    <url>https://github.com/ilpanich/axiam</url>
-    <connection>scm:git:https://github.com/ilpanich/axiam.git</connection>
-    <developerConnection>scm:git:https://github.com/ilpanich/axiam.git</developerConnection>
+    <url>https://github.com/ilpanich/axiam-java-sdk</url>
+    <connection>scm:git:https://github.com/ilpanich/axiam-java-sdk.git</connection>
+    <developerConnection>scm:git:https://github.com/ilpanich/axiam-java-sdk.git</developerConnection>
   </scm>
 
   <properties>
@@ -181,17 +181,18 @@
       </extension>
     </extensions>
     <plugins>
-      <!-- D-21: generate-on-build into target/generated-sources (gitignored);
-           buf CLI is unavailable in this environment (Pitfall 1) so this is
-           the SDK's actual gRPC codegen path — sdks/buf.gen.yaml's Java
-           entries are demoted to drift-check-only documentation (Task 2). -->
+      <!-- D-21: generate-on-build into target/generated-sources (gitignored).
+           protobuf-maven-plugin is the Java SDK's ONLY gRPC codegen path — buf
+           is not used here (the monorepo's buf.gen.yaml never had Java plugin
+           entries that this build consumes). proto/ is vendored at this repo's
+           root, synced from the axiam monorepo's proto/axiam/v1/*.proto. -->
       <plugin>
         <groupId>org.xolstice.maven.plugins</groupId>
         <artifactId>protobuf-maven-plugin</artifactId>
         <version>0.6.1</version>
         <configuration>
           <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
-          <protoSourceRoot>${project.basedir}/../../proto</protoSourceRoot>
+          <protoSourceRoot>${project.basedir}/proto</protoSourceRoot>
           <pluginId>grpc-java</pluginId>
           <pluginArtifact>io.grpc:protoc-gen-grpc-java:1.82.0:exe:${os.detected.classifier}</pluginArtifact>
         </configuration>
@@ -279,6 +280,34 @@
                 <arg>loopback</arg>
               </gpgArguments>
             </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Coverage: the agent must be attached before surefire forks its JVM
+           (jacoco sets the `argLine` property that surefire picks up by
+           default), and the XML report is what the Coveralls upload consumes.
+           axiam/v1/** is protoc/protoc-gen-grpc-java output regenerated on
+           every build (D-21) and never hand-written, so counting it would
+           dilute the coverage of the SDK's actual API surface. -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>0.8.13</version>
+        <configuration>
+          <excludes>
+            <exclude>axiam/v1/**</exclude>
+          </excludes>
+        </configuration>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals><goal>prepare-agent</goal></goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals><goal>report</goal></goals>
           </execution>
         </executions>
       </plugin>
