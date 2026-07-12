@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Integration test for {@link AxiamAuthenticationFilter} (20-06 acceptance
+ * Test for {@link AxiamAuthenticationFilter} (20-06 acceptance
  * criteria): a matching-tenant valid token authenticates AND a
  * valid-signature wrong-tenant token is rejected (cross-tenant control is
  * enforced, non-vacuous), an expired token is rejected, and a request with
@@ -44,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * as {@code JwksVerifierTest}) rather than a full Spring
  * {@code ApplicationContext}.
  */
-class AxiamAuthenticationFilterIT {
+class AxiamAuthenticationFilterTest {
 
     private static final String CONFIGURED_TENANT = "tenant-a";
 
