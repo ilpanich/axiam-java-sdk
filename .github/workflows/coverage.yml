@@ -1,0 +1,37 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: JaCoCo + Coveralls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up JDK 21
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9  # v4.8.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      # jacoco-maven-plugin's prepare-agent execution attaches the coverage
+      # agent before surefire forks, and its `report` execution (bound to the
+      # `test` phase in pom.xml) writes target/site/jacoco/jacoco.xml. GPG
+      # signing stays off — this job publishes nothing.
+      - name: mvn verify (runs tests under the JaCoCo agent)
+        run: mvn -B verify
+
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e  # v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          format: jacoco
+          file: target/site/jacoco/jacoco.xml

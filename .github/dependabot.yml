@@ -1,0 +1,45 @@
+# .github/dependabot.yml
+#
+# Automated dependency updates for the standalone AXIAM Java SDK repo.
+# Two maven entries because bom/pom.xml is an independent reactor, not a module
+# of the root (jar-packaged) SDK POM — Dependabot resolves each POM separately.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: maven
+    directory: /bom
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: maven
+    directory: /examples/spring-boot-app
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
