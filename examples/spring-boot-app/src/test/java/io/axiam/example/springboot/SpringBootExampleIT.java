@@ -17,16 +17,11 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.client.RestTestClient;
 
 import java.util.Date;
 import java.util.List;
@@ -34,7 +29,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Boots the COMPLETE Spring Boot 3.x application context (SC#3's "complete
+ * Boots the COMPLETE Spring Boot 4.x application context (SC#3's "complete
  * working application context") with a real {@link org.springframework.boot.web.server.WebServer}
  * and asserts the {@code /hello} endpoint is guarded by
  * {@link io.axiam.sdk.spring.AxiamAuthenticationFilter} end-to-end: 401
@@ -74,35 +69,41 @@ class SpringBootExampleIT {
         jwksServer.close();
     }
 
-    @Autowired
-    private TestRestTemplate restTemplate;
+    // Spring Boot 4 removed TestRestTemplate; @LocalServerPort + Spring
+    // Framework 7's RestTestClient is the servlet-stack replacement. The
+    // client is bound to the running RANDOM_PORT server and, unlike a raw
+    // RestClient/RestTemplate, does not throw on 4xx — it asserts on status.
+    @LocalServerPort
+    private int port;
+
+    private RestTestClient client() {
+        return RestTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
+    }
 
     @Test
     void contextBootsWithACompleteApplicationContext() {
-        // The mere fact @SpringBootTest above reached this test method proves
-        // the full ApplicationContext (SecurityConfig + HelloController +
+        // A live RANDOM_PORT server (non-zero port) proves the full
+        // ApplicationContext (SecurityConfig + HelloController +
         // AxiamAuthenticationFilter beans) refreshed successfully (SC#3).
-        assertThat(restTemplate).isNotNull();
+        assertThat(port).isGreaterThan(0);
     }
 
     @Test
     void protectedEndpointRejectsRequestWithoutToken() {
-        ResponseEntity<String> response = restTemplate.getForEntity("/hello", String.class);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        client().get().uri("/hello")
+                .exchange()
+                .expectStatus().isUnauthorized();
     }
 
     @Test
     void protectedEndpointAcceptsValidMatchingTenantToken() throws Exception {
         String token = signEdDsa(keyPair, claims(CONFIGURED_TENANT, 900_000));
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(token);
-        ResponseEntity<String> response = restTemplate.exchange(
-                "/hello", HttpMethod.GET, new HttpEntity<>(headers), String.class);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).contains("user-1");
+        client().get().uri("/hello")
+                .header("Authorization", "Bearer " + token)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).value(body -> assertThat(body).contains("user-1"));
     }
 
     @Test
@@ -112,12 +113,10 @@ class SpringBootExampleIT {
         // through the full application context, not just unit-tested.
         String wrongTenantToken = signEdDsa(keyPair, claims("other-tenant", 900_000));
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(wrongTenantToken);
-        ResponseEntity<String> response = restTemplate.exchange(
-                "/hello", HttpMethod.GET, new HttpEntity<>(headers), String.class);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        client().get().uri("/hello")
+                .header("Authorization", "Bearer " + wrongTenantToken)
+                .exchange()
+                .expectStatus().isUnauthorized();
     }
 
     private static JWTClaimsSet claims(String tenantId, long expiresInMillis) {

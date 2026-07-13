@@ -52,15 +52,15 @@
     <dependency>
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>okhttp</artifactId>
-      <version>4.12.0</version>
+      <version>5.4.0</version>
     </dependency>
     <dependency>
       <!-- Provides JavaNetCookieJar, the CookieManager-backed CookieJar
            adapter used by AxiamClient.Builder.build() (§4/D-27) — a separate
-           artifact from okhttp core as of the 4.x line. -->
+           artifact from okhttp core (aligned to the okhttp 5.x line). -->
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>okhttp-urlconnection</artifactId>
-      <version>4.12.0</version>
+      <version>5.4.0</version>
     </dependency>
     <dependency>
       <groupId>io.grpc</groupId>
@@ -135,8 +135,11 @@
       <version>6.1.0</version>
       <scope>provided</scope>
     </dependency>
-    <!-- Test scope: JUnit 5 + OkHttp-4.x-line MockWebServer (D-28; NOT the
-         OkHttp-5.x mockwebserver3 module — Pitfall 3). -->
+    <!-- Test scope: JUnit 5 + OkHttp 5.x MockWebServer. The legacy
+         com.squareup.okhttp3:mockwebserver artifact is still published on the
+         5.x line and keeps the okhttp3.mockwebserver package + classic
+         MockResponse/MockWebServer API, so it stays version-aligned with the
+         okhttp 5.4.0 core without switching to the mockwebserver3 rewrite. -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -146,7 +149,7 @@
     <dependency>
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>mockwebserver</artifactId>
-      <version>4.12.0</version>
+      <version>5.4.0</version>
       <scope>test</scope>
     </dependency>
     <!-- Test scope only: in-process gRPC transport for GrpcAuthzClientTest

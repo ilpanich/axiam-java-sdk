@@ -2,7 +2,7 @@ package io.axiam.sdk.internal;
 
 import io.axiam.sdk.errors.AuthError;
 
-import okhttp3.JavaNetCookieJar;
+import okhttp3.java.net.cookiejar.JavaNetCookieJar;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;

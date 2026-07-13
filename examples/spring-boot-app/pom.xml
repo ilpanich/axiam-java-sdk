@@ -4,15 +4,15 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <!-- D-15/D-16: Spring Boot 3.2+/Security 6.x, jakarta.* namespace. Pinned
-       to the same 3.5.6 line as the SDK pom's spring-boot-starter-security
+  <!-- D-15/D-16: Spring Boot 4.x/Security 7.x, jakarta.* namespace. Pinned
+       to the same 4.1.0 line as the SDK pom's spring-boot-starter-security
        (provided/optional) dependency, so the example builds against the same
        Spring Security major/minor the SDK's own filter/AutoConfiguration
        target. -->
   <parent>
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
-    <version>3.5.6</version>
+    <version>4.1.0</version>
     <relativePath/>
   </parent>
 
@@ -22,7 +22,7 @@
   <packaging>jar</packaging>
 
   <name>axiam-sdk-example-spring-boot-app</name>
-  <description>Complete Spring Boot 3.x example wiring the AXIAM Java SDK's AxiamAuthenticationFilter explicitly in a SecurityFilterChain @Bean (SC#3)</description>
+  <description>Complete Spring Boot 4.x example wiring the AXIAM Java SDK's AxiamAuthenticationFilter explicitly in a SecurityFilterChain @Bean (SC#3)</description>
 
   <properties>
     <java.version>21</java.version>
@@ -58,13 +58,15 @@
       <artifactId>spring-security-test</artifactId>
       <scope>test</scope>
     </dependency>
-    <!-- Mocks the AXIAM server's /oauth2/jwks endpoint in SpringBootExampleIT
-         (D-28: matches the SDK's own OkHttp 4.12.0-line mockwebserver, NOT
-         the 5.x mockwebserver3 rewrite — Pitfall 3). -->
+    <!-- Mocks the AXIAM server's /oauth2/jwks endpoint in SpringBootExampleIT.
+         Matches the SDK's own okhttp 5.x-line legacy mockwebserver artifact
+         (com.squareup.okhttp3:mockwebserver, which keeps the okhttp3.mockwebserver
+         package on 5.x — not the mockwebserver3 rewrite). Pinned explicitly so it
+         stays aligned with okhttp core regardless of the Spring Boot BOM. -->
     <dependency>
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>mockwebserver</artifactId>
-      <version>4.12.0</version>
+      <version>5.4.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
