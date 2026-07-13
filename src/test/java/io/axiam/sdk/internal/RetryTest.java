@@ -121,6 +121,39 @@ class RetryTest {
         assertEquals(3, Retry.DEFAULT_MAX_ATTEMPTS);
     }
 
+    @Test
+    void maxAttemptsBelowOneIsRejected() {
+        List<Long> sleeps = new ArrayList<>();
+        assertThrows(IllegalArgumentException.class, () ->
+                Retry.withRetry(0, () -> "unused", e -> true, recordingSleeper(sleeps), new Random(42)));
+        assertThrows(IllegalArgumentException.class, () ->
+                Retry.withRetry(-1, () -> "unused", e -> true, recordingSleeper(sleeps), new Random(42)));
+        assertTrue(sleeps.isEmpty(), "a rejected maxAttempts must never sleep");
+    }
+
+    @Test
+    void interruptedSleepRestoresTheInterruptFlagAndRethrows() {
+        AtomicInteger attempts = new AtomicInteger(0);
+        TransientError transientError = new TransientError("transient, retryable");
+
+        // A Sleeper that interrupts the backoff wait: withRetry must restore
+        // the thread's interrupt status and rethrow the in-flight exception
+        // rather than swallowing it or continuing to retry.
+        Retry.Sleeper interruptingSleeper = millis -> {
+            throw new InterruptedException("simulated interrupt during backoff");
+        };
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
+                Retry.withRetry(3, () -> {
+                    attempts.incrementAndGet();
+                    throw transientError;
+                }, e -> e instanceof TransientError, interruptingSleeper, new Random(42)));
+
+        assertSame(transientError, thrown, "the in-flight error must be rethrown on interrupt");
+        assertEquals(1, attempts.get(), "an interrupt during the first backoff must abort further attempts");
+        assertTrue(Thread.interrupted(), "the thread's interrupt status must be restored (and cleared for the next test)");
+    }
+
     private static Retry.Sleeper recordingSleeper(List<Long> sleeps) {
         return millis -> sleeps.add(millis);
     }
