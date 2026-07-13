@@ -17,7 +17,7 @@ import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.stub.StreamObserver;
 
-import okhttp3.JavaNetCookieJar;
+import okhttp3.java.net.cookiejar.JavaNetCookieJar;
 import okhttp3.OkHttpClient;
 
 import org.junit.jupiter.api.AfterEach;

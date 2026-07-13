@@ -3,7 +3,7 @@ package io.axiam.sdk.rest;
 import io.axiam.sdk.internal.RefreshGuard;
 import io.axiam.sdk.internal.SessionState;
 
-import okhttp3.JavaNetCookieJar;
+import okhttp3.java.net.cookiejar.JavaNetCookieJar;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
