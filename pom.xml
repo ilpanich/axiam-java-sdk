@@ -6,7 +6,7 @@
 
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>0.1.0</version>
+  <version>1.0.0-alpha</version>
   <packaging>jar</packaging>
 
   <name>axiam-sdk</name>
