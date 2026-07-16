@@ -540,6 +540,51 @@ public final class AxiamClient implements AutoCloseable {
         return checkAccess(action, resourceId, null);
     }
 
+    /**
+     * {@code POST /api/v1/authz/check} for an <strong>explicit subject</strong>
+     * (CONTRACT.md &sect;11.2 subject propagation). Additive subject-aware
+     * overload: the existing {@link #checkAccess(String, String, String)}
+     * signatures are unchanged and check the client's own session; this
+     * overload sets {@code subject_id} in the request body so the check is
+     * evaluated for {@code subjectId} rather than the caller's session. Used by
+     * {@code AxiamAuthorizationInterceptor} to check the request's authenticated
+     * end user, not the application's service-account session.
+     *
+     * <p>Read-only/idempotent: eligible for {@link Retry}'s bounded backoff on
+     * a transient {@link NetworkError}.
+     *
+     * @param subjectId  the subject (user id) the check is evaluated for; sent
+     *                   as {@code subject_id}
+     * @param action     the action being checked
+     * @param resourceId the resource identifier the action is checked against
+     * @param scope      an optional sub-resource scope qualifier, or {@code null}
+     * @return the check outcome (allowed/denied, with an optional deny reason)
+     */
+    public AccessResult checkAccess(String subjectId, String action, String resourceId, @Nullable String scope) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("subject_id", subjectId);
+        body.put("action", action);
+        body.put("resource_id", resourceId);
+        if (scope != null) {
+            body.put("scope", scope);
+        }
+        return Retry.withRetry(() -> sendCheckAccess(body), AxiamClient::isRetryableNetworkError);
+    }
+
+    /** {@code CompletableFuture} async twin of
+     * {@link #checkAccess(String, String, String, String)} (the subject-aware overload).
+     *
+     * @param subjectId  the subject (user id) the check is evaluated for
+     * @param action     the action being checked
+     * @param resourceId the resource identifier the action is checked against
+     * @param scope      an optional sub-resource scope qualifier, or {@code null}
+     * @return a future resolving to the check outcome
+     */
+    public CompletableFuture<AccessResult> checkAccessAsync(
+            String subjectId, String action, String resourceId, @Nullable String scope) {
+        return CompletableFuture.supplyAsync(() -> checkAccess(subjectId, action, resourceId, scope));
+    }
+
     /** {@code CompletableFuture} async twin of {@link #checkAccess(String, String, String)}.
      *
      * @param action     the action being checked

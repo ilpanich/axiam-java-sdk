@@ -15,7 +15,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1-§10.
+This SDK conforms to CONTRACT.md §1–§11.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -88,6 +88,56 @@ See [`examples/`](examples/) for runnable per-capability examples covering
 login+MFA, REST authorization, gRPC `CheckAccess`, the AMQP consumer, and a
 complete Spring Boot 3.x application wiring `AxiamAuthenticationFilter`
 explicitly in a `SecurityFilterChain` bean.
+
+## Declarative authorization helpers
+
+On top of the §10 authentication guard (`AxiamAuthenticationFilter`), the SDK
+provides the CONTRACT.md §11 declarative, per-endpoint authorization
+annotations. Place them directly on a `@Controller` method (or type) to require
+a specific AXIAM permission without writing `checkAccess(...)` in the handler
+body:
+
+```java
+@RestController
+public class DocumentController {
+
+    // Requires the authenticated caller to pass a "read" access check on the
+    // resource whose UUID is the {id} path variable.
+    @AxiamRequireAccess(action = "read", resourceParam = "id")
+    @GetMapping("/documents/{id}")
+    public String read(@PathVariable("id") String id) {
+        return "document " + id;
+    }
+}
+```
+
+Three annotations live in the framework-free `io.axiam.sdk.annotations`
+package:
+
+| Annotation | Effect |
+|------------|--------|
+| `@AxiamRequireAuth` | Requires an authenticated identity (401 otherwise). |
+| `@AxiamRequireAccess(action, resourceParam / resourceId, scope)` | Requires the authenticated caller to pass an AXIAM authorization check for `action` on the resolved resource. |
+| `@AxiamRequireRole({"admin", ...})` | Local check that the caller holds at least one of the named roles (no server round-trip). Coarser than `@AxiamRequireAccess`; not a substitute for it. |
+
+Enforcement is by `io.axiam.sdk.spring.AxiamAuthorizationInterceptor`, a Spring
+MVC `HandlerInterceptor` auto-registered by `AxiamAutoConfiguration` (via a
+`WebMvcConfigurer`) whenever an `AxiamClient` bean and Spring MVC are present.
+It runs strictly **after** authentication, reads the authenticated principal
+from `SecurityContextHolder`, and issues the check for that end user (passing
+`subject_id = <authenticated user id>`, not the application's own service-account
+session). Method-level annotations override type-level ones.
+
+Error mapping (standard `{ "error", "message" }` JSON body): unauthenticated →
+**401** `authentication_failed`; denied → **403** `authorization_denied`;
+missing/non-UUID resource → **400** `invalid_request`; authz transport failure →
+**503** `authz_unavailable` (**fail closed** — a transport failure denies,
+never allows). Decisions are never cached. `AxiamClient` also exposes a
+subject-aware `checkAccess(subjectId, action, resourceId, scope)` overload that
+the interceptor uses; the existing overloads are unchanged.
+
+The annotated controller is demonstrated in
+[`examples/spring-boot-app`](examples/spring-boot-app).
 
 ## Building from source
 

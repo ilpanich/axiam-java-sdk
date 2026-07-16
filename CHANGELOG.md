@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Declarative authorization helpers (CONTRACT.md §11): the framework-free
+  `@AxiamRequireAuth`, `@AxiamRequireAccess`, and `@AxiamRequireRole`
+  annotations (`io.axiam.sdk.annotations`) plus the Spring MVC
+  `AxiamAuthorizationInterceptor` that enforces them, auto-registered by
+  `AxiamAutoConfiguration` via a `WebMvcConfigurer`. Enforcement runs after the
+  §10 authentication guard, issues the check for the authenticated end user
+  (`subject_id`), resolves the resource UUID from a path variable or a static
+  literal, and maps outcomes to 401/403/400/503 (fail closed on transport
+  failure). The example Spring Boot app gains an annotated
+  `GET /documents/{id}` controller.
+- Subject-aware `AxiamClient.checkAccess(subjectId, action, resourceId, scope)`
+  overload (and its `checkAccessAsync` twin) carrying `subject_id` in the
+  request body; the existing overloads are unchanged.
+
+### Changed
+
+- This SDK now conforms to CONTRACT.md §1–§11 (was §1–§10).
+
 ## [1.0.0-alpha] - 2026-07-15
 
 First alpha release of the official Java client SDK for AXIAM. This is an early,
