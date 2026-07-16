@@ -15,7 +15,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1-§11.
+This SDK conforms to CONTRACT.md §1–§11.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
