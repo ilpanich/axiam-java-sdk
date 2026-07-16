@@ -1,5 +1,11 @@
 # axiam-sdk (Java)
 
+[![CI](https://github.com/ilpanich/axiam-java-sdk/actions/workflows/sdk-ci-java.yml/badge.svg?branch=main)](https://github.com/ilpanich/axiam-java-sdk/actions/workflows/sdk-ci-java.yml)
+[![Coverage Status](https://coveralls.io/repos/github/ilpanich/axiam-java-sdk/badge.svg?branch=main)](https://coveralls.io/github/ilpanich/axiam-java-sdk?branch=main)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.ilpanich/axiam-sdk.svg)](https://central.sonatype.com/artifact/io.github.ilpanich/axiam-sdk)
+[![javadoc](https://javadoc.io/badge2/io.github.ilpanich/axiam-sdk/javadoc.svg)](https://javadoc.io/doc/io.github.ilpanich/axiam-sdk)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Official Java client SDK for [AXIAM](https://github.com/ilpanich/axiam) — Access eXtended Identity and Authorization Management.
 
 Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)

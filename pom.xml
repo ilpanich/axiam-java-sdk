@@ -353,7 +353,9 @@
         </executions>
       </plugin>
 
-      <!-- D-22: Sonatype Central Portal publish. -->
+      <!-- D-22: Sonatype Central Portal publish. Releases auto-publish after
+           validation; the deploy mojo blocks until Central reports the
+           deployment published (fail-closed if publishing is rejected). -->
       <plugin>
         <groupId>org.sonatype.central</groupId>
         <artifactId>central-publishing-maven-plugin</artifactId>
@@ -361,7 +363,8 @@
         <extensions>true</extensions>
         <configuration>
           <publishingServerId>central</publishingServerId>
-          <autoPublish>false</autoPublish> <!-- require a manual publish confirmation initially -->
+          <autoPublish>true</autoPublish>
+          <waitUntil>published</waitUntil>
         </configuration>
       </plugin>
     </plugins>
