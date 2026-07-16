@@ -2,6 +2,9 @@ package io.axiam.example.springboot;
 
 import io.axiam.sdk.annotations.AxiamRequireAccess;
 
+import java.util.Map;
+import java.util.UUID;
+
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,11 +33,16 @@ public class DocumentController {
      * @param id             the document's UUID (resolved as the resource id
      *                       for the access check)
      * @param authentication the authenticated caller injected by Spring Security
-     * @return a placeholder document representation for the authenticated caller
+     * @return a placeholder document representation (JSON) for the authenticated caller
      */
     @AxiamRequireAccess(action = "read", resourceParam = "id")
     @GetMapping("/documents/{id}")
-    public String read(@PathVariable("id") String id, Authentication authentication) {
-        return "document " + id + " for " + authentication.getName();
+    public Map<String, String> read(@PathVariable("id") String id, Authentication authentication) {
+        // Canonicalize the path variable to a validated UUID before echoing it: the
+        // interceptor already 400s a non-UUID id, and returning a Map serializes as
+        // application/json (never reflected as HTML), so no user-controlled value can
+        // reach the response unchecked.
+        String documentId = UUID.fromString(id).toString();
+        return Map.of("document", documentId, "owner", authentication.getName());
     }
 }
