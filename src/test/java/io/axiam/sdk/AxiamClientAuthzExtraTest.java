@@ -57,6 +57,41 @@ class AxiamClientAuthzExtraTest {
     }
 
     @Test
+    void checkAccessWithSubjectIdIncludesSubjectIdInTheRequestBody() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                    .setBody("{\"allowed\":true}"));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), "acme").build()) {
+                assertTrue(client.checkAccess("end-user-1", "users:get",
+                        "11111111-1111-1111-1111-111111111111", "profile").allowed());
+
+                RecordedRequest recorded = server.takeRequest();
+                String body = recorded.getBody().readUtf8();
+                assertTrue(body.contains("\"subject_id\":\"end-user-1\""));
+                assertTrue(body.contains("\"scope\":\"profile\""));
+            }
+        }
+    }
+
+    @Test
+    void checkAccessAsyncWithSubjectIdResolves() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                    .setBody("{\"allowed\":true}"));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), "acme").build()) {
+                assertTrue(client.checkAccessAsync("end-user-1", "users:get", "r1", null).get().allowed());
+
+                RecordedRequest recorded = server.takeRequest();
+                assertTrue(recorded.getBody().readUtf8().contains("\"subject_id\":\"end-user-1\""));
+            }
+        }
+    }
+
+    @Test
     void canAsyncTwoAndThreeArgOverloadsResolve() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")

@@ -1,5 +1,6 @@
 package io.axiam.sdk.spring;
 
+import io.axiam.sdk.AxiamClient;
 import io.axiam.sdk.internal.JwksVerifier;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -7,10 +8,14 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
  * Zero-config Spring Boot auto-registration for {@link AxiamAuthenticationFilter}
@@ -83,5 +88,64 @@ public class AxiamAutoConfiguration {
                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
                 .addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
+    }
+
+    /**
+     * Declarative-authorization (&sect;11) enforcement wiring, active only when
+     * Spring MVC is on the classpath ({@code @ConditionalOnClass(HandlerInterceptor.class)}),
+     * kept in a nested configuration so a non-MVC consumer never loads the
+     * {@code spring-webmvc} types this section references.
+     *
+     * <p>Registers {@link AxiamAuthorizationInterceptor} through a
+     * {@link WebMvcConfigurer}, backed by an {@link AxiamClient} built from the
+     * same {@code axiam.base-url}/{@code axiam.tenant-id} properties as the
+     * authentication filter. Both beans are {@code @ConditionalOnMissingBean},
+     * so a consumer who defines their own {@link AxiamClient} or their own
+     * {@code axiamAuthorizationWebMvcConfigurer} takes precedence.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(HandlerInterceptor.class)
+    public static class AxiamAuthorizationMvcConfiguration {
+
+        /** Creates the nested MVC configuration (instantiated by Spring, not user code). */
+        public AxiamAuthorizationMvcConfiguration() {
+        }
+
+        /**
+         * Builds a default {@link AxiamClient} for the &sect;11 interceptor from
+         * {@code axiam.base-url}/{@code axiam.tenant-id}, unless the consuming
+         * application already defines its own {@link AxiamClient} bean.
+         *
+         * @param baseUrl  the AXIAM server base URL ({@code axiam.base-url} property)
+         * @param tenantId the configured tenant identifier ({@code axiam.tenant-id} property)
+         * @return the default {@link AxiamClient} bean
+         */
+        @Bean
+        @ConditionalOnMissingBean(AxiamClient.class)
+        public AxiamClient axiamClient(
+                @Value("${axiam.base-url}") String baseUrl, @Value("${axiam.tenant-id}") String tenantId) {
+            return AxiamClient.builder(baseUrl, tenantId).build();
+        }
+
+        /**
+         * Registers {@link AxiamAuthorizationInterceptor} via a
+         * {@link WebMvcConfigurer}, unless the consuming application already
+         * defines a bean named {@code axiamAuthorizationWebMvcConfigurer}.
+         *
+         * @param client the {@link AxiamClient} the interceptor uses to evaluate
+         *               {@code @AxiamRequireAccess} checks
+         * @return a {@link WebMvcConfigurer} that adds the &sect;11 interceptor
+         */
+        @Bean
+        @ConditionalOnMissingBean(name = "axiamAuthorizationWebMvcConfigurer")
+        public WebMvcConfigurer axiamAuthorizationWebMvcConfigurer(AxiamClient client) {
+            AxiamAuthorizationInterceptor interceptor = new AxiamAuthorizationInterceptor(client);
+            return new WebMvcConfigurer() {
+                @Override
+                public void addInterceptors(InterceptorRegistry registry) {
+                    registry.addInterceptor(interceptor);
+                }
+            };
+        }
     }
 }

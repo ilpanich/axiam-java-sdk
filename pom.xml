@@ -135,6 +135,21 @@
       <version>6.1.0</version>
       <scope>provided</scope>
     </dependency>
+    <!-- D-14: Spring MVC is optional/provided too — the §11 declarative
+         authorization enforcement (AxiamAuthorizationInterceptor, a
+         HandlerInterceptor registered via a WebMvcConfigurer) needs the
+         spring-webmvc types (HandlerInterceptor, HandlerMethod, HandlerMapping,
+         WebMvcConfigurer). Kept out of a non-Spring consumer's classpath by the
+         same provided/optional scoping as the other Spring deps. Version pinned
+         to the same 7.0.8 Spring Framework line the other Spring artifacts
+         resolve to (confirmed via `mvn dependency:tree`). -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>7.0.8</version>
+      <scope>provided</scope>
+      <optional>true</optional>
+    </dependency>
     <!-- Test scope: JUnit 5 + OkHttp 5.x MockWebServer. The legacy
          com.squareup.okhttp3:mockwebserver artifact is still published on the
          5.x line and keeps the okhttp3.mockwebserver package + classic
