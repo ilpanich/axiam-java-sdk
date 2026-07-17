@@ -33,7 +33,7 @@ See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>0.1.0</version>
+  <version>1.0.0-alpha2</version>
 </dependency>
 ```
 
@@ -47,7 +47,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>0.1.0</version>
+      <version>1.0.0-alpha2</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -59,7 +59,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:0.1.0")
+    implementation("io.github.ilpanich:axiam-sdk:1.0.0-alpha2")
 }
 ```
 
@@ -67,7 +67,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:0.1.0"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.0.0-alpha2"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```
