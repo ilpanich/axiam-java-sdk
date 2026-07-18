@@ -12,17 +12,21 @@ import java.util.List;
  * {@link AxiamClient#checkAccess}, and the order-preserving
  * {@link AxiamClient#batchCheck}. Imports ONLY public SDK entry points.
  *
- * <p>Run: {@code AXIAM_BASE_URL=... AXIAM_TENANT_ID=... java RestAuthzExample.java}
+ * <p>Run: {@code AXIAM_BASE_URL=... AXIAM_TENANT_ID=... AXIAM_ORG_SLUG=... java RestAuthzExample.java}
  */
 public final class RestAuthzExample {
 
     public static void main(String[] args) {
         String baseUrl = getenv("AXIAM_BASE_URL", "https://localhost:8443");
         String tenantId = getenv("AXIAM_TENANT_ID", "acme");
+        String orgSlug = getenv("AXIAM_ORG_SLUG", "acme");
         String email = getenv("AXIAM_EMAIL", "user@example.com");
         String password = getenv("AXIAM_PASSWORD", "changeme");
 
-        try (AxiamClient client = AxiamClient.builder(baseUrl, tenantId).build()) {
+        // §5.1: login requires organization context in addition to the tenant —
+        // supply orgSlug(...) (or orgId(UUID)), else login fails with 400
+        // "must provide org_id or org_slug".
+        try (AxiamClient client = AxiamClient.builder(baseUrl, tenantId).orgSlug(orgSlug).build()) {
             // login() establishes the httpOnly session cookies every
             // subsequent authz call rides on (§4 cookie-jar requirement).
             client.login(email, password);
