@@ -23,7 +23,8 @@ import okhttp3.ResponseBody;
 
 import org.jspecify.annotations.Nullable;
 
-import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
@@ -33,15 +34,24 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
 import java.security.KeyStore;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
 import java.security.SecureRandom;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -110,6 +120,8 @@ public final class AxiamClient implements AutoCloseable {
         private @Nullable String orgSlug;
         private @Nullable UUID orgId;
         private byte @Nullable [] customCaPem;
+        private byte @Nullable [] clientCertPem;
+        private byte @Nullable [] clientKeyPem;
         private @Nullable OkHttpClient overrideHttpClient;
         private Duration connectTimeout = Duration.ofSeconds(10);
         private Duration readTimeout = Duration.ofSeconds(30);
@@ -155,6 +167,43 @@ public final class AxiamClient implements AutoCloseable {
          */
         public Builder customCa(byte[] pem) {
             this.customCaPem = pem;
+            return this;
+        }
+
+        /**
+         * Configures the client-side X.509 identity presented for mutual TLS
+         * (mTLS) authentication (CONTRACT.md &sect;6.1). AXIAM binds this
+         * certificate to a service account / IoT device
+         * ({@code POST /api/v1/auth/device}); presenting it lets the same
+         * {@link AxiamClient} authenticate by client certificate on both its
+         * REST and gRPC transports.
+         *
+         * <p>Both arguments are PEM-encoded: {@code certPem} is the client
+         * certificate chain (leaf first; additional intermediates may be
+         * concatenated), {@code keyPem} is the matching PKCS#8 private key
+         * ({@code -----BEGIN PRIVATE KEY-----}; RSA, EC, or Ed25519). A
+         * malformed value surfaces as a clear error at {@link #build()} time.
+         *
+         * <p><strong>mTLS is opt-in and never relaxes server verification</strong>
+         * (CONTRACT.md &sect;6.1 rule 2): the SDK's strict system-trust-store +
+         * optional {@link #customCa(byte[])} chain is applied unchanged. Both a
+         * certificate and a private key are required together — supplying only
+         * one throws {@link IllegalArgumentException} at {@link #build()}.
+         *
+         * <p>The private key is secret material (CONTRACT.md &sect;7): it is
+         * consumed into an in-memory key store at build time, is never retained
+         * in a way that a getter, {@code toString()}, or log can expose, and has
+         * no public accessor.
+         *
+         * @param certPem the PEM-encoded client certificate chain (leaf certificate
+         *                first); must not be {@code null}
+         * @param keyPem  the PEM-encoded PKCS#8 private key matching {@code certPem}
+         *                ({@code -----BEGIN PRIVATE KEY-----}); must not be {@code null}
+         * @return this builder, for chaining
+         */
+        public Builder clientCertificate(byte[] certPem, byte[] keyPem) {
+            this.clientCertPem = certPem;
+            this.clientKeyPem = keyPem;
             return this;
         }
 
@@ -206,8 +255,20 @@ public final class AxiamClient implements AutoCloseable {
         /** Builds the configured {@link AxiamClient}.
          *
          * @return a new, ready-to-use {@link AxiamClient}
+         * @throws IllegalArgumentException if exactly one of the client
+         *         certificate / private key was supplied via
+         *         {@link #clientCertificate(byte[], byte[])} — mTLS requires
+         *         both together (CONTRACT.md &sect;6.1)
          */
         public AxiamClient build() {
+            boolean hasCert = clientCertPem != null;
+            boolean hasKey = clientKeyPem != null;
+            if (hasCert != hasKey) {
+                throw new IllegalArgumentException(
+                        "clientCertificate(...) requires BOTH a certificate and a private key — "
+                                + (hasCert ? "the private key was null" : "the certificate was null")
+                                + " (CONTRACT.md §6.1)");
+            }
             return new AxiamClient(this);
         }
     }
@@ -223,7 +284,10 @@ public final class AxiamClient implements AutoCloseable {
         this.session = new SessionState(cookieManager, this.baseUrl, this.tenantId, b.orgSlug, b.orgId);
 
         X509TrustManager trustManager = buildTrustManager(b.customCaPem);
-        SSLContext sslContext = buildStrictSslContext(trustManager);
+        KeyManager[] keyManagers = (b.clientCertPem != null && b.clientKeyPem != null)
+                ? buildKeyManagers(b.clientCertPem, b.clientKeyPem)
+                : null;
+        SSLContext sslContext = buildStrictSslContext(trustManager, keyManagers);
 
         OkHttpClient.Builder clientBuilder = b.overrideHttpClient != null
                 ? b.overrideHttpClient.newBuilder()
@@ -234,10 +298,18 @@ public final class AxiamClient implements AutoCloseable {
         // verification), regardless of what an overridden client had
         // configured — an override can never silently drop the jar or
         // weaken TLS.
+        // Hostname verification is left at OkHttp's own default (the strict
+        // okhttp3.internal.tls.OkHostnameVerifier, which performs full RFC 2818
+        // SAN/CN matching). We deliberately do NOT override it with
+        // HttpsURLConnection.getDefaultHostnameVerifier(): that JDK default is an
+        // always-reject verifier (it returns false for every host, because
+        // HttpsURLConnection does its own endpoint identification internally), so
+        // wiring it into OkHttp — which relies solely on the configured verifier —
+        // would reject EVERY HTTPS host, including a correctly-presented server
+        // certificate. Not overriding keeps verification strict and correct.
         clientBuilder
                 .cookieJar(new JavaNetCookieJar(cookieManager))
                 .sslSocketFactory(sslContext.getSocketFactory(), trustManager)
-                .hostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier())
                 .connectTimeout(b.connectTimeout)
                 .readTimeout(b.readTimeout)
                 .writeTimeout(b.writeTimeout)
@@ -798,14 +870,88 @@ public final class AxiamClient implements AutoCloseable {
         throw new IllegalStateException("no X509TrustManager found in the default TrustManagerFactory");
     }
 
-    private static SSLContext buildStrictSslContext(X509TrustManager trustManager) {
+    private static SSLContext buildStrictSslContext(X509TrustManager trustManager,
+                                                    KeyManager @Nullable [] keyManagers) {
         try {
             SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(null, new TrustManager[]{trustManager}, new SecureRandom());
+            // keyManagers is the client-identity (mTLS) chain when configured, else
+            // null (no client cert). The trust manager (server verification) is the
+            // SAME composite system-trust-store + optional customCa either way — a
+            // client certificate NEVER relaxes server verification (CONTRACT.md §6.1).
+            ctx.init(keyManagers, new TrustManager[]{trustManager}, new SecureRandom());
             return ctx;
         } catch (GeneralSecurityException e) {
             throw new NetworkError("failed to initialize TLS context: " + e.getMessage(), e);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Client-identity (mTLS) KeyManager (§6.1) — kept deliberately separate
+    // from the server-verification code above so CI TLS-bypass gates are not
+    // tripped. The private key is consumed into an in-memory PKCS#12 store and
+    // never retained on the client (§7 key secrecy).
+    // ------------------------------------------------------------------
+
+    private static KeyManager[] buildKeyManagers(byte[] certPem, byte[] keyPem) {
+        try {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Collection<? extends Certificate> certs =
+                    cf.generateCertificates(new ByteArrayInputStream(certPem));
+            if (certs.isEmpty()) {
+                throw new NetworkError("client certificate PEM contained no certificates");
+            }
+            Certificate[] chain = certs.toArray(new Certificate[0]);
+            PrivateKey privateKey = parsePrivateKey(keyPem);
+
+            // Random, throwaway password for the in-memory store — it is never
+            // persisted or exposed.
+            byte[] pwBytes = new byte[32];
+            new SecureRandom().nextBytes(pwBytes);
+            char[] password = Base64.getEncoder().encodeToString(pwBytes).toCharArray();
+
+            KeyStore ks = KeyStore.getInstance("PKCS12");
+            ks.load(null, null);
+            ks.setKeyEntry("client", privateKey, password, chain);
+
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(ks, password);
+            Arrays.fill(password, '\0');
+            return kmf.getKeyManagers();
+        } catch (GeneralSecurityException | IOException e) {
+            // §6.1 rule 1: a non-PEM / malformed cert or key MUST surface as a
+            // clear error at construction time.
+            throw new NetworkError("invalid client certificate/key PEM: " + e.getMessage(), e);
+        }
+    }
+
+    /** Parses a PEM PKCS#8 private key ({@code -----BEGIN PRIVATE KEY-----}),
+     * detecting the algorithm by trying RSA, then EC, then Ed25519/EdDSA. */
+    private static PrivateKey parsePrivateKey(byte[] keyPem) throws GeneralSecurityException {
+        String pem = new String(keyPem, StandardCharsets.UTF_8);
+        String base64 = pem
+                .replaceAll("-----BEGIN (?:RSA |EC )?PRIVATE KEY-----", "")
+                .replaceAll("-----END (?:RSA |EC )?PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        if (base64.isEmpty()) {
+            throw new InvalidKeySpecException("no PEM private key body found "
+                    + "(expected -----BEGIN PRIVATE KEY----- PKCS#8)");
+        }
+        byte[] der;
+        try {
+            der = Base64.getDecoder().decode(base64);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidKeySpecException("client private key PEM body is not valid base64");
+        }
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(der);
+        for (String algorithm : List.of("RSA", "EC", "Ed25519")) {
+            try {
+                return KeyFactory.getInstance(algorithm).generatePrivate(spec);
+            } catch (InvalidKeySpecException | NoSuchAlgorithmException tryNext) {
+                // Not this algorithm (or unavailable) — try the next candidate.
+            }
+        }
+        throw new InvalidKeySpecException(
+                "unsupported or malformed PKCS#8 private key (tried RSA, EC, Ed25519)");
     }
 
     private static final class CompositeX509TrustManager implements X509TrustManager {

@@ -132,18 +132,62 @@ public final class AuthClientInterceptor implements ClientInterceptor {
      *         built (caller still adds the interceptor and calls {@code .build()})
      */
     public static NettyChannelBuilder channelBuilder(String target, byte @Nullable [] customCaPem) {
-        SslContext sslContext = buildSslContext(customCaPem);
+        return channelBuilder(target, customCaPem, null, null);
+    }
+
+    /**
+     * mTLS overload of {@link #channelBuilder(String, byte[])} (CONTRACT.md
+     * &sect;6.1): identical strict-TLS server verification, additionally
+     * presenting a client-side X.509 identity (PEM cert chain + PKCS#8 private
+     * key) so the gRPC transport authenticates by client certificate, matching
+     * the REST transport of the same {@code AxiamClient}. When
+     * {@code clientCertPem}/{@code clientKeyPem} are {@code null} this behaves
+     * exactly like {@link #channelBuilder(String, byte[])}.
+     *
+     * @param target        a plain {@code host:port} gRPC target (e.g.
+     *                      {@code "dns:///localhost:9443"})
+     * @param customCaPem   optional PEM-encoded custom CA (&sect;6) to trust in
+     *                      addition to the system trust store, or {@code null}
+     * @param clientCertPem optional PEM-encoded client certificate chain for
+     *                      mTLS (leaf first), or {@code null} for no client cert
+     * @param clientKeyPem  the PEM-encoded PKCS#8 private key matching
+     *                      {@code clientCertPem}, or {@code null}
+     * @return a {@code NettyChannelBuilder} configured with strict TLS (and the
+     *         client identity when supplied), not yet built (caller still adds
+     *         the interceptor and calls {@code .build()})
+     */
+    public static NettyChannelBuilder channelBuilder(String target, byte @Nullable [] customCaPem,
+                                                     byte @Nullable [] clientCertPem,
+                                                     byte @Nullable [] clientKeyPem) {
+        SslContext sslContext = buildSslContext(customCaPem, clientCertPem, clientKeyPem);
         return NettyChannelBuilder.forTarget(target)
                 .sslContext(sslContext);
     }
 
-    private static SslContext buildSslContext(byte @Nullable [] customCaPem) {
+    private static SslContext buildSslContext(byte @Nullable [] customCaPem,
+                                              byte @Nullable [] clientCertPem,
+                                              byte @Nullable [] clientKeyPem) {
         try {
             X509TrustManager trustManager = buildTrustManager(customCaPem);
-            return GrpcSslContexts.forClient()
-                    .trustManager(trustManager)
-                    .build();
-        } catch (SSLException e) {
+            var sslBuilder = GrpcSslContexts.forClient()
+                    .trustManager(trustManager);
+            // §6.1: add the client identity (PEM cert chain + PKCS#8 key) as a
+            // Netty keyManager when configured — server verification (above) is
+            // unchanged. Kept separate from the trust-manager path so CI
+            // TLS-bypass gates are not tripped.
+            if (clientCertPem != null && clientKeyPem != null) {
+                sslBuilder.keyManager(new ByteArrayInputStream(clientCertPem),
+                        new ByteArrayInputStream(clientKeyPem));
+            }
+            return sslBuilder.build();
+        } catch (NetworkError e) {
+            // Already a clear construction-time error (e.g. invalid custom CA PEM
+            // from buildTrustManager) — do not double-wrap.
+            throw e;
+        } catch (SSLException | RuntimeException e) {
+            // SSLException from context build; RuntimeException (e.g. Netty's
+            // IllegalArgumentException) from parsing a malformed client cert/key
+            // PEM — §6.1 rule 1: surface either as a clear error at construction.
             throw new NetworkError("failed to initialize gRPC TLS context: " + e.getMessage(), e);
         }
     }
