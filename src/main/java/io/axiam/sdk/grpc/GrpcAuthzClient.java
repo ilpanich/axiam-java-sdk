@@ -81,10 +81,38 @@ public final class GrpcAuthzClient implements AutoCloseable {
      */
     public GrpcAuthzClient(String target, RefreshGuard refreshGuard, SessionState session,
                             byte @Nullable [] customCaPem) {
+        this(target, refreshGuard, session, customCaPem, null, null);
+    }
+
+    /**
+     * mTLS overload (CONTRACT.md &sect;6.1): builds the gRPC channel presenting
+     * a client-side X.509 identity (PEM cert chain + PKCS#8 private key) so this
+     * gRPC transport authenticates by client certificate, matching the REST
+     * transport of the same {@code AxiamClient}. When {@code clientCertPem}/
+     * {@code clientKeyPem} are {@code null} this behaves exactly like
+     * {@link #GrpcAuthzClient(String, RefreshGuard, SessionState, byte[])}.
+     * Server verification (strict system trust store + optional
+     * {@code customCaPem}) is unchanged — a client certificate never relaxes it.
+     *
+     * @param target        a plain gRPC target (e.g. {@code "dns:///host:9443"}) for
+     *                      AXIAM's {@code AuthorizationService}
+     * @param refreshGuard  the SAME {@link RefreshGuard} instance the client's REST
+     *                      transport uses (D-07) — never a second guard
+     * @param session       the client's shared {@link SessionState}
+     * @param customCaPem   optional PEM-encoded custom CA (&sect;6), or {@code null}
+     * @param clientCertPem optional PEM-encoded client certificate chain for mTLS
+     *                      (leaf first), or {@code null}
+     * @param clientKeyPem  the PEM-encoded PKCS#8 private key matching
+     *                      {@code clientCertPem}, or {@code null}
+     */
+    public GrpcAuthzClient(String target, RefreshGuard refreshGuard, SessionState session,
+                            byte @Nullable [] customCaPem, byte @Nullable [] clientCertPem,
+                            byte @Nullable [] clientKeyPem) {
         this.refreshGuard = refreshGuard;
         this.session = session;
 
-        NettyChannelBuilder channelBuilder = AuthClientInterceptor.channelBuilder(target, customCaPem)
+        NettyChannelBuilder channelBuilder =
+                AuthClientInterceptor.channelBuilder(target, customCaPem, clientCertPem, clientKeyPem)
                 .intercept(new AuthClientInterceptor(() -> currentAccessToken(refreshGuard, session), session.tenantId()));
         this.channel = channelBuilder.build();
         this.blockingStub = AuthorizationServiceGrpc.newBlockingStub(channel);

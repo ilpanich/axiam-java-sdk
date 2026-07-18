@@ -21,7 +21,8 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§11.
+This SDK conforms to CONTRACT.md §1–§11, including §6.1 mTLS (client-certificate
+authentication).
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -94,6 +95,43 @@ See [`examples/`](examples/) for runnable per-capability examples covering
 login+MFA, REST authorization, gRPC `CheckAccess`, the AMQP consumer, and a
 complete Spring Boot 3.x application wiring `AxiamAuthenticationFilter`
 explicitly in a `SecurityFilterChain` bean.
+
+### mTLS / client certificates
+
+For IoT devices and service accounts that authenticate by **mutual TLS**
+(CONTRACT.md §6.1), configure a client-side X.509 identity — a PEM certificate
+chain plus its PKCS#8 private key — via `clientCertificate(...)`. The same
+identity is applied to **both** the REST and gRPC transports of the client, and
+strict server verification is never relaxed (a client certificate is purely
+additive; the system trust store, plus any `customCa(...)`, still validates the
+server):
+
+```java
+byte[] certPem = Files.readAllBytes(Path.of("client-cert.pem")); // chain, leaf first
+byte[] keyPem  = Files.readAllBytes(Path.of("client-key.pem"));  // PKCS#8 (-----BEGIN PRIVATE KEY-----)
+
+try (AxiamClient client = AxiamClient.builder("https://axiam.example.com", "acme-tenant")
+        .customCa(serverCaPem)                    // optional: extra trusted server CA
+        .clientCertificate(certPem, keyPem)       // client identity for mTLS
+        .build()) {
+    boolean allowed = client.can("read", "devices/123");
+}
+
+// The same identity applies to the gRPC transport:
+try (GrpcAuthzClient grpc = new GrpcAuthzClient(
+        "dns:///axiam.example.com:9443",
+        client.refreshGuard(), client.session(),
+        serverCaPem, certPem, keyPem)) {
+    // ...
+}
+```
+
+Both the certificate and the private key are required together — supplying only
+one throws `IllegalArgumentException` at `build()`, and a malformed PEM surfaces
+as a clear error at construction time. The private key is treated as secret
+material (CONTRACT.md §7): it is consumed into an in-memory key store and never
+exposed via a getter, `toString()`, or logs. mTLS is opt-in; omitting
+`clientCertificate(...)` leaves the default bearer/cookie behavior unchanged.
 
 ## Declarative authorization helpers
 

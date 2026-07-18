@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Client-certificate / mutual-TLS (mTLS) support (CONTRACT.md §6.1):
+  `AxiamClient.builder(...).clientCertificate(byte[] certPem, byte[] keyPem)`
+  configures a client-side X.509 identity (PEM certificate chain + PKCS#8
+  private key) that is applied to **both** the REST (OkHttp `KeyManager`) and
+  gRPC (`GrpcSslContexts.keyManager`) transports. A new
+  `GrpcAuthzClient(target, refreshGuard, session, customCaPem, clientCertPem, clientKeyPem)`
+  constructor carries the same identity onto the gRPC channel. Presenting a
+  client certificate never relaxes strict server verification; both cert and key
+  are required together (else `IllegalArgumentException` at `build()`), a
+  malformed PEM fails at construction time, and the private key is held as
+  secret material (never exposed via a getter, `toString()`, or logs).
+
+### Fixed
+
+- REST HTTPS hostname verification: the OkHttp client no longer overrides the
+  hostname verifier with `HttpsURLConnection.getDefaultHostnameVerifier()` (an
+  always-reject verifier that failed verification for every host); it now uses
+  OkHttp's built-in strict `OkHostnameVerifier` (full RFC 2818 SAN/CN matching).
+
 ## [1.0.0-alpha2] - 2026-07-16
 
 ### Added
