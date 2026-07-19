@@ -77,12 +77,18 @@ dependencies {
 
 `tenantId` is a **required, positional** argument to `AxiamClient.builder(...)`
 — AXIAM is multi-tenant and there is no default tenant (CONTRACT.md §5); a
-blank value throws `AuthError` at construction time. `AxiamClient` is
-`AutoCloseable`, so always construct it with try-with-resources to release
-its underlying OkHttp connection pool/dispatcher:
+blank value throws `AuthError` at construction time. Because a tenant slug is
+only unique *within* an organization, `login`/`refresh` additionally require
+**organization context** (CONTRACT.md §5.1): supply it with `.orgSlug("acme")`
+(or `.orgId(UUID)`) — omitting it makes `login` fail at runtime with
+`400 "must provide org_id or org_slug"`. `AxiamClient` is `AutoCloseable`, so
+always construct it with try-with-resources to release its underlying OkHttp
+connection pool/dispatcher:
 
 ```java
-try (AxiamClient client = AxiamClient.builder("https://axiam.example.com", "acme-tenant").build()) {
+try (AxiamClient client = AxiamClient.builder("https://axiam.example.com", "acme-tenant")
+        .orgSlug("acme")
+        .build()) {
     LoginResult result = client.login("user@example.com", "password");
     if (result.mfaRequired()) {
         result = client.verifyMfa(result.challengeToken(), "123456");

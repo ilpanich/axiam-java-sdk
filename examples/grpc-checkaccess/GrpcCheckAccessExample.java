@@ -18,7 +18,7 @@ import java.util.List;
  * the {@link AxiamClient} that performed {@link AxiamClient#login}, never a
  * second independently-constructed guard.
  *
- * <p>Run: {@code AXIAM_BASE_URL=... AXIAM_GRPC_TARGET=... AXIAM_TENANT_ID=... java GrpcCheckAccessExample.java}
+ * <p>Run: {@code AXIAM_BASE_URL=... AXIAM_GRPC_TARGET=... AXIAM_TENANT_ID=... AXIAM_ORG_SLUG=... java GrpcCheckAccessExample.java}
  */
 public final class GrpcCheckAccessExample {
 
@@ -26,10 +26,14 @@ public final class GrpcCheckAccessExample {
         String baseUrl = getenv("AXIAM_BASE_URL", "https://localhost:8443");
         String grpcTarget = getenv("AXIAM_GRPC_TARGET", "dns:///localhost:9443");
         String tenantId = getenv("AXIAM_TENANT_ID", "acme");
+        String orgSlug = getenv("AXIAM_ORG_SLUG", "acme");
         String email = getenv("AXIAM_EMAIL", "user@example.com");
         String password = getenv("AXIAM_PASSWORD", "changeme");
 
-        try (AxiamClient client = AxiamClient.builder(baseUrl, tenantId).build()) {
+        // §5.1: the REST login below requires organization context in addition
+        // to the tenant — supply orgSlug(...) (or orgId(UUID)), else login
+        // fails with 400 "must provide org_id or org_slug".
+        try (AxiamClient client = AxiamClient.builder(baseUrl, tenantId).orgSlug(orgSlug).build()) {
             // REST login() establishes the session both transports share —
             // the gRPC client below reuses this same client's guard/session.
             client.login(email, password);

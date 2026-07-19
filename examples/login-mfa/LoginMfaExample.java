@@ -22,23 +22,28 @@ import io.axiam.sdk.errors.AuthError;
  * reads connection details from environment variables and requires a
  * reachable AXIAM server matching the configured base URL to run end-to-end.
  *
- * <p>Run: {@code AXIAM_BASE_URL=... AXIAM_TENANT_ID=... java LoginMfaExample.java}
+ * <p>Run: {@code AXIAM_BASE_URL=... AXIAM_TENANT_ID=... AXIAM_ORG_SLUG=... java LoginMfaExample.java}
  */
 public final class LoginMfaExample {
 
     public static void main(String[] args) {
         String baseUrl = getenv("AXIAM_BASE_URL", "https://localhost:8443");
         String tenantId = getenv("AXIAM_TENANT_ID", "acme");
+        String orgSlug = getenv("AXIAM_ORG_SLUG", "acme");
         String email = getenv("AXIAM_EMAIL", "user@example.com");
         String password = getenv("AXIAM_PASSWORD", "changeme");
         String totpCode = getenv("AXIAM_TOTP_CODE", "000000");
 
         // §5: tenantId is a required, positional builder argument — a blank
-        // value throws AuthError, never a silent default. TLS is always
-        // strict (§6) — the only escape hatch is Builder.customCa(pem),
-        // never a boolean bypass. try-with-resources ensures the client's
-        // OkHttp connection pool/dispatcher are released (AutoCloseable).
-        try (AxiamClient client = AxiamClient.builder(baseUrl, tenantId).build()) {
+        // value throws AuthError, never a silent default. §5.1: login/refresh
+        // also require organization context (a tenant slug is only unique
+        // within an org) — supply it via orgSlug(...) (or orgId(UUID)), else
+        // login fails at runtime with 400 "must provide org_id or org_slug".
+        // TLS is always strict (§6) — the only escape hatch is
+        // Builder.customCa(pem), never a boolean bypass. try-with-resources
+        // ensures the client's OkHttp connection pool/dispatcher are released
+        // (AutoCloseable).
+        try (AxiamClient client = AxiamClient.builder(baseUrl, tenantId).orgSlug(orgSlug).build()) {
             LoginResult result;
             try {
                 result = client.login(email, password);
