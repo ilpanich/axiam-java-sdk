@@ -6,7 +6,7 @@
 
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-bom</artifactId>
-  <version>1.0.0-alpha11</version>
+  <version>1.0.0-alpha12</version>
   <packaging>pom</packaging>
 
   <name>axiam-bom</name>
@@ -57,7 +57,7 @@
       <dependency>
         <groupId>io.github.ilpanich</groupId>
         <artifactId>axiam-sdk</artifactId>
-        <version>1.0.0-alpha11</version>
+        <version>1.0.0-alpha12</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
