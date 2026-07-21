@@ -7,6 +7,11 @@ import axiam.v1.Authorization.CheckAccessResponse;
 import axiam.v1.AuthorizationServiceGrpc;
 import axiam.v1.AuthorizationServiceGrpc.AuthorizationServiceBlockingStub;
 import axiam.v1.AuthorizationServiceGrpc.AuthorizationServiceFutureStub;
+import axiam.v1.Userinfo.GetUserInfoRequest;
+import axiam.v1.Userinfo.GetUserInfoResponse;
+import axiam.v1.UserInfoServiceGrpc;
+import axiam.v1.UserInfoServiceGrpc.UserInfoServiceBlockingStub;
+import axiam.v1.UserInfoServiceGrpc.UserInfoServiceFutureStub;
 
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
@@ -28,6 +33,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
@@ -64,6 +70,10 @@ public final class GrpcAuthzClient implements AutoCloseable {
     private final ManagedChannel channel;
     private final AuthorizationServiceBlockingStub blockingStub;
     private final AuthorizationServiceFutureStub futureStub;
+    // UserInfoService (CONTRACT.md §1.1) rides the SAME channel/interceptor as the
+    // authz stubs above — a second gRPC-only operation, never a second channel.
+    private final UserInfoServiceBlockingStub userInfoBlockingStub;
+    private final UserInfoServiceFutureStub userInfoFutureStub;
 
     /**
      * Creates a gRPC authz client bound to {@code target}, sharing the given refresh
@@ -117,6 +127,8 @@ public final class GrpcAuthzClient implements AutoCloseable {
         this.channel = channelBuilder.build();
         this.blockingStub = AuthorizationServiceGrpc.newBlockingStub(channel);
         this.futureStub = AuthorizationServiceGrpc.newFutureStub(channel);
+        this.userInfoBlockingStub = UserInfoServiceGrpc.newBlockingStub(channel);
+        this.userInfoFutureStub = UserInfoServiceGrpc.newFutureStub(channel);
     }
 
     /**
@@ -131,6 +143,8 @@ public final class GrpcAuthzClient implements AutoCloseable {
         this.channel = channel;
         this.blockingStub = AuthorizationServiceGrpc.newBlockingStub(channel);
         this.futureStub = AuthorizationServiceGrpc.newFutureStub(channel);
+        this.userInfoBlockingStub = UserInfoServiceGrpc.newBlockingStub(channel);
+        this.userInfoFutureStub = UserInfoServiceGrpc.newFutureStub(channel);
     }
 
     // ------------------------------------------------------------------
@@ -192,6 +206,24 @@ public final class GrpcAuthzClient implements AutoCloseable {
         public AccessCheck(String action, String resourceId, @Nullable String scope) {
             this(null, action, resourceId, scope);
         }
+    }
+
+    /**
+     * The authenticated caller's identity claims (CONTRACT.md &sect;1.1), mirroring
+     * the server's REST {@code GET /oauth2/userinfo} claim set. {@code sub},
+     * {@code tenantId}, and {@code orgId} are always populated; {@code email} is
+     * present only when the access token carries the {@code "email"} scope and
+     * {@code preferredUsername} only with the {@code "profile"} scope (the server
+     * gates these exactly as the REST endpoint does).
+     *
+     * @param sub               the subject (user) UUID — always present
+     * @param tenantId          the tenant UUID — always present
+     * @param orgId             the organization UUID — always present
+     * @param email             the user email, present only with the {@code "email"} scope
+     * @param preferredUsername the preferred username, present only with the {@code "profile"} scope
+     */
+    public record UserInfo(String sub, String tenantId, String orgId, Optional<String> email,
+                            Optional<String> preferredUsername) {
     }
 
     // ------------------------------------------------------------------
@@ -307,6 +339,69 @@ public final class GrpcAuthzClient implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
+    // getUserInfo (blocking + async) — gRPC-only (CONTRACT.md §1.1)
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code GetUserInfo} (CONTRACT.md &sect;1.1) — the low-latency gRPC counterpart of the
+     * server's REST {@code GET /oauth2/userinfo} endpoint. The request is empty; identity is
+     * derived entirely server-side from the {@code authorization} bearer token this transport
+     * already injects (&sect;5). Requires a prior successful {@code login()} (or an injected
+     * token): calling it with no token raises {@link AuthError} client-side without a wire call
+     * (&sect;1.1 point 3). On {@code UNAUTHENTICATED}, drives the shared {@link RefreshGuard}
+     * exactly once and retries the RPC exactly once (&sect;9.3); a terminal error maps via
+     * {@link ErrorMapper#fromGrpcStatus}.
+     *
+     * @return the caller's identity claims ({@code sub}/{@code tenantId}/{@code orgId} always
+     *         present; {@code email}/{@code preferredUsername} gated on the {@code "email"}/
+     *         {@code "profile"} scopes)
+     */
+    public UserInfo getUserInfo() {
+        requireTokenPreflight();
+        GetUserInfoRequest wire = GetUserInfoRequest.getDefaultInstance();
+        UserInfoServiceBlockingStub stub = deadlinedUserInfoBlockingStub(AuthClientInterceptor.USER_INFO_DEADLINE);
+        return callWithRefreshRetry(() -> toUserInfo(stub.getUserInfo(wire)));
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #getUserInfo}, adapting the
+     * {@code ListenableFuture}-based future stub (D-02). Same pre-flight token check and
+     * shared-guard refresh-retry semantics as the blocking path; the pre-flight
+     * {@link AuthError} surfaces as a failed future.
+     *
+     * @return a future resolving to the caller's identity claims
+     */
+    public CompletableFuture<UserInfo> getUserInfoAsync() {
+        try {
+            requireTokenPreflight();
+        } catch (RuntimeException preflightFailure) {
+            CompletableFuture<UserInfo> failed = new CompletableFuture<>();
+            failed.completeExceptionally(preflightFailure);
+            return failed;
+        }
+        GetUserInfoRequest wire = GetUserInfoRequest.getDefaultInstance();
+        UserInfoServiceFutureStub stub = deadlinedUserInfoFutureStub(AuthClientInterceptor.USER_INFO_DEADLINE);
+        return callAsyncWithRefreshRetry(() -> stub.getUserInfo(wire)).thenApply(GrpcAuthzClient::toUserInfo);
+    }
+
+    /** Pre-flight guard (CONTRACT.md &sect;1.1 point 3): {@code get_user_info} carries no wire
+     * fields to resolve claims from, so a missing token is caught here — client-side, without a
+     * wire call — as an {@link AuthError}, mirroring {@link #resolveClaims}'s no-session error. */
+    private void requireTokenPreflight() {
+        if (currentAccessToken(refreshGuard, session) == null) {
+            throw new AuthError("no active session — call login() before getUserInfo()");
+        }
+    }
+
+    private static UserInfo toUserInfo(GetUserInfoResponse resp) {
+        return new UserInfo(
+                resp.getSub(),
+                resp.getTenantId(),
+                resp.getOrgId(),
+                resp.hasEmail() ? Optional.of(resp.getEmail()) : Optional.empty(),
+                resp.hasPreferredUsername() ? Optional.of(resp.getPreferredUsername()) : Optional.empty());
+    }
+
+    // ------------------------------------------------------------------
     // Deadlines (D-12) — default per Task 1's constants, overridable at the
     // call site via the returned stub's own withDeadlineAfter.
     // ------------------------------------------------------------------
@@ -317,6 +412,14 @@ public final class GrpcAuthzClient implements AutoCloseable {
 
     private AuthorizationServiceFutureStub deadlinedFutureStub(java.time.Duration deadline) {
         return futureStub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private UserInfoServiceBlockingStub deadlinedUserInfoBlockingStub(java.time.Duration deadline) {
+        return userInfoBlockingStub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private UserInfoServiceFutureStub deadlinedUserInfoFutureStub(java.time.Duration deadline) {
+        return userInfoFutureStub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     // ------------------------------------------------------------------

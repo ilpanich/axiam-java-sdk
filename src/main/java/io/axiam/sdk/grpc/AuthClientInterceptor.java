@@ -59,6 +59,11 @@ public final class AuthClientInterceptor implements ClientInterceptor {
      * {@code stub.withDeadlineAfter(...)} at the call site. */
     public static final Duration BATCH_CHECK_ACCESS_DEADLINE = Duration.ofMillis(10_000);
 
+    /** Default {@code GetUserInfo} per-call deadline (CONTRACT.md &sect;1.1, D-12) — a small
+     * single-lookup RPC like {@code CheckAccess}, overridable via
+     * {@code stub.withDeadlineAfter(...)} at the call site. */
+    public static final Duration USER_INFO_DEADLINE = Duration.ofMillis(3000);
+
     private static final Metadata.Key<String> AUTHORIZATION_KEY =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
     private static final Metadata.Key<String> TENANT_KEY =

@@ -21,8 +21,9 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§11, including §6.1 mTLS (client-certificate
-authentication).
+This SDK conforms to CONTRACT.md §1–§11 (contract version 1.3), including §6.1
+mTLS (client-certificate authentication) and the §1.1 gRPC-only `getUserInfo`
+operation.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -138,6 +139,44 @@ as a clear error at construction time. The private key is treated as secret
 material (CONTRACT.md §7): it is consumed into an in-memory key store and never
 exposed via a getter, `toString()`, or logs. mTLS is opt-in; omitting
 `clientCertificate(...)` leaves the default bearer/cookie behavior unchanged.
+
+## gRPC transport (`GrpcAuthzClient`)
+
+For low-latency service-mesh authorization the SDK ships a gRPC transport,
+`io.axiam.sdk.grpc.GrpcAuthzClient`, built from the same `AxiamClient`'s shared
+refresh guard and session (one guard, never a second — CONTRACT.md §9). It wraps
+a single long-lived, strict-TLS channel and injects the `authorization` bearer
+token and `x-tenant-id` metadata on every call (§5). Each operation exposes a
+blocking method plus a `CompletableFuture`-returning `*Async` twin (§1 Java async
+convention). On gRPC `UNAUTHENTICATED` it drives the shared single-flight refresh
+once and retries the RPC once (§9); errors map through the §2 taxonomy
+(`PERMISSION_DENIED` → `AuthzError`, `UNAVAILABLE`/`DEADLINE_EXCEEDED`/… →
+`NetworkError`).
+
+```java
+try (GrpcAuthzClient grpc = new GrpcAuthzClient(
+        "dns:///axiam.example.com:9443",
+        client.refreshGuard(), client.session(), null)) {
+
+    // Single / batch access checks (CONTRACT.md §1)
+    GrpcAuthzClient.AccessResult r = grpc.checkAccess("read", "documents/123");
+    boolean allowed = r.allowed();
+
+    // userinfo — gRPC-only (CONTRACT.md §1.1), the low-latency counterpart of
+    // the server's REST GET /oauth2/userinfo. Empty request; identity comes from
+    // the bearer token. Requires a prior login() — calling it with no token
+    // raises AuthError client-side (no wire call).
+    GrpcAuthzClient.UserInfo info = grpc.getUserInfo();
+    String sub = info.sub();               // always present
+    String tenantId = info.tenantId();     // always present
+    String orgId = info.orgId();           // always present
+    Optional<String> email = info.email();                       // only with the "email" scope
+    Optional<String> username = info.preferredUsername();        // only with the "profile" scope
+
+    // async twin
+    CompletableFuture<GrpcAuthzClient.UserInfo> future = grpc.getUserInfoAsync();
+}
+```
 
 ## Declarative authorization helpers
 

@@ -33,6 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- gRPC-only `getUserInfo` operation (CONTRACT.md §1.1, adopting contract version
+  1.3): `GrpcAuthzClient.getUserInfo()` and its `CompletableFuture`-returning
+  `getUserInfoAsync()` twin invoke `axiam.v1.UserInfoService/GetUserInfo` on the
+  client's existing gRPC channel — the low-latency counterpart of the server's
+  REST `GET /oauth2/userinfo`. The request is empty; identity is derived
+  server-side from the bearer token. Returns a typed
+  `GrpcAuthzClient.UserInfo { sub, tenantId, orgId, Optional<String> email,
+  Optional<String> preferredUsername }` — `sub`/`tenantId`/`orgId` are always
+  present, while `email` (`"email"` scope) and `preferredUsername` (`"profile"`
+  scope) are populated only when the access token carries the gating scope.
+  Calling it with no token raises `AuthError` client-side without a wire call;
+  a gRPC `UNAUTHENTICATED` participates in the §9 single-flight refresh guard and
+  retries the RPC once, reusing the same auth + `x-tenant-id` metadata and
+  refresh-retry machinery as `checkAccess`. The vendored `proto/` and
+  `CONTRACT.md` were re-synced to contract 1.3 (new
+  `proto/axiam/v1/userinfo.proto`).
+
 - Client-certificate / mutual-TLS (mTLS) support (CONTRACT.md §6.1):
   `AxiamClient.builder(...).clientCertificate(byte[] certPem, byte[] keyPem)`
   configures a client-side X.509 identity (PEM certificate chain + PKCS#8
