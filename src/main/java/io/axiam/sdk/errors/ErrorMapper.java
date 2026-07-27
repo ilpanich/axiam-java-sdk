@@ -110,6 +110,48 @@ public final class ErrorMapper {
     }
 
     /**
+     * Maps an HTTP status code from an {@code /oauth2/*} endpoint
+     * (CONTRACT.md &sect;12.1/&sect;12.3 rule 3): a {@code 400} or
+     * {@code 401} response carrying an {@code OAuth2ErrorResponse} body
+     * (both {@code error} and {@code error_description} present and
+     * string-typed) becomes {@link OAuthProtocolError} instead of the
+     * generic &sect;2 row for that status. Any other status, or a
+     * {@code 400}/{@code 401} whose body is not an
+     * {@code OAuth2ErrorResponse}, falls through to {@link #fromHttpStatus}.
+     *
+     * <p>Uses {@link Response#peekBody} — a non-destructive read — so the
+     * live response is left exactly as the caller received it, mirroring
+     * {@link #fromHttpStatus}'s 403/409 body-peek path.
+     *
+     * @param status   the HTTP response status code
+     * @param response the live response, used to look for an
+     *                 {@code OAuth2ErrorResponse} body, or {@code null}
+     * @param message  a human-readable description of the failure, used only
+     *                 when the response does not carry an
+     *                 {@code OAuth2ErrorResponse} body
+     * @return the mapped exception, ready to throw
+     */
+    public static RuntimeException fromOAuth2Response(int status, @Nullable Response response, String message) {
+        if ((status == 400 || status == 401) && response != null && response.body() != null) {
+            try {
+                ResponseBody peeked = response.peekBody(MAX_AUTHZ_BODY_PEEK_BYTES);
+                String bodyString = peeked.string();
+                if (!bodyString.isBlank()) {
+                    JsonNode root = JSON.readTree(bodyString);
+                    if (root.hasNonNull("error") && root.hasNonNull("error_description")
+                            && root.get("error").isTextual() && root.get("error_description").isTextual()) {
+                        return new OAuthProtocolError(root.get("error").asText(), root.get("error_description").asText());
+                    }
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Malformed/non-JSON body: fall through to the generic mapping below
+                // rather than let a parse failure mask the real status.
+            }
+        }
+        return fromHttpStatus(status, message, response);
+    }
+
+    /**
      * Builds a {@link NetworkError} from a live {@code okhttp3.Response}.
      * This is the ONLY entry point through which a live {@code Response}
      * may become a {@link NetworkError} (single choke point, D-18) — every

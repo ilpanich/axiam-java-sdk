@@ -1,5 +1,7 @@
 package io.axiam.sdk.internal;
 
+import io.axiam.sdk.errors.AuthError;
+
 import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
@@ -107,6 +109,74 @@ public final class RefreshGuard {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** Bounded retry count for {@link #runExclusive} waiting out a busy guard
+     * (port-brief-addendum item 14: "retry the guard (bounded — TS uses 3 attempts)"). */
+    private static final int RUN_EXCLUSIVE_MAX_ATTEMPTS = 3;
+
+    /**
+     * Runs an arbitrary refresh-shaped operation mutually exclusive with
+     * {@link #refreshIfNeeded} and with any other concurrent
+     * {@code runExclusive} call — the CONTRACT.md &sect;12 requirement that
+     * {@code oidcRefresh} "runs the wire call inside the existing &sect;9
+     * guard" so a cookie-session refresh and an {@code oidcRefresh} can never
+     * interleave.
+     *
+     * <p>Because {@link #refreshIfNeeded} deliberately releases {@link #lock}
+     * for the duration of its own HTTP call (see this class's header
+     * Javadoc), a plain {@code lock.lock()} around {@code op} would only
+     * exclude the brief bookkeeping windows around that call, not the call
+     * itself. This method additionally waits out any {@link #inFlight}
+     * cookie-session refresh — bounded to
+     * {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} attempts (port-brief-addendum item
+     * 14) — before acquiring {@link #lock} and running {@code op}; holding
+     * {@link #lock} across {@code op} in turn blocks any NEW
+     * {@link #refreshIfNeeded} call from starting until {@code op} completes,
+     * since that method takes the lock first thing.
+     *
+     * <p>Unlike {@link #refreshIfNeeded}, this does not compare against an
+     * observed access token or cache a {@link TokenPair} — it purely
+     * provides mutual exclusion.
+     *
+     * @param op  the operation to run exclusively; invoked at most once
+     * @param <T> the operation's result type
+     * @return {@code op}'s result
+     * @throws AuthError        if the guard is still busy with a
+     *                          cookie-session refresh after
+     *                          {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} attempts
+     * @throws RuntimeException whatever {@code op} throws, propagated as-is
+     */
+    public <T> T runExclusive(Supplier<T> op) {
+        for (int attempt = 0; attempt < RUN_EXCLUSIVE_MAX_ATTEMPTS; attempt++) {
+            CompletableFuture<TokenPair> busy = inFlight.get();
+            if (busy != null) {
+                // A cookie-session refresh is actively mid-flight (lock
+                // released for that duration by design) — wait for it to
+                // settle, ignoring its outcome, then retry from the top.
+                try {
+                    busy.join();
+                } catch (RuntimeException ignored) {
+                    // Outcome is irrelevant here — only that it settled.
+                }
+                continue;
+            }
+            lock.lock();
+            try {
+                if (inFlight.get() != null) {
+                    // Lost the race: a refreshIfNeeded call started between
+                    // our check above and acquiring the lock. Unlock (via
+                    // the finally below) and retry.
+                    continue;
+                }
+                return op.get();
+            } finally {
+                lock.unlock();
+            }
+        }
+        throw new AuthError(
+                "oidcRefresh could not acquire the single-flight refresh guard (CONTRACT.md §9); "
+                        + "another refresh kept it busy.");
     }
 
     /**

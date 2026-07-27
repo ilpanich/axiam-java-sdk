@@ -1,13 +1,18 @@
 package io.axiam.sdk.spring;
 
 import io.axiam.sdk.AxiamClient;
+import io.axiam.sdk.oidc.MemoryOidcStateStore;
+import io.axiam.sdk.oidc.OidcStateStore;
 
 import org.junit.jupiter.api.Test;
 
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.web.servlet.function.RouterFunction;
+import org.springframework.web.servlet.function.ServerResponse;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Coverage for {@link AxiamAutoConfiguration}'s bean factory methods without
@@ -52,6 +57,51 @@ class AxiamAutoConfigurationTest {
             assertNotNull(configurer, "the auto-configuration must produce a WebMvcConfigurer bean");
             // Exercise the registration callback — must not throw.
             configurer.addInterceptors(new InterceptorRegistry());
+        }
+    }
+
+    @Test
+    void buildsDefaultOidcClientFromProperties() {
+        AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
+                new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
+
+        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "")) {
+            assertNotNull(client, "the auto-configuration must produce a default OIDC-configured AxiamClient bean");
+        }
+    }
+
+    @Test
+    void buildsOidcClientWithAConfidentialClientSecret() {
+        AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
+                new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
+
+        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "shh")) {
+            assertNotNull(client);
+        }
+    }
+
+    @Test
+    void buildsDefaultInMemoryOidcStateStore() {
+        AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
+                new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
+
+        OidcStateStore store = oidcConfig.axiamOidcStateStore();
+
+        assertNotNull(store);
+        assertTrue(store instanceof MemoryOidcStateStore);
+    }
+
+    @Test
+    void registersTheOidcLoginRoutes() {
+        AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
+                new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
+
+        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "")) {
+            RouterFunction<ServerResponse> routes = oidcConfig.axiamOidcLoginRoutes(
+                    client, oidcConfig.axiamOidcStateStore(), "/oidc/login", "/oidc/callback",
+                    "http://localhost:8080/oidc/callback", "", "");
+
+            assertNotNull(routes, "the auto-configuration must produce the login-redirect + callback RouterFunction");
         }
     }
 }

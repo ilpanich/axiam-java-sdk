@@ -63,7 +63,12 @@ public final class AuthInterceptor implements Interceptor {
     @Override
     public Response intercept(Chain chain) throws IOException {
         Request original = chain.request();
-        boolean isRefreshCall = SessionState.isRefreshPath(original.url().encodedPath());
+        String encodedPath = original.url().encodedPath();
+        // §12.3 rule 3: an /oauth2/* call must never trigger a proactive
+        // refresh either — grouped with the refresh-path exclusion above it,
+        // for the same "never recursively/incidentally refresh" reason.
+        boolean isRefreshCall = SessionState.isRefreshPath(encodedPath)
+                || SessionState.isOauth2SkipRefreshPath(encodedPath);
 
         // Host-isolation (3A): only same-origin requests receive the tenant id,
         // bearer token, and CSRF token. A request built against an absolute
