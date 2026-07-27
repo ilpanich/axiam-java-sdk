@@ -51,6 +51,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OIDC / SSO relying-party helpers (CONTRACT.md §12, adopting contract version
+  1.4): the nine canonical operations — `oidcDiscover`, `oidcBegin`,
+  `oidcExchange`, `oidcRefresh`, `loginClientCredentials`, `introspect`,
+  `revoke`, `ssoStart`, `ssoComplete` — exposed directly on `AxiamClient`
+  (new `io.axiam.sdk.oidc` package for the supporting types), each with a
+  `*Async` `CompletableFuture` companion. Built entirely on existing SDK
+  machinery: the §4 cookie jar, §6 TLS configuration, §7 `Sensitive` wrapper,
+  §9 single-flight refresh guard (extended with `RefreshGuard.runExclusive`
+  so `oidcRefresh` can never interleave with a cookie-session `refresh()`),
+  and the §10 JWKS verifier (extended with `JwksVerifier.forJwksUri`/
+  `verifyForOidc` to read `jwks_uri` from the discovery document and to raise
+  a stable §12.3 reason code per failed rule). `oidcBegin` is pure local PKCE
+  (`SecureRandom` + `MessageDigest`, S256-only) with no network I/O; every ID
+  token is validated in full (algorithm, signature, issuer, audience, time,
+  nonce — §12.4) before `oidcExchange`/`oidcRefresh` return, discarding the
+  whole token set on any failure. New `OAuthProtocolError`, a sub-type of the
+  now-non-`final` `AuthError` (existing `catch (AuthError e)` code keeps
+  working), surfaces an `OAuth2ErrorResponse` body from `/oauth2/*`; a 401
+  from `/oauth2/token`/`/oauth2/introspect`/`/oauth2/revoke` never enters the
+  §9 refresh guard. `OidcStateStore` + the in-memory `MemoryOidcStateStore`
+  (10-minute TTL, single-use `consume`) are optional, opt-in state storage for
+  framework glue. New Spring MVC `AxiamOidcLoginRoutes` (a
+  `RouterFunction<ServerResponse>` login-redirect + callback pair),
+  auto-registered by `AxiamAutoConfiguration` only when the consuming
+  application sets `axiam.oidc.enabled=true`. This SDK now conforms to
+  CONTRACT.md §1–§12 (was §1–§11). No new runtime dependency.
+
 - gRPC-only `getUserInfo` operation (CONTRACT.md §1.1, adopting contract version
   1.3): `GrpcAuthzClient.getUserInfo()` and its `CompletableFuture`-returning
   `getUserInfoAsync()` twin invoke `axiam.v1.UserInfoService/GetUserInfo` on the

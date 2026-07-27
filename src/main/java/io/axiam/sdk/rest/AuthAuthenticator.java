@@ -43,7 +43,14 @@ public final class AuthAuthenticator implements Authenticator {
 
     @Override
     public @Nullable Request authenticate(@Nullable Route route, Response response) throws java.io.IOException {
-        if (SessionState.isRefreshPath(response.request().url().encodedPath()) || responseCount(response) >= 2) {
+        String encodedPath = response.request().url().encodedPath();
+        // CONTRACT.md §12.3 rule 3: a 401 from /oauth2/token, /oauth2/introspect,
+        // or /oauth2/revoke is a client-credential failure, never a session
+        // expiry — it must never enter this guard. The oidc engine's own
+        // OAuth2ErrorResponse mapping (ErrorMapper.fromOAuth2Response) sees the
+        // original, unretried 401 response.
+        if (SessionState.isRefreshPath(encodedPath) || SessionState.isOauth2SkipRefreshPath(encodedPath)
+                || responseCount(response) >= 2) {
             return null;
         }
 

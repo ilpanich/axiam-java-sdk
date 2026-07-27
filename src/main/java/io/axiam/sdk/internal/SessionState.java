@@ -57,6 +57,18 @@ public final class SessionState {
      * OkHttpClient those two are registered on). */
     public static final String REFRESH_PATH = "/api/v1/auth/refresh";
 
+    /**
+     * The three {@code /oauth2/*} paths CONTRACT.md &sect;12.3 rule 3 forbids
+     * from ever entering the &sect;9 single-flight refresh guard: a
+     * client-credential failure at one of these is not a session expiry, and
+     * retrying via the cookie-session refresh cannot fix it. Special-cased by
+     * {@code AuthAuthenticator} (reactive 401 handling) and
+     * {@code AuthInterceptor} (proactive near-expiry refresh), mirroring how
+     * {@link #REFRESH_PATH} is already special-cased for the same reason.
+     */
+    private static final java.util.Set<String> OAUTH2_SKIP_REFRESH_PATHS =
+            java.util.Set.of("/oauth2/token", "/oauth2/introspect", "/oauth2/revoke");
+
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -155,6 +167,19 @@ public final class SessionState {
      */
     public static boolean isRefreshPath(String encodedPath) {
         return REFRESH_PATH.equals(encodedPath);
+    }
+
+    /**
+     * Checks whether {@code encodedPath} is one of the three {@code /oauth2/*}
+     * paths that must never enter the &sect;9 single-flight refresh guard
+     * (CONTRACT.md &sect;12.3 rule 3).
+     *
+     * @param encodedPath a request URL's encoded path
+     * @return {@code true} if {@code encodedPath} is {@code /oauth2/token},
+     *         {@code /oauth2/introspect}, or {@code /oauth2/revoke}
+     */
+    public static boolean isOauth2SkipRefreshPath(String encodedPath) {
+        return OAUTH2_SKIP_REFRESH_PATHS.contains(encodedPath);
     }
 
     /** Returns the last captured CSRF token, if any.

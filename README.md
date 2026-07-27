@@ -21,9 +21,9 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§11 (contract version 1.3), including §6.1
-mTLS (client-certificate authentication) and the §1.1 gRPC-only `getUserInfo`
-operation.
+This SDK conforms to CONTRACT.md §1–§12, including §6.1 mTLS (client-certificate
+authentication), the §1.1 gRPC-only `getUserInfo` operation, and the §12 OIDC/SSO
+relying-party helpers.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -227,6 +227,92 @@ the interceptor uses; the existing overloads are unchanged.
 
 The annotated controller is demonstrated in
 [`examples/spring-boot-app`](examples/spring-boot-app).
+
+## OIDC / SSO relying-party helpers (`io.axiam.sdk.oidc`)
+
+CONTRACT.md §12 adds nine operations for offering "Login with AXIAM"
+(authorization-code + PKCE against AXIAM's own OIDC provider), service-account
+`client_credentials` login, token introspection/revocation, and driving the
+server's upstream-IdP federation endpoints. They are exposed directly on the
+existing `AxiamClient` — there is no separate OIDC client type — and are built
+entirely on the SDK's existing machinery (the §4 cookie jar, §6/§6.1 TLS
+configuration, §7 `Sensitive` wrapper, §9 single-flight refresh guard, and the
+JWKS verifier the §10 middleware uses).
+
+| Operation | Wire call |
+|-----------|-----------|
+| `oidcDiscover()` | `GET /.well-known/openid-configuration`, cached per origin (&ge;5 min TTL), single-flight |
+| `oidcBegin(configuration, redirectUri, scope, extraParams)` | none — pure local PKCE/state/nonce computation |
+| `oidcExchange(configuration, code, codeVerifier, redirectUri, nonce, tenantId)` | `POST /oauth2/token` (`grant_type=authorization_code`) |
+| `oidcRefresh(refreshToken, scope, tenantId, configuration)` | `POST /oauth2/token` (`grant_type=refresh_token`) |
+| `loginClientCredentials(scope, tenantId, configuration)` | `POST /oauth2/token` (`grant_type=client_credentials`) |
+| `introspect(token, tokenTypeHint, tenantId, configuration)` | `POST /oauth2/introspect` (confidential clients only) |
+| `revoke(token, tokenTypeHint, tenantId, configuration)` | `POST /oauth2/revoke` (confidential clients only; idempotent) |
+| `ssoStart(federationConfigId, redirectUri, tenantId, tenantSlug, orgId, orgSlug)` | `POST /api/v1/auth/federation/oidc/start` |
+| `ssoComplete(state, code)` | `POST /api/v1/auth/federation/oidc/callback` (session via `Set-Cookie`) |
+
+Each also has a `*Async` `CompletableFuture` companion (`oidcExchangeAsync`, …)
+per CONTRACT.md §12.2's Java note, and a bare-`String` convenience overload
+wherever the canonical signature takes a `Sensitive` secret.
+
+```java
+AxiamClient client = AxiamClient.builder(baseUrl, tenantId)
+        .oidcClientId("my-app")
+        .oidcClientSecret(clientSecret) // omit for a public client
+        .build();
+
+OidcConfiguration config = client.oidcDiscover();
+AuthorizationRequest request = client.oidcBegin(config, redirectUri, "openid profile", null);
+// redirect the browser to request.url(), persisting state/nonce/codeVerifier yourself
+
+// ...on the callback, after checking the returned state matches...
+OidcTokenSet tokens = client.oidcExchange(
+        config, code, request.codeVerifier(), redirectUri, request.nonce());
+System.out.println(tokens.idClaims().sub()); // validated ID-token subject
+```
+
+**The caller owns the login state.** `oidcBegin` and `oidcExchange` are
+stateless by contract (CONTRACT.md §12.3 rule 1): the SDK never stores
+`state`, `nonce`, or `code_verifier` anywhere. Persist the three values
+returned by `oidcBegin` in your own HTTP session and pass `nonce`/
+`codeVerifier` back into `oidcExchange` yourself. For a two-request
+redirect flow, `io.axiam.sdk.oidc.OidcStateStore` (with the in-memory
+`MemoryOidcStateStore` reference implementation — 10-minute TTL, single-use
+`consume`) bridges the login and callback requests; a multi-instance
+deployment should implement `OidcStateStore` against shared storage (Redis,
+a database) instead.
+
+Every ID token is validated in full (issuer, audience, expiry, signature,
+nonce — CONTRACT.md §12.4) before `oidcExchange`/`oidcRefresh` ever return an
+`OidcTokenSet`; any failure raises `AuthError` with a stable reason code
+(`invalid_alg`, `unknown_kid`, `invalid_signature`, `invalid_issuer`,
+`invalid_audience`, `token_expired`, `nonce_mismatch`) and discards the whole
+token set — there is no partial success and no way to disable validation.
+`access_token`, `refresh_token`, `id_token`, `client_secret`, and
+`code_verifier` are always `Sensitive`-wrapped; `state` and `nonce` are plain
+strings (not secrets). An `OAuth2ErrorResponse` body from `/oauth2/*` surfaces
+as `OAuthProtocolError`, a sub-type of `AuthError` — existing
+`catch (AuthError e)` code keeps working unchanged.
+
+### Spring MVC login routes (`io.axiam.sdk.spring.AxiamOidcLoginRoutes`)
+
+A ready-made login-redirect + callback `RouterFunction<ServerResponse>` pair
+for Spring MVC:
+
+```java
+RouterFunction<ServerResponse> oidcRoutes = AxiamOidcLoginRoutes.routes(
+        client, new MemoryOidcStateStore(),
+        new AxiamOidcLoginRoutes.Options("/oidc/login", "/oidc/callback", redirectUri));
+```
+
+Auto-registered by `AxiamAutoConfiguration` **only when the consuming
+application opts in** with `axiam.oidc.enabled=true` (unlike the §11
+authorization interceptor, this is never wired up by the mere presence of a
+dependency — an OIDC login route is too large a behavioral surface to add
+silently). Additional properties: `axiam.oidc.client-id` (required),
+`axiam.oidc.client-secret` (confidential clients only), `axiam.oidc.redirect-uri`
+(required), `axiam.oidc.login-path`/`axiam.oidc.callback-path` (default
+`/oidc/login`/`/oidc/callback`), `axiam.oidc.scope`, `axiam.oidc.success-redirect`.
 
 ## Building from source
 

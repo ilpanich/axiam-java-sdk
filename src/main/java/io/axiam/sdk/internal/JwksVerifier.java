@@ -20,11 +20,19 @@ import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.axiam.sdk.errors.AuthError;
 
+import org.jspecify.annotations.Nullable;
+
+import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
 import java.text.ParseException;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
@@ -78,6 +86,8 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public final class JwksVerifier {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final RemoteJWKSet<SecurityContext> jwkSource;
 
     /**
@@ -97,20 +107,46 @@ public final class JwksVerifier {
      *                the JWKS URL is derived as {@code {baseUrl}/oauth2/jwks}
      */
     public JwksVerifier(String baseUrl) {
-        String trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        URL jwksUrl;
-        try {
-            jwksUrl = URI.create(trimmed + "/oauth2/jwks").toURL();
-        } catch (java.net.MalformedURLException e) {
-            throw new IllegalArgumentException("invalid AXIAM base URL: " + baseUrl, e);
-        }
+        this(deriveJwksUrl(baseUrl));
+    }
 
+    /**
+     * Creates a verifier sourcing its JWKS from {@code jwksUri} directly —
+     * used by the CONTRACT.md &sect;12 OIDC relying-party path, which reads
+     * {@code jwks_uri} from the discovery document rather than deriving it
+     * from a base URL (&sect;12.3 rule 6: the two may legitimately differ,
+     * e.g. behind a proxy). Extends this class rather than forking it, per
+     * &sect;12's "no SDK may fork, duplicate, or re-implement" rule.
+     *
+     * @param jwksUri the JWKS document URI, as advertised by the discovery
+     *                document's {@code jwks_uri} field
+     * @return a new verifier sourcing keys from {@code jwksUri}
+     * @throws AuthError if {@code jwksUri} is not a valid URL
+     */
+    public static JwksVerifier forJwksUri(String jwksUri) {
+        try {
+            return new JwksVerifier(URI.create(jwksUri).toURL());
+        } catch (MalformedURLException | IllegalArgumentException e) {
+            throw new AuthError("invalid jwks_uri in discovery document: " + jwksUri);
+        }
+    }
+
+    private JwksVerifier(URL jwksUrl) {
         // TTL 300s, forced-refetch cooldown 60s — matches the Rust
         // (JWKS_CACHE_TTL=300s / FORCED_REFETCH_MIN_INTERVAL=60s), Go
         // (jwx minInterval=60s / maxInterval=300s), and Python
         // (PyJWKClient lifespan=300) reference SDKs' proven defaults.
         JWKSetCache cache = new DefaultJWKSetCache(300, 60, TimeUnit.SECONDS);
         this.jwkSource = new RemoteJWKSet<>(jwksUrl, null, cache);
+    }
+
+    private static URL deriveJwksUrl(String baseUrl) {
+        String trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        try {
+            return URI.create(trimmed + "/oauth2/jwks").toURL();
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("invalid AXIAM base URL: " + baseUrl, e);
+        }
     }
 
     /**
@@ -169,6 +205,120 @@ public final class JwksVerifier {
         } catch (ParseException e) {
             throw new AuthError("malformed claims: " + e.getMessage());
         }
+    }
+
+    /**
+     * CONTRACT.md &sect;12.4 rules 1&ndash;2 entry point for OIDC ID-token
+     * validation: verifies {@code token}'s EdDSA signature using the SAME
+     * cache + single-forced-refetch-then-fail key lookup {@link #verify}
+     * uses (never forked), but raises {@link AuthError} carrying a stable
+     * &sect;12.3 rule 3 reason code ({@code invalid_alg}, {@code unknown_kid},
+     * {@code invalid_signature}) distinguishing which rule failed &mdash;
+     * unlike {@link #verify}'s generic messages, which the resource-server
+     * path (with no reason-code contract) does not need.
+     *
+     * <p>The header {@code alg} is read directly from the token's raw JOSE
+     * header (before any JWS parsing is attempted) and checked against an
+     * exact {@code "EdDSA"} allowlist: {@code alg: none} and every other
+     * algorithm are rejected by the same equality test, with no special
+     * case, so the token can never select its own verification algorithm. A
+     * missing or unparsable {@code kid} is treated as {@code unknown_kid}
+     * (port-brief-addendum item 12), matching an unmatched {@code kid} after
+     * the single forced refetch.
+     *
+     * <p>This method does NOT check expiry, issuer, audience, or nonce
+     * (&sect;12.4 rules 3&ndash;6) &mdash; callers apply those separately
+     * over the returned claims.
+     *
+     * @param token the compact-serialized ID token to verify
+     * @return the token's claims, once the signature has verified successfully
+     * @throws AuthError with reason {@code invalid_alg}, {@code unknown_kid},
+     *                    or {@code invalid_signature} on the matching failure
+     */
+    public JWTClaimsSet verifyForOidc(String token) {
+        String headerAlg = peekHeaderAlg(token);
+        if (!"EdDSA".equals(headerAlg)) {
+            throw oidcAuthError("invalid_alg", "expected alg \"EdDSA\", got "
+                    + (headerAlg != null ? "\"" + headerAlg + "\"" : "no alg header"));
+        }
+
+        SignedJWT jwt;
+        try {
+            jwt = SignedJWT.parse(token);
+        } catch (ParseException e) {
+            throw oidcAuthError("invalid_signature", "malformed ID token: " + e.getMessage());
+        }
+
+        JWSHeader header = jwt.getHeader();
+        if (header.getKeyID() == null) {
+            throw oidcAuthError("unknown_kid", "ID token has no kid header");
+        }
+
+        OctetKeyPair key;
+        try {
+            key = selectKey(header);
+        } catch (RuntimeException e) {
+            throw oidcAuthError("unknown_kid", "no JWKS key matches the token's kid");
+        }
+
+        JWSVerifier verifier;
+        try {
+            verifier = new Ed25519Verifier(key);
+        } catch (JOSEException e) {
+            throw oidcAuthError("invalid_signature", "failed to construct EdDSA verifier: " + e.getMessage());
+        }
+
+        boolean valid;
+        try {
+            valid = jwt.verify(verifier);
+        } catch (JOSEException e) {
+            throw oidcAuthError("invalid_signature", "signature verification failed: " + e.getMessage());
+        }
+        if (!valid) {
+            throw oidcAuthError("invalid_signature", "invalid ID token signature");
+        }
+
+        try {
+            return jwt.getJWTClaimsSet();
+        } catch (ParseException e) {
+            throw oidcAuthError("invalid_signature", "malformed claims: " + e.getMessage());
+        }
+    }
+
+    private static AuthError oidcAuthError(String reason, String message) {
+        return new AuthError("id_token validation failed (" + reason + "): " + message, reason);
+    }
+
+    /**
+     * Reads the {@code alg} field out of {@code token}'s raw JOSE header —
+     * decoded and JSON-parsed directly, WITHOUT going through
+     * {@link SignedJWT#parse}, so the check runs even for a header shape
+     * (e.g. {@code alg: "none"}) that nimbus's own JWS parser rejects before
+     * ever constructing a {@link JWSHeader} (&sect;12.4 rule 1: {@code alg}
+     * MUST be read from the header and checked before any signature work).
+     *
+     * @param token the compact-serialized token whose header is inspected
+     * @return the header's {@code alg} value, or {@code null} if absent,
+     *         non-string, or the header segment could not be decoded/parsed
+     */
+    private static @Nullable String peekHeaderAlg(String token) {
+        int dot = token.indexOf('.');
+        if (dot <= 0) {
+            return null;
+        }
+        try {
+            byte[] decoded = Base64.getUrlDecoder().decode(padBase64Url(token.substring(0, dot)));
+            JsonNode node = MAPPER.readTree(decoded);
+            JsonNode alg = node.get("alg");
+            return alg != null && alg.isTextual() ? alg.asText() : null;
+        } catch (IOException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static String padBase64Url(String s) {
+        int rem = s.length() % 4;
+        return rem == 0 ? s : s + "====".substring(rem);
     }
 
     /**

@@ -8,12 +8,26 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.ErrorMapper;
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.internal.DiscoveryCache;
 import io.axiam.sdk.internal.JwksVerifier;
 import io.axiam.sdk.internal.RefreshGuard;
 import io.axiam.sdk.internal.Retry;
 import io.axiam.sdk.internal.SessionState;
+import io.axiam.sdk.internal.SingleFlight;
+import io.axiam.sdk.oidc.AuthorizationRequest;
+import io.axiam.sdk.oidc.IdTokenClaims;
+import io.axiam.sdk.oidc.IdTokenValidator;
+import io.axiam.sdk.oidc.IntrospectionResult;
+import io.axiam.sdk.oidc.OidcConfiguration;
+import io.axiam.sdk.oidc.OidcOperations;
+import io.axiam.sdk.oidc.OidcPkce;
+import io.axiam.sdk.oidc.OidcTokenSet;
+import io.axiam.sdk.oidc.SsoCompleteResult;
+import io.axiam.sdk.oidc.SsoStartResult;
 
 import okhttp3.java.net.cookiejar.JavaNetCookieJar;
+import okhttp3.FormBody;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -34,6 +48,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
@@ -52,9 +67,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * The AXIAM Java SDK's public REST entry point (CONTRACT.md &sect;1&ndash;&sect;6,
@@ -71,13 +92,26 @@ import java.util.concurrent.CompletableFuture;
  * requiring the gRPC plan (20-08) or the examples (20-09) to edit this
  * class.
  */
-public final class AxiamClient implements AutoCloseable {
+public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     private static final String LOGIN_PATH = "/api/v1/auth/login";
     private static final String MFA_VERIFY_PATH = "/api/v1/auth/mfa/verify";
     private static final String LOGOUT_PATH = "/api/v1/auth/logout";
     private static final String CHECK_PATH = "/api/v1/authz/check";
     private static final String BATCH_CHECK_PATH = "/api/v1/authz/check/batch";
+
+    // CONTRACT.md §12 OIDC/SSO relying-party helpers.
+    private static final String DISCOVERY_PATH = "/.well-known/openid-configuration";
+    private static final String SSO_START_PATH = "/api/v1/auth/federation/oidc/start";
+    private static final String SSO_CALLBACK_PATH = "/api/v1/auth/federation/oidc/callback";
+    /** §12.3 rule 6 floor: the discovery cache TTL is never allowed below 5 minutes. */
+    private static final long MIN_OIDC_DISCOVERY_TTL_MILLIS = 300_000L;
+    /** The eight query parameters {@code oidcBegin} owns (§12.1 rule 5); {@code extraParams} may not override these. */
+    private static final Set<String> RESERVED_AUTHORIZE_PARAMS = Set.of(
+            "response_type", "client_id", "redirect_uri", "scope", "state", "nonce",
+            "code_challenge", "code_challenge_method");
+    private static final Pattern UUID_PATTERN = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -89,6 +123,15 @@ public final class AxiamClient implements AutoCloseable {
     private final RefreshGuard refreshGuard;
     private final JwksVerifier jwksVerifier;
     private final SessionState session;
+
+    // CONTRACT.md §12 OIDC/SSO relying-party state — see the Builder's
+    // oidcClientId/oidcClientSecret/oidcDiscoveryTtl/oidcClockSkew.
+    private final @Nullable String oidcClientId;
+    private final @Nullable Sensitive oidcClientSecret;
+    private final @Nullable Integer oidcClockSkewSec;
+    private final DiscoveryCache<OidcConfiguration> oidcDiscoveryCache;
+    private final Map<String, JwksVerifier> oidcJwksVerifiers = new ConcurrentHashMap<>();
+    private final SingleFlight<OidcTokenSet> oidcRefreshSingleFlight = new SingleFlight<>();
 
     /**
      * The ONLY construction path (SC#1) — {@code tenantId} is required and
@@ -126,6 +169,10 @@ public final class AxiamClient implements AutoCloseable {
         private Duration connectTimeout = Duration.ofSeconds(10);
         private Duration readTimeout = Duration.ofSeconds(30);
         private Duration writeTimeout = Duration.ofSeconds(30);
+        private @Nullable String oidcClientId;
+        private @Nullable Sensitive oidcClientSecret;
+        private long oidcDiscoveryTtlMillis = MIN_OIDC_DISCOVERY_TTL_MILLIS;
+        private @Nullable Integer oidcClockSkewSec;
 
         private Builder(String baseUrl, String tenantId) {
             this.baseUrl = baseUrl;
@@ -252,6 +299,76 @@ public final class AxiamClient implements AutoCloseable {
             return this;
         }
 
+        /**
+         * The relying party's OAuth2 {@code client_id} (CONTRACT.md &sect;12),
+         * required by every &sect;12 operation that builds a request (all
+         * except {@link #oidcDiscover()}). Comes from client configuration,
+         * never a per-call argument (CONTRACT.md &sect;12 T1 reference
+         * judgment call 21) — it is also the value &sect;12.4 rule 4 matches
+         * an ID token's {@code aud}/{@code azp} against, and two sources
+         * could otherwise disagree.
+         *
+         * @param clientId the relying party's OAuth2 {@code client_id}
+         * @return this builder, for chaining
+         */
+        public Builder oidcClientId(String clientId) {
+            this.oidcClientId = clientId;
+            return this;
+        }
+
+        /**
+         * The {@code client_secret} for a confidential OIDC client (CONTRACT.md
+         * &sect;12.1 note 4), held behind {@link Sensitive} (&sect;12.5). Omit
+         * for a public client — {@code oidcExchange}/{@code oidcRefresh} then
+         * never add {@code client_secret} to the form body (&sect;12.1 "MUST
+         * omit rather than send empty/null"). {@code introspect}, {@code revoke},
+         * and {@code loginClientCredentials} REQUIRE it and raise {@code AuthError}
+         * client-side, without a wire call, when it is absent.
+         *
+         * @param clientSecret the confidential client's {@code client_secret}
+         * @return this builder, for chaining
+         */
+        public Builder oidcClientSecret(Sensitive clientSecret) {
+            this.oidcClientSecret = clientSecret;
+            return this;
+        }
+
+        /**
+         * Bare-string convenience for {@link #oidcClientSecret(Sensitive)}.
+         *
+         * @param clientSecret the confidential client's {@code client_secret}
+         * @return this builder, for chaining
+         */
+        public Builder oidcClientSecret(String clientSecret) {
+            return oidcClientSecret(Sensitive.of(clientSecret));
+        }
+
+        /**
+         * The OIDC discovery-document cache TTL (CONTRACT.md &sect;12.3
+         * rule 6). <strong>Floored</strong> at 5 minutes: a smaller value is
+         * silently raised to it. Defaults to 5 minutes.
+         *
+         * @param ttl the requested discovery-cache TTL
+         * @return this builder, for chaining
+         */
+        public Builder oidcDiscoveryTtl(Duration ttl) {
+            this.oidcDiscoveryTtlMillis = ttl.toMillis();
+            return this;
+        }
+
+        /**
+         * Permitted ID-token clock skew (CONTRACT.md &sect;12.4 rule 5).
+         * <strong>Clamped</strong> at 60 seconds: a larger value is silently
+         * reduced. Defaults to 60 seconds when never called.
+         *
+         * @param skew the requested permitted clock skew
+         * @return this builder, for chaining
+         */
+        public Builder oidcClockSkew(Duration skew) {
+            this.oidcClockSkewSec = (int) Math.min(skew.toSeconds(), IdTokenValidator.MAX_CLOCK_SKEW_SEC);
+            return this;
+        }
+
         /** Builds the configured {@link AxiamClient}.
          *
          * @return a new, ready-to-use {@link AxiamClient}
@@ -277,6 +394,10 @@ public final class AxiamClient implements AutoCloseable {
         this.baseUrl = stripTrailingSlash(b.baseUrl);
         this.tenantId = b.tenantId;
         this.customCaPem = b.customCaPem;
+        this.oidcClientId = b.oidcClientId;
+        this.oidcClientSecret = b.oidcClientSecret;
+        this.oidcClockSkewSec = b.oidcClockSkewSec;
+        this.oidcDiscoveryCache = new DiscoveryCache<>(b.oidcDiscoveryTtlMillis, MIN_OIDC_DISCOVERY_TTL_MILLIS);
 
         CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
         this.refreshGuard = new RefreshGuard();
@@ -784,6 +905,611 @@ public final class AxiamClient implements AutoCloseable {
 
     private static boolean isRetryableNetworkError(RuntimeException e) {
         return e instanceof NetworkError;
+    }
+
+    // ------------------------------------------------------------------
+    // OIDC / SSO relying-party helpers (CONTRACT.md §12): oidcDiscover,
+    // oidcBegin, oidcExchange, oidcRefresh, loginClientCredentials,
+    // introspect, revoke, ssoStart, ssoComplete. Built on this class's
+    // existing httpClient/refreshGuard/session/jwksVerifier machinery —
+    // §12 forbids forking any of it. See io.axiam.sdk.oidc.OidcOperations
+    // for the canonical (full-argument) signatures; the overloads and
+    // *Async companions here (§12.2 Java note) all delegate to them.
+    // ------------------------------------------------------------------
+
+    @Override
+    public OidcConfiguration oidcDiscover() {
+        String originKey = normalizeOrigin(baseUrl);
+        return oidcDiscoveryCache.get(originKey, this::fetchDiscoveryDocument);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #oidcDiscover()}.
+     *
+     * @return a future resolving to the discovery document
+     */
+    public CompletableFuture<OidcConfiguration> oidcDiscoverAsync() {
+        return CompletableFuture.supplyAsync(this::oidcDiscover);
+    }
+
+    /** {@link #oidcBegin(OidcConfiguration, String, String, Map)} with the default scope ({@code openid}) and no extra parameters.
+     *
+     * @param configuration the discovery document, as returned by {@link #oidcDiscover()}
+     * @param redirectUri   the relying party's redirect URI
+     * @return the built authorization request
+     */
+    public AuthorizationRequest oidcBegin(OidcConfiguration configuration, String redirectUri) {
+        return oidcBegin(configuration, redirectUri, null, null);
+    }
+
+    @Override
+    public AuthorizationRequest oidcBegin(OidcConfiguration configuration, String redirectUri,
+            @Nullable String scope, @Nullable Map<String, String> extraParams) {
+        requireOidcClientId();
+        String state = OidcPkce.randomUrlSafeToken();
+        String nonce = OidcPkce.randomUrlSafeToken();
+        String codeVerifierRaw = OidcPkce.generateCodeVerifier();
+        String codeChallenge = OidcPkce.computeCodeChallenge(codeVerifierRaw);
+
+        HttpUrl authorizationEndpoint = HttpUrl.parse(configuration.authorization_endpoint());
+        if (authorizationEndpoint == null) {
+            throw new NetworkError(
+                    "discovery document authorization_endpoint is not a valid URL: " + configuration.authorization_endpoint());
+        }
+        HttpUrl.Builder urlBuilder = authorizationEndpoint.newBuilder();
+
+        if (extraParams != null) {
+            for (Map.Entry<String, String> entry : extraParams.entrySet()) {
+                if (RESERVED_AUTHORIZE_PARAMS.contains(entry.getKey())) {
+                    throw new IllegalArgumentException("oidcBegin: extraParams may not override the SDK-owned "
+                            + "authorization parameter \"" + entry.getKey() + "\" (CONTRACT.md §12.1 rule 5).");
+                }
+                urlBuilder.addQueryParameter(entry.getKey(), entry.getValue());
+            }
+        }
+
+        urlBuilder.addQueryParameter("response_type", "code")
+                .addQueryParameter("client_id", oidcClientId)
+                .addQueryParameter("redirect_uri", redirectUri)
+                .addQueryParameter("scope", normalizeScope(scope))
+                .addQueryParameter("state", state)
+                .addQueryParameter("nonce", nonce)
+                .addQueryParameter("code_challenge", codeChallenge)
+                .addQueryParameter("code_challenge_method", OidcPkce.CODE_CHALLENGE_METHOD_S256);
+
+        return new AuthorizationRequest(urlBuilder.build().toString(), state, nonce, Sensitive.of(codeVerifierRaw));
+    }
+
+    @Override
+    public OidcTokenSet oidcExchange(OidcConfiguration configuration, String code, Sensitive codeVerifier,
+            String redirectUri, String nonce, @Nullable UUID tenantId) {
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", "authorization_code")
+                .add("code", code)
+                .add("code_verifier", codeVerifier.expose())
+                .add("redirect_uri", redirectUri)
+                .add("client_id", requireOidcClientId());
+        appendOidcClientSecret(form);
+
+        JsonNode wire = postToken(configuration, form.build(), tenantId);
+        return buildTokenSet(wire, configuration, nonce);
+    }
+
+    /** Bare-string convenience for {@link #oidcExchange(OidcConfiguration, String, Sensitive, String, String, UUID)}
+     * (port-brief-addendum item 6: secret inputs accept either the wrapped or bare form), defaulting {@code tenantId}
+     * to the client's configured tenant.
+     *
+     * @param configuration the discovery document the authorization request was built from
+     * @param code          the authorization code the IdP redirected back with
+     * @param codeVerifier  the verifier from the matching {@link AuthorizationRequest}
+     * @param redirectUri   the same {@code redirect_uri} sent on the authorization request
+     * @param nonce         the {@code nonce} from the matching {@link AuthorizationRequest}
+     * @return the validated token set
+     */
+    public OidcTokenSet oidcExchange(OidcConfiguration configuration, String code, String codeVerifier,
+            String redirectUri, String nonce) {
+        return oidcExchange(configuration, code, Sensitive.of(codeVerifier), redirectUri, nonce, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #oidcExchange(OidcConfiguration, String, Sensitive, String, String, UUID)}.
+     *
+     * @param configuration the discovery document the authorization request was built from
+     * @param code          the authorization code the IdP redirected back with
+     * @param codeVerifier  the verifier from the matching {@link AuthorizationRequest}
+     * @param redirectUri   the same {@code redirect_uri} sent on the authorization request
+     * @param nonce         the {@code nonce} from the matching {@link AuthorizationRequest}
+     * @param tenantId      tenant UUID for the {@code tenant_id} query parameter, or {@code null} to default
+     * @return a future resolving to the validated token set
+     */
+    public CompletableFuture<OidcTokenSet> oidcExchangeAsync(OidcConfiguration configuration, String code,
+            Sensitive codeVerifier, String redirectUri, String nonce, @Nullable UUID tenantId) {
+        return CompletableFuture.supplyAsync(() -> oidcExchange(configuration, code, codeVerifier, redirectUri, nonce, tenantId));
+    }
+
+    @Override
+    public OidcTokenSet oidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        // §9's single guard also serializes the cookie-session refresh() path
+        // (RefreshGuard.runExclusive shares that SAME lock), so an oidcRefresh
+        // and a concurrent cookie-session refresh can never interleave; the
+        // SingleFlight coalesces concurrent oidcRefresh callers into one wire
+        // call sharing its result (port-brief-addendum item 14).
+        return oidcRefreshSingleFlight.run(() ->
+                refreshGuard.runExclusive(() -> doOidcRefresh(refreshToken, scope, tenantId, configuration)));
+    }
+
+    private OidcTokenSet doOidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", "refresh_token")
+                .add("refresh_token", refreshToken.expose())
+                .add("client_id", requireOidcClientId());
+        appendOidcClientSecret(form);
+        if (scope != null) {
+            form.add("scope", scope);
+        }
+        JsonNode wire = postToken(config, form.build(), tenantId);
+        // No nonce: rule 6 does not apply to a refresh-issued ID token.
+        return buildTokenSet(wire, config, null);
+    }
+
+    /** {@link #oidcRefresh(Sensitive, String, UUID, OidcConfiguration)} with every optional argument defaulted.
+     *
+     * @param refreshToken the refresh token to redeem
+     * @return the refreshed token set
+     */
+    public OidcTokenSet oidcRefresh(Sensitive refreshToken) {
+        return oidcRefresh(refreshToken, null, null, null);
+    }
+
+    /** Bare-string convenience for {@link #oidcRefresh(Sensitive)}.
+     *
+     * @param refreshToken the refresh token to redeem
+     * @return the refreshed token set
+     */
+    public OidcTokenSet oidcRefresh(String refreshToken) {
+        return oidcRefresh(Sensitive.of(refreshToken), null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #oidcRefresh(Sensitive)}.
+     *
+     * @param refreshToken the refresh token to redeem
+     * @return a future resolving to the refreshed token set
+     */
+    public CompletableFuture<OidcTokenSet> oidcRefreshAsync(Sensitive refreshToken) {
+        return CompletableFuture.supplyAsync(() -> oidcRefresh(refreshToken));
+    }
+
+    @Override
+    public OidcTokenSet loginClientCredentials(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", "client_credentials")
+                .add("client_id", requireOidcClientId())
+                .add("client_secret", requireOidcClientSecret("loginClientCredentials"));
+        if (scope != null) {
+            form.add("scope", scope);
+        }
+        JsonNode wire = postToken(config, form.build(), tenantId);
+        // No nonce: rule 6 does not apply to this grant, which requests no
+        // openid scope and carries no id_token in practice.
+        return buildTokenSet(wire, config, null);
+    }
+
+    /** {@link #loginClientCredentials(String, UUID, OidcConfiguration)} with every optional argument defaulted.
+     *
+     * @return the issued token set
+     */
+    public OidcTokenSet loginClientCredentials() {
+        return loginClientCredentials(null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #loginClientCredentials()}.
+     *
+     * @return a future resolving to the issued token set
+     */
+    public CompletableFuture<OidcTokenSet> loginClientCredentialsAsync() {
+        return CompletableFuture.supplyAsync(this::loginClientCredentials);
+    }
+
+    @Override
+    public IntrospectionResult introspect(Sensitive token, @Nullable String tokenTypeHint, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("token", token.expose())
+                .add("client_id", requireOidcClientId())
+                .add("client_secret", requireOidcClientSecret("introspect"));
+        if (tokenTypeHint != null) {
+            form.add("token_type_hint", tokenTypeHint);
+        }
+        String url = oauth2Url(config.introspection_endpoint(), tenantId);
+        try (Response response = executeFormPost(url, form.build())) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(response.code(), response, "introspect request failed");
+            }
+            JsonNode wire = readJson(response);
+            return new IntrospectionResult(
+                    wire.path("active").asBoolean(false),
+                    wire.hasNonNull("sub") ? wire.get("sub").asText() : null,
+                    wire.hasNonNull("client_id") ? wire.get("client_id").asText() : null,
+                    wire.hasNonNull("scope") ? wire.get("scope").asText() : null,
+                    wire.hasNonNull("token_type") ? wire.get("token_type").asText() : null,
+                    wire.hasNonNull("exp") ? wire.get("exp").asLong() : null,
+                    wire.hasNonNull("iat") ? wire.get("iat").asLong() : null);
+        }
+    }
+
+    /** {@link #introspect(Sensitive, String, UUID, OidcConfiguration)} with every optional argument defaulted.
+     *
+     * @param token the token to introspect
+     * @return the introspection result
+     */
+    public IntrospectionResult introspect(Sensitive token) {
+        return introspect(token, null, null, null);
+    }
+
+    /** Bare-string convenience for {@link #introspect(Sensitive)}.
+     *
+     * @param token the token to introspect
+     * @return the introspection result
+     */
+    public IntrospectionResult introspect(String token) {
+        return introspect(Sensitive.of(token), null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #introspect(Sensitive)}.
+     *
+     * @param token the token to introspect
+     * @return a future resolving to the introspection result
+     */
+    public CompletableFuture<IntrospectionResult> introspectAsync(Sensitive token) {
+        return CompletableFuture.supplyAsync(() -> introspect(token));
+    }
+
+    @Override
+    public void revoke(Sensitive token, @Nullable String tokenTypeHint, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("token", token.expose())
+                .add("client_id", requireOidcClientId())
+                .add("client_secret", requireOidcClientSecret("revoke"));
+        if (tokenTypeHint != null) {
+            form.add("token_type_hint", tokenTypeHint);
+        }
+        String url = oauth2Url(config.revocation_endpoint(), tenantId);
+        try (Response response = executeFormPost(url, form.build())) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(response.code(), response, "revoke request failed");
+            }
+            consumeBody(response);
+        }
+    }
+
+    /** {@link #revoke(Sensitive, String, UUID, OidcConfiguration)} with every optional argument defaulted.
+     *
+     * @param token the token to revoke
+     */
+    public void revoke(Sensitive token) {
+        revoke(token, null, null, null);
+    }
+
+    /** Bare-string convenience for {@link #revoke(Sensitive)}.
+     *
+     * @param token the token to revoke
+     */
+    public void revoke(String token) {
+        revoke(Sensitive.of(token), null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #revoke(Sensitive)}.
+     *
+     * @param token the token to revoke
+     * @return a future that completes once revocation finishes
+     */
+    public CompletableFuture<Void> revokeAsync(Sensitive token) {
+        return CompletableFuture.runAsync(() -> revoke(token));
+    }
+
+    @Override
+    public SsoStartResult ssoStart(String federationConfigId, String redirectUri, @Nullable UUID tenantId,
+            @Nullable String tenantSlug, @Nullable UUID orgId, @Nullable String orgSlug) {
+        UUID resolvedTenantId = tenantId;
+        String resolvedTenantSlug = tenantSlug;
+        if (resolvedTenantId == null && resolvedTenantSlug == null) {
+            // Default from the client's own construction-time tenant identifier
+            // (§5.1 by analogy with LoginRequest): the UUID form wins when the
+            // configured value looks like one, else it is treated as a slug.
+            if (UUID_PATTERN.matcher(this.tenantId).matches()) {
+                resolvedTenantId = UUID.fromString(this.tenantId);
+            } else {
+                resolvedTenantSlug = this.tenantId;
+            }
+        }
+        UUID resolvedOrgId = orgId != null ? orgId : session.configuredOrgId();
+        String resolvedOrgSlug = orgSlug != null ? orgSlug : session.configuredOrgSlug();
+
+        if (resolvedTenantId == null && resolvedTenantSlug == null) {
+            throw new AuthError("ssoStart requires tenant context: pass tenantId or tenantSlug, or construct "
+                    + "the client with one (CONTRACT.md §5.1).");
+        }
+        if (resolvedOrgId == null && resolvedOrgSlug == null) {
+            throw new AuthError("ssoStart requires organization context: pass orgId or orgSlug, or construct "
+                    + "the client with one (CONTRACT.md §5.1).");
+        }
+
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("federation_config_id", federationConfigId);
+        body.put("redirect_uri", redirectUri);
+        if (resolvedTenantId != null) {
+            body.put("tenant_id", resolvedTenantId.toString());
+        } else {
+            body.put("tenant_slug", resolvedTenantSlug);
+        }
+        if (resolvedOrgId != null) {
+            body.put("org_id", resolvedOrgId.toString());
+        } else {
+            body.put("org_slug", resolvedOrgSlug);
+        }
+
+        // port-brief-addendum item 12: the federation start error body shape is
+        // undocumented — this falls through to the generic §2 status mapping,
+        // never OAuthProtocolError (reserved for /oauth2/* endpoints).
+        try (Response response = executeJsonPost(SSO_START_PATH, body)) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromHttpStatus(response.code(), "ssoStart request failed", response);
+            }
+            JsonNode wire = readJson(response);
+            return new SsoStartResult(
+                    wire.path("authorize_url").asText(),
+                    wire.path("state").asText(),
+                    wire.path("expires_in_secs").asLong());
+        }
+    }
+
+    /** {@link #ssoStart(String, String, UUID, String, UUID, String)} defaulting tenant/org context from the client's own configuration.
+     *
+     * @param federationConfigId UUID of the server-side federation configuration identifying the upstream IdP
+     * @param redirectUri        post-login destination, echoed back by {@code ssoComplete}
+     * @return the federation start result
+     */
+    public SsoStartResult ssoStart(String federationConfigId, String redirectUri) {
+        return ssoStart(federationConfigId, redirectUri, null, null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #ssoStart(String, String)}.
+     *
+     * @param federationConfigId UUID of the server-side federation configuration identifying the upstream IdP
+     * @param redirectUri        post-login destination, echoed back by {@code ssoComplete}
+     * @return a future resolving to the federation start result
+     */
+    public CompletableFuture<SsoStartResult> ssoStartAsync(String federationConfigId, String redirectUri) {
+        return CompletableFuture.supplyAsync(() -> ssoStart(federationConfigId, redirectUri));
+    }
+
+    @Override
+    public SsoCompleteResult ssoComplete(String state, String code) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("state", state);
+        body.put("code", code);
+
+        // §4 cookie jar (JavaNetCookieJar, shared with the rest of this client)
+        // absorbs the session Set-Cookie automatically, and AuthInterceptor
+        // captures the response's X-CSRF-Token exactly as it does for every
+        // other response through httpClient — the same post-login cookie-jar/
+        // CSRF sync login()/verifyMfa() rely on, with no extra hook needed
+        // here (port-brief-addendum item 16).
+        try (Response response = executeJsonPost(SSO_CALLBACK_PATH, body)) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromHttpStatus(response.code(), "ssoComplete request failed", response);
+            }
+            JsonNode wire = readJson(response);
+            return new SsoCompleteResult(
+                    wire.path("user_id").asText(),
+                    wire.path("session_id").asText(),
+                    wire.path("expires_in").asLong(),
+                    wire.path("redirect_uri").asText());
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #ssoComplete(String, String)}.
+     *
+     * @param state the {@code state} value the IdP redirected back with
+     * @param code  the authorization code the IdP redirected back with
+     * @return a future resolving to the federation completion result
+     */
+    public CompletableFuture<SsoCompleteResult> ssoCompleteAsync(String state, String code) {
+        return CompletableFuture.supplyAsync(() -> ssoComplete(state, code));
+    }
+
+    // ------------------------------------------------------------------
+    // OIDC internals
+    // ------------------------------------------------------------------
+
+    private OidcConfiguration fetchDiscoveryDocument() {
+        Request request = new Request.Builder().url(baseUrl + DISCOVERY_PATH).get().build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromHttpStatus(response.code(), "oidc discovery request failed", response);
+            }
+            return parseDiscoveryDocument(readJson(response));
+        } catch (IOException e) {
+            throw new NetworkError("oidc discovery request failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static OidcConfiguration parseDiscoveryDocument(JsonNode wire) {
+        return new OidcConfiguration(
+                wire.path("issuer").asText(""),
+                wire.path("authorization_endpoint").asText(""),
+                wire.path("token_endpoint").asText(""),
+                wire.path("userinfo_endpoint").asText(""),
+                wire.path("jwks_uri").asText(""),
+                wire.path("revocation_endpoint").asText(""),
+                wire.path("introspection_endpoint").asText(""),
+                textList(wire, "response_types_supported"),
+                textList(wire, "subject_types_supported"),
+                textList(wire, "id_token_signing_alg_values_supported"),
+                textList(wire, "scopes_supported"),
+                textList(wire, "token_endpoint_auth_methods_supported"),
+                textList(wire, "claims_supported"),
+                textList(wire, "grant_types_supported"));
+    }
+
+    private static List<String> textList(JsonNode wire, String field) {
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : wire.path(field)) {
+            values.add(item.asText());
+        }
+        return values;
+    }
+
+    /**
+     * Normalizes a URL to a discovery-cache key: lowercased scheme and host
+     * with the port always explicit (CONTRACT.md &sect;12.3 rule 6).
+     */
+    private static String normalizeOrigin(String url) {
+        URI uri = URI.create(url);
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        int port = uri.getPort();
+        String portStr = port != -1
+                ? String.valueOf(port)
+                : ("https".equals(scheme) ? "443" : "http".equals(scheme) ? "80" : "");
+        return scheme + "://" + host + ":" + portStr;
+    }
+
+    /**
+     * Normalizes the requested scope to a space-separated string that always
+     * contains {@code openid} (§12.1 rule 4). Duplicate entries are collapsed.
+     */
+    private static String normalizeScope(@Nullable String scope) {
+        List<String> values = new ArrayList<>();
+        if (scope != null) {
+            for (String part : scope.trim().split("\\s+")) {
+                if (!part.isEmpty()) {
+                    values.add(part);
+                }
+            }
+        }
+        if (!values.contains("openid")) {
+            values.add(0, "openid");
+        }
+        return String.join(" ", new LinkedHashSet<>(values));
+    }
+
+    private String requireOidcClientId() {
+        if (oidcClientId == null || oidcClientId.isBlank()) {
+            throw new AuthError("this OIDC operation requires Builder.oidcClientId(...) to be configured at "
+                    + "AxiamClient construction time (CONTRACT.md §12).");
+        }
+        return oidcClientId;
+    }
+
+    private String requireOidcClientSecret(String operation) {
+        if (oidcClientSecret == null) {
+            throw new AuthError(operation + " requires confidential-client credentials: construct the client "
+                    + "with Builder.oidcClientSecret(...) (CONTRACT.md §12.1 note 4).");
+        }
+        return oidcClientSecret.expose();
+    }
+
+    /** Adds {@code client_secret} to a form body for a confidential client, and omits it
+     * entirely for a public client — §12.1 forbids sending an empty/null value for an
+     * absent optional field. */
+    private void appendOidcClientSecret(FormBody.Builder form) {
+        if (oidcClientSecret != null) {
+            form.add("client_secret", oidcClientSecret.expose());
+        }
+    }
+
+    /**
+     * Resolves the tenant UUID for the {@code /oauth2/*} {@code tenant_id}
+     * query parameter (CONTRACT.md &sect;12.3 rule 4): the explicit argument,
+     * else the client's configured tenant identifier when it is itself
+     * UUID-shaped. A slug-only client without an explicit UUID raises the
+     * taxonomy error client-side, with no wire call.
+     */
+    private UUID resolveOauth2TenantId(@Nullable UUID explicit) {
+        if (explicit != null) {
+            return explicit;
+        }
+        if (UUID_PATTERN.matcher(tenantId).matches()) {
+            return UUID.fromString(tenantId);
+        }
+        throw new AuthError("this operation requires a tenant_id UUID for the /oauth2 query parameter: pass "
+                + "tenantId explicitly, or construct the client with the tenantId UUID form (CONTRACT.md §12.3 rule 4).");
+    }
+
+    /** Builds the final endpoint URL: the discovery document's endpoint plus the
+     * mandatory {@code ?tenant_id=<uuid>} query parameter (§12.1 note 2), RFC
+     * 3986-percent-encoded via {@link HttpUrl} (space becomes {@code %20}, not
+     * {@code +}). Existing query parameters on the endpoint are preserved. */
+    private String oauth2Url(String endpoint, @Nullable UUID tenantId) {
+        HttpUrl url = HttpUrl.parse(endpoint);
+        if (url == null) {
+            throw new NetworkError("discovery document endpoint is not a valid URL: " + endpoint);
+        }
+        return url.newBuilder().addQueryParameter("tenant_id", resolveOauth2TenantId(tenantId).toString()).build().toString();
+    }
+
+    private JsonNode postToken(OidcConfiguration configuration, RequestBody form, @Nullable UUID tenantId) {
+        String url = oauth2Url(configuration.token_endpoint(), tenantId);
+        try (Response response = executeFormPost(url, form)) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(response.code(), response, "token request failed");
+            }
+            return readJson(response);
+        }
+    }
+
+    private Response executeFormPost(String url, RequestBody form) {
+        Request request = new Request.Builder().url(url).post(form).build();
+        try {
+            return httpClient.newCall(request).execute();
+        } catch (IOException e) {
+            throw new NetworkError("request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Converts a raw {@code TokenResponse} JSON body into an {@link OidcTokenSet},
+     * validating any {@code id_token} first (§12.4). Validation precedes
+     * construction, so a failure discards the whole set — the caller never sees
+     * the access or refresh token from a response whose ID token was rejected
+     * (§12.4 rule 7).
+     */
+    private OidcTokenSet buildTokenSet(JsonNode wire, OidcConfiguration configuration, @Nullable String nonce) {
+        String idTokenRaw = wire.hasNonNull("id_token") ? wire.get("id_token").asText() : null;
+        IdTokenClaims idClaims = null;
+        if (idTokenRaw != null) {
+            JwksVerifier verifier = oidcJwksVerifierFor(configuration.jwks_uri());
+            idClaims = IdTokenValidator.validate(
+                    verifier, idTokenRaw, configuration.issuer(), requireOidcClientId(), nonce, oidcClockSkewSec);
+        }
+
+        String accessToken = wire.path("access_token").asText();
+        String tokenType = wire.path("token_type").asText();
+        long expiresIn = wire.path("expires_in").asLong();
+        String scope = wire.hasNonNull("scope") ? wire.get("scope").asText() : null;
+        String refreshTokenRaw = wire.hasNonNull("refresh_token") ? wire.get("refresh_token").asText() : null;
+
+        return new OidcTokenSet(
+                Sensitive.of(accessToken),
+                tokenType,
+                expiresIn,
+                scope,
+                refreshTokenRaw != null ? Sensitive.of(refreshTokenRaw) : null,
+                idTokenRaw != null ? Sensitive.of(idTokenRaw) : null,
+                idClaims);
+    }
+
+    /** Lazily builds (and reuses) the JWKS verifier for a {@code jwks_uri} (§12.3 rule 6) —
+     * one verifier per URI, never process-global, and never re-derived from {@code baseUrl}. */
+    private JwksVerifier oidcJwksVerifierFor(String jwksUri) {
+        return oidcJwksVerifiers.computeIfAbsent(jwksUri, JwksVerifier::forJwksUri);
     }
 
     // ------------------------------------------------------------------
