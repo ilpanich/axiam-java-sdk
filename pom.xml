@@ -65,17 +65,17 @@
     <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-netty-shaded</artifactId>
-      <version>1.82.2</version>
+      <version>1.83.0</version>
     </dependency>
     <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-protobuf</artifactId>
-      <version>1.82.2</version>
+      <version>1.83.0</version>
     </dependency>
     <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-stub</artifactId>
-      <version>1.82.2</version>
+      <version>1.83.0</version>
     </dependency>
     <dependency>
       <!-- Java 9+ needs this explicitly for generated gRPC stub annotations
@@ -173,7 +173,7 @@
     <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-inprocess</artifactId>
-      <version>1.82.2</version>
+      <version>1.83.0</version>
       <scope>test</scope>
     </dependency>
     <!-- Test scope only: MockHttpServletRequest/MockHttpServletResponse/
@@ -228,7 +228,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
-        <version>3.5.0</version>
+        <version>3.5.1</version>
         <configuration>
           <archive>
             <manifestEntries>
