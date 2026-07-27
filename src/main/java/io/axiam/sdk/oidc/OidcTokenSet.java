@@ -12,8 +12,9 @@ import org.jspecify.annotations.Nullable;
  * <p>{@link #accessToken()}, {@link #refreshToken()}, and {@link #idToken()}
  * are {@link Sensitive} (CONTRACT.md &sect;12.5): {@code toString()} and
  * Jackson serialization both redact them to {@code "[SENSITIVE]"}, and the
- * raw value is reachable only through {@code Sensitive}'s package-internal
- * accessor.
+ * raw value is reachable only through {@code Sensitive}'s single explicit
+ * {@code expose()} accessor (&sect;7 rule 3) — call it to persist, forward,
+ * or later revoke a token.
  *
  * <p>{@link #idClaims()} is present exactly when {@link #idToken()} is, and
  * holds the <strong>already-validated</strong> claim set (CONTRACT.md

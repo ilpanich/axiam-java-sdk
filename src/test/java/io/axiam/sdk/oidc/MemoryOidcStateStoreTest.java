@@ -38,10 +38,9 @@ class MemoryOidcStateStoreTest {
 
         assertNotNull(first);
         assertEquals("nonce-1", first.nonce());
-        // Sensitive.expose() is package-internal to io.axiam.sdk (§7) — from
-        // this package the strongest available proof the store round-trips
-        // the SAME wrapper (never re-wraps or copies the raw value) is
-        // reference identity.
+        // Sensitive.expose() is public (§7 rule 3), but reference identity is
+        // still the strongest available proof the store round-trips the SAME
+        // wrapper rather than re-wrapping or copying the raw value.
         assertSame(verifier, first.codeVerifier());
         assertNull(second, "a second consume of the same state must return null (single-use)");
     }

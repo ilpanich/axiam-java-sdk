@@ -109,6 +109,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Sensitive.expose()` widened from package-private to `public` (CONTRACT.md
+  §7 rule 3, contract 1.5): CONTRACT.md §12 hands `accessToken`/
+  `refreshToken`/`idToken` on `OidcTokenSet` to the calling application in the
+  `/oauth2/token` response body, not via a `Set-Cookie` the SDK captures on
+  the caller's behalf, so a §12 caller had no way to read the tokens it was
+  handed — `expose()` was reachable only from within `io.axiam.sdk` itself.
+  Additive and non-breaking: redaction (`toString()`, Jackson serialization)
+  is unaffected, and there is still exactly one accessor and no implicit
+  reachability path.
 - REST HTTPS hostname verification: the OkHttp client no longer overrides the
   hostname verifier with `HttpsURLConnection.getDefaultHostnameVerifier()` (an
   always-reject verifier that failed verification for every host); it now uses

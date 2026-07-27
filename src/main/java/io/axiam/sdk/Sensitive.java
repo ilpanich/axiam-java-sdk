@@ -16,8 +16,9 @@ import java.util.Objects;
  *
  * <p>Mirrors {@code sdks/go}'s {@code Sensitive} (String/Format/GoString/
  * MarshalJSON quartet) and {@code sdks/typescript}'s private-{@code #value}
- * class. The raw value is reachable only via the package-internal
- * {@link #expose()} accessor — there is deliberately no public getter.
+ * class. The raw value is reachable only via the single explicit
+ * {@link #expose()} accessor (CONTRACT.md &sect;7 rule 3) — there is no other
+ * public getter, no implicit conversion, and no public field.
  *
  * <p>{@code Sensitive} intentionally does NOT implement
  * {@link java.io.Serializable}: Java's default serialization would
@@ -59,10 +60,31 @@ public final class Sensitive {
     // MessageDigest.isEqual comparison, never String.equals.
 
     /**
-     * Package-internal accessor — never public. Only {@code io.axiam.sdk.*}
-     * callers can reach the raw value.
+     * Returns the wrapped raw value — the SDK's single explicit accessor for
+     * a {@code Sensitive} (CONTRACT.md &sect;7 rule 3).
+     *
+     * <p>Public because CONTRACT.md &sect;12 hands
+     * {@code accessToken}/{@code refreshToken}/{@code idToken} to the
+     * <strong>calling application</strong> inside the {@code /oauth2/token}
+     * response body, not via a {@code Set-Cookie} the SDK captures on the
+     * caller's behalf — there is no cookie jar to read them back out of.
+     * Without a public accessor a &sect;12 caller could hold an
+     * {@code OidcTokenSet} and never be able to persist, forward, or later
+     * revoke the tokens it contains, which would make &sect;12 unusable.
+     * Widening this accessor from package-private is additive and breaks no
+     * existing caller.
+     *
+     * <p><strong>Call this only at the point of actually using the value</strong>
+     * (attaching it to an {@code Authorization} header, writing it to your own
+     * encrypted session store, handing it to a revoke call) and never pass the
+     * result to a {@code log}/{@code trace}/serialization sink — {@code
+     * toString()} and Jackson serialization on {@code Sensitive} itself still
+     * always redact, but that protection does not follow the raw
+     * {@code String} once this method returns it.
+     *
+     * @return the wrapped raw value
      */
-    String expose() {
+    public String expose() {
         return value;
     }
 
