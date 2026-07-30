@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
@@ -30,19 +31,71 @@ import java.util.function.Supplier;
  * propagates its exception, as-is, to every waiter exactly once. The caller
  * must re-authenticate from scratch; this class never re-attempts a failed
  * refresh automatically.
+ *
+ * <p><strong>The {@link #inFlight} slot is a result-sharing channel, not a
+ * busy flag.</strong> {@link #inFlight} holds the {@link CompletableFuture} that publishes the
+ * single refresh's outcome to every waiter (§9 rule 2). It therefore has to
+ * stay populated <em>until after</em> that outcome has been published: a
+ * late-arriving caller that finds the slot occupied joins the shared future
+ * and receives the one wire call's result, whereas a caller that found the
+ * slot already emptied would start a <em>second</em> refresh — fatal against
+ * AXIAM's single-use, rotating refresh tokens. Publication therefore always
+ * happens <em>before</em> the slot is cleared, which means there is a short
+ * window in which the slot references an <strong>already-settled</strong>
+ * future whose network call has long returned.
+ *
+ * <p>Consequently the slot's occupancy alone does <strong>not</strong> mean
+ * "a refresh is on the wire". Anything that needs to know whether a refresh
+ * is genuinely live — i.e. {@link #runExclusive} — must ask
+ * {@link CompletableFuture#isDone()} as well; see
+ * {@link #isRefreshLive(CompletableFuture)}. Treating a settled-but-uncleared
+ * future as "busy" is what previously let {@link #runExclusive} burn its whole
+ * bounded attempt budget in a few microseconds on a guard that was in fact
+ * free, and fail a perfectly valid {@code oidcRefresh} with a spurious
+ * "guard busy" {@link AuthError}.
  */
 public final class RefreshGuard {
 
     private final ReentrantLock lock = new ReentrantLock();
 
-    // Non-null only while a refresh is actually in flight; cleared (set back
-    // to null) once it resolves, successfully or not.
+    // Holds the shared result future of the one refresh that is currently
+    // being coalesced. Populated for the duration of the wire call AND for
+    // the brief bookkeeping window after the outcome has been published (see
+    // the class Javadoc) — so a non-null value does NOT by itself mean a
+    // refresh is still on the wire; use isRefreshLive(..) for that.
     private final AtomicReference<CompletableFuture<TokenPair>> inFlight = new AtomicReference<>();
 
     private volatile @Nullable TokenPair current;
 
+    /** Effective {@link #runExclusive} attempt budget; see {@link #RUN_EXCLUSIVE_MAX_ATTEMPTS}. */
+    private final int runExclusiveMaxAttempts;
+
+    /**
+     * Visible-for-testing seam: run on the refreshing thread immediately after
+     * {@link #refreshIfNeeded} has published its outcome to waiters and while
+     * that thread holds no lock — i.e. exactly inside the "settled future
+     * still occupying the slot" window described in the class Javadoc. Lets a
+     * test pin that window open deterministically instead of racing for it.
+     * Never set in production (always {@code null}).
+     */
+    @Nullable volatile Runnable afterPublishHook;
+
     /** Creates a new, empty refresh guard (no cached token yet). */
     public RefreshGuard() {
+        this(RUN_EXCLUSIVE_MAX_ATTEMPTS);
+    }
+
+    /**
+     * Visible-for-testing constructor that overrides the {@link #runExclusive}
+     * attempt budget. {@code 0} means "never wait out even one live refresh",
+     * which is how the bounded-failure branch is reached deterministically in
+     * tests; production code always uses the {@link #RefreshGuard()} default of
+     * {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS}.
+     *
+     * @param runExclusiveMaxAttempts attempt budget for {@link #runExclusive}
+     */
+    RefreshGuard(int runExclusiveMaxAttempts) {
+        this.runExclusiveMaxAttempts = runExclusiveMaxAttempts;
     }
 
     /**
@@ -54,6 +107,18 @@ public final class RefreshGuard {
      * refresh while this caller waited for the lock (i.e. the cached
      * token no longer matches what this caller observed as stale), the
      * cached token is returned immediately — no new refresh is performed.
+     *
+     * <p><strong>Completion ordering.</strong> On the success path
+     * {@link #current} is published <em>before</em> the shared future
+     * completes, and the {@link #inFlight} slot is only vacated <em>after</em>
+     * it; on the failure path the exception is likewise published before the
+     * slot is vacated. Both orderings exist so that a caller arriving at any
+     * instant either (a) finds the slot occupied and joins the shared future,
+     * or (b) finds the slot empty and the fresh token already cached — never
+     * "slot empty and nothing cached", which is the only state that would let
+     * it issue a redundant second refresh wire call (§9 rule 2's observable
+     * requirement). The cost of that ordering is the settled-but-uncleared
+     * window documented in the class Javadoc.
      *
      * @param observedAccessToken the access token this caller observed as
      *                             stale/expired/rejected
@@ -80,10 +145,15 @@ public final class RefreshGuard {
                 lock.unlock(); // release before blocking on join()
                 try {
                     return existing.join();
-                } catch (java.util.concurrent.CompletionException e) {
+                } catch (CompletionException e) {
+                    // §9.3: hand the single refresh's failure to this waiter
+                    // as-is, never a wrapper and never a retry.
                     Throwable cause = e.getCause();
                     if (cause instanceof RuntimeException re) {
                         throw re;
+                    }
+                    if (cause instanceof Error err) {
+                        throw err;
                     }
                     throw e;
                 } finally {
@@ -96,14 +166,23 @@ public final class RefreshGuard {
             lock.unlock(); // perform the actual HTTP call OUTSIDE the lock
             try {
                 TokenPair result = doRefresh.get(); // POST /api/v1/auth/refresh
-                current = result;
+                current = result; // cached BEFORE the slot is vacated (see above)
                 future.complete(result);
                 return result;
-            } catch (RuntimeException e) {
-                future.completeExceptionally(e);
-                throw e; // §9.3: no retry — propagate as-is
+            } catch (Throwable t) {
+                // Publish to every waiter first, THEN vacate the slot, so no
+                // late arrival can miss this outcome and retry the refresh.
+                // Catches Throwable (not just RuntimeException) purely so an
+                // Error can never leave the shared future uncompleted and its
+                // waiters blocked forever in join(); §9.3 is unchanged — the
+                // original throwable is rethrown as-is, never retried.
+                future.completeExceptionally(t);
+                throw t;
             } finally {
-                inFlight.set(null);
+                // Reached with the outcome published and the slot still
+                // occupied, on both the success and the failure path.
+                afterPublish();
+                inFlight.compareAndSet(future, null);
                 lock.lock(); // re-acquire so the outer finally's unlock() is balanced
             }
         } finally {
@@ -127,13 +206,34 @@ public final class RefreshGuard {
      * for the duration of its own HTTP call (see this class's header
      * Javadoc), a plain {@code lock.lock()} around {@code op} would only
      * exclude the brief bookkeeping windows around that call, not the call
-     * itself. This method additionally waits out any {@link #inFlight}
-     * cookie-session refresh — bounded to
-     * {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} attempts (port-brief-addendum item
-     * 14) — before acquiring {@link #lock} and running {@code op}; holding
-     * {@link #lock} across {@code op} in turn blocks any NEW
+     * itself. So this method first waits out any <em>live</em> refresh, then
+     * takes {@link #lock} and re-checks under it before running {@code op};
+     * holding {@link #lock} across {@code op} in turn blocks any NEW
      * {@link #refreshIfNeeded} call from starting until {@code op} completes,
      * since that method takes the lock first thing.
+     *
+     * <p><strong>"Live" means not yet settled.</strong> A refresh counts as
+     * live only while its shared future is incomplete — see
+     * {@link #isRefreshLive(CompletableFuture)} and the class Javadoc on why
+     * the {@link #inFlight} slot outlives the wire call. Once that future has
+     * settled, {@code doRefresh} has already returned, so running {@code op}
+     * cannot overlap it and there is nothing left to wait for; the residual
+     * bookkeeping is finished by the refreshing thread, which will simply
+     * block on {@link #lock} behind {@code op}.
+     *
+     * <p><strong>Termination and the bounded budget.</strong> Every loop
+     * iteration does exactly one of three things: run {@code op} and return,
+     * exhaust the budget and throw, or spend one attempt <em>blocking</em> on
+     * a genuinely live refresh (either found before taking the lock, or found
+     * under the lock as a lost race against a refresh that started in
+     * between). Nothing else consumes an attempt and nothing spins, so the
+     * loop performs at most {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS}+1 iterations
+     * and burns no CPU while waiting — CONTRACT.md §9 rule 5's "bounded
+     * (never unbounded) wait ... exhausting that bound MUST raise
+     * {@code AuthError}". Because attempts are only ever spent on live
+     * refreshes, the {@link AuthError} below is reachable only under real
+     * sustained contention: {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} distinct
+     * cookie-session refresh wire calls monopolising the guard back-to-back.
      *
      * <p>Unlike {@link #refreshIfNeeded}, this does not compare against an
      * observed access token or cache a {@link TokenPair} — it purely
@@ -142,31 +242,38 @@ public final class RefreshGuard {
      * @param op  the operation to run exclusively; invoked at most once
      * @param <T> the operation's result type
      * @return {@code op}'s result
-     * @throws AuthError        if the guard is still busy with a
-     *                          cookie-session refresh after
+     * @throws AuthError        if a live cookie-session refresh still holds the
+     *                          guard after
      *                          {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} attempts
      * @throws RuntimeException whatever {@code op} throws, propagated as-is
      */
     public <T> T runExclusive(Supplier<T> op) {
-        for (int attempt = 0; attempt < RUN_EXCLUSIVE_MAX_ATTEMPTS; attempt++) {
+        int attemptsSpent = 0;
+        while (true) {
             CompletableFuture<TokenPair> busy = inFlight.get();
-            if (busy != null) {
-                // A cookie-session refresh is actively mid-flight (lock
-                // released for that duration by design) — wait for it to
-                // settle, ignoring its outcome, then retry from the top.
-                try {
-                    busy.join();
-                } catch (RuntimeException ignored) {
-                    // Outcome is irrelevant here — only that it settled.
+            if (isRefreshLive(busy)) {
+                if (attemptsSpent++ >= runExclusiveMaxAttempts) {
+                    throw guardBusy();
                 }
+                // A cookie-session refresh is actively mid-flight (lock
+                // released for that duration by design) — block until it
+                // settles, ignoring its outcome, then re-check from the top.
+                awaitSettled(busy);
                 continue;
             }
+            // The slot is either empty or holds a settled future whose wire
+            // call has already returned; neither can overlap op.
             lock.lock();
             try {
-                if (inFlight.get() != null) {
+                CompletableFuture<TokenPair> raced = inFlight.get();
+                if (isRefreshLive(raced)) {
                     // Lost the race: a refreshIfNeeded call started between
-                    // our check above and acquiring the lock. Unlock (via
-                    // the finally below) and retry.
+                    // our check above and acquiring the lock. Release the lock
+                    // (via the finally below) and wait it out on the next
+                    // iteration — real contention, so it costs an attempt.
+                    if (attemptsSpent++ >= runExclusiveMaxAttempts) {
+                        throw guardBusy();
+                    }
                     continue;
                 }
                 return op.get();
@@ -174,9 +281,55 @@ public final class RefreshGuard {
                 lock.unlock();
             }
         }
-        throw new AuthError(
+    }
+
+    /**
+     * Whether {@code future} represents a refresh that is still on the wire.
+     * A {@code null} slot means no refresh at all; a settled future means the
+     * refresh's {@code doRefresh} call has already returned and only the
+     * slot-vacating bookkeeping is outstanding (class Javadoc).
+     *
+     * @param future the current {@link #inFlight} slot value, possibly {@code null}
+     * @return {@code true} only while a refresh wire call is genuinely outstanding
+     */
+    private static boolean isRefreshLive(@Nullable CompletableFuture<TokenPair> future) {
+        return future != null && !future.isDone();
+    }
+
+    /** Blocks until {@code future} settles, discarding its outcome. */
+    private static void awaitSettled(CompletableFuture<TokenPair> future) {
+        try {
+            future.join();
+        } catch (Throwable ignored) {
+            // Outcome is irrelevant here — only that it settled.
+        }
+    }
+
+    private static AuthError guardBusy() {
+        return new AuthError(
                 "oidcRefresh could not acquire the single-flight refresh guard (CONTRACT.md §9); "
                         + "another refresh kept it busy.");
+    }
+
+    /** Invokes {@link #afterPublishHook} if a test installed one. */
+    private void afterPublish() {
+        Runnable hook = afterPublishHook;
+        if (hook != null) {
+            hook.run();
+        }
+    }
+
+    /**
+     * Visible-for-testing: whether the {@link #inFlight} result-sharing slot is
+     * currently populated, regardless of whether its future has settled. Used
+     * by the regression test to assert that the settled-but-uncleared window
+     * described in the class Javadoc really is open at the moment
+     * {@link #runExclusive} is exercised.
+     *
+     * @return {@code true} if the slot holds a future (live or settled)
+     */
+    boolean inFlightSlotOccupied() {
+        return inFlight.get() != null;
     }
 
     /**
