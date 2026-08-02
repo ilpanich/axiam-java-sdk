@@ -21,9 +21,9 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§12, including §6.1 mTLS (client-certificate
-authentication), the §1.1 gRPC-only `getUserInfo` operation, and the §12 OIDC/SSO
-relying-party helpers.
+This SDK conforms to CONTRACT.md §1–§13, including §6.1 mTLS (client-certificate
+authentication), the §1.1 gRPC-only `getUserInfo` operation, the §12 OIDC/SSO
+relying-party helpers, and the §13 webhook-signature verifier.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -313,6 +313,46 @@ silently). Additional properties: `axiam.oidc.client-id` (required),
 `axiam.oidc.client-secret` (confidential clients only), `axiam.oidc.redirect-uri`
 (required), `axiam.oidc.login-path`/`axiam.oidc.callback-path` (default
 `/oidc/login`/`/oidc/callback`), `axiam.oidc.scope`, `axiam.oidc.success-redirect`.
+
+## Webhook signature verification (`io.axiam.sdk.webhook`, §13)
+
+```java
+import io.axiam.sdk.Sensitive;
+import io.axiam.sdk.webhook.AxiamWebhooks;
+import io.axiam.sdk.webhook.WebhookEvent;
+import io.axiam.sdk.webhook.WebhookVerificationException;
+
+// request.getBody() MUST be the exact raw bytes received off the wire —
+// never re-serialize a parsed JSON body, since that changes key
+// order/whitespace and breaks the MAC.
+byte[] body = readRawBody(request);
+
+try {
+    WebhookEvent event = AxiamWebhooks.verify(
+            Sensitive.of(webhookSecret),
+            request.getHeader("X-Axiam-Signature"),
+            body);
+
+    // Dedup at-least-once retries using X-Axiam-Delivery (not part of the
+    // MAC — keep a short-lived seen-set keyed on it).
+    String deliveryId = request.getHeader("X-Axiam-Delivery");
+
+    switch (event.type()) {
+        case "user.created" -> { /* ... */ }
+        default -> { /* ignore unknown event types */ }
+    }
+} catch (WebhookVerificationException e) {
+    // e.reason() is a stable Reason code; e.getMessage() never contains the
+    // expected/received signature or the secret.
+    response.setStatus(401);
+}
+```
+
+`AxiamWebhooks.verify` defaults to a ±300-second freshness window
+(`AxiamWebhooks.DEFAULT_TOLERANCE`, overridable via the `Duration tolerance`
+overload) and throws `WebhookVerificationException` — never a bare/generic
+exception — on any failure. A `Clock` overload is available for tests that
+need a fixed "now".
 
 ## Building from source
 
