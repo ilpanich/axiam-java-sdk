@@ -36,8 +36,8 @@ class JwksVerifierExtraTest {
     void malformedTokenThrowsAuthErrorWithoutTouchingTheServer() {
         // Parse fails before any JWKS lookup, so no server is needed at all.
         JwksVerifier verifier = new JwksVerifier("http://localhost:1");
-        assertThrows(AuthError.class, () -> verifier.verify("this-is-not-a-jwt"));
-        assertThrows(AuthError.class, () -> verifier.verify("only.two"));
+        assertThrows(AuthError.class, () -> verifier.verifySignatureOnlyUnchecked("this-is-not-a-jwt"));
+        assertThrows(AuthError.class, () -> verifier.verifySignatureOnlyUnchecked("only.two"));
     }
 
     @Test
@@ -59,7 +59,7 @@ class JwksVerifierExtraTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String token = signEdDsa(signing, claims("tenant-a"));
 
-            AuthError error = assertThrows(AuthError.class, () -> verifier.verify(token));
+            AuthError error = assertThrows(AuthError.class, () -> verifier.verifySignatureOnlyUnchecked(token));
             org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains("no matching EdDSA key"),
                     "expected a no-matching-key error, was: " + error.getMessage());
         }
@@ -79,7 +79,7 @@ class JwksVerifierExtraTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String token = signEdDsa(keyA, claims("tenant-a"));
 
-            AuthError error = assertThrows(AuthError.class, () -> verifier.verify(token));
+            AuthError error = assertThrows(AuthError.class, () -> verifier.verifySignatureOnlyUnchecked(token));
             org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains("invalid token signature"),
                     "expected an invalid-signature error, was: " + error.getMessage());
         }
@@ -98,7 +98,7 @@ class JwksVerifierExtraTest {
 
             // A 500 on the JWKS endpoint makes RemoteJWKSet#get raise a
             // KeySourceException, which JwksVerifier maps to AuthError.
-            assertThrows(AuthError.class, () -> verifier.verify(token));
+            assertThrows(AuthError.class, () -> verifier.verifySignatureOnlyUnchecked(token));
         }
     }
 
@@ -120,8 +120,8 @@ class JwksVerifierExtraTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String token = signEdDsa(keyPair, claims("tenant-a"));
 
-            JWTClaimsSet first = verifier.verify(token);
-            JWTClaimsSet second = verifier.verify(token); // must hit the warm-cache fast path
+            JWTClaimsSet first = verifier.verifySignatureOnlyUnchecked(token);
+            JWTClaimsSet second = verifier.verifySignatureOnlyUnchecked(token); // must hit the warm-cache fast path
 
             assertEquals("tenant-a", first.getStringClaim("tenant_id"));
             assertEquals("tenant-a", second.getStringClaim("tenant_id"));

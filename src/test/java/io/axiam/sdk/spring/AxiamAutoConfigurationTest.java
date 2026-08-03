@@ -12,6 +12,7 @@ import org.springframework.web.servlet.function.RouterFunction;
 import org.springframework.web.servlet.function.ServerResponse;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -32,9 +33,31 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration config = new AxiamAutoConfiguration();
 
         AxiamAuthenticationFilter filter =
-                config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a");
+                config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a", "", "", 60L);
 
         assertNotNull(filter, "the auto-configuration must produce a default authentication filter bean");
+    }
+
+    @Test
+    void buildsAuthenticationFilterWithConfiguredIssuerAudienceAndSkew() {
+        AxiamAutoConfiguration config = new AxiamAutoConfiguration();
+
+        AxiamAuthenticationFilter filter = config.axiamAuthenticationFilter(
+                "http://localhost:8080", "tenant-a", "https://axiam.example", "axiam:user", 30L);
+
+        assertNotNull(filter, "the §10.1 rule 5-7 properties must be accepted by the auto-configuration");
+    }
+
+    @Test
+    void rejectsAnUnboundedConfiguredClockSkew() {
+        AxiamAutoConfiguration config = new AxiamAutoConfiguration();
+
+        // CONTRACT.md §10.1 rule 7: the leeway MUST NOT be operator-settable
+        // to an unbounded value — an out-of-range property fails context
+        // startup rather than silently widening acceptance.
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a", "", "", 86_400L));
     }
 
     @Test

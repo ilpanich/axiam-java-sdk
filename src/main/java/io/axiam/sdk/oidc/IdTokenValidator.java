@@ -19,7 +19,7 @@ import java.util.List;
  * <p>Rules 1&ndash;2 (algorithm allowlist, {@code kid} lookup, Ed25519
  * verification, single JWKS re-fetch) reuse
  * {@link JwksVerifier#verifyForOidc(String)} — the SAME verifier the
- * &sect;10 middleware's {@link JwksVerifier#verify(String)} uses, extended
+ * &sect;10 middleware's {@link JwksVerifier#verifyAccessToken(String, String)} uses, extended
  * rather than forked. This class holds rules 3&ndash;6 (issuer, audience,
  * time, nonce), so both halves are independently testable.
  *

@@ -28,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.ParseException;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.Set;
 
@@ -39,22 +38,29 @@ import java.util.Set;
  * &sect;10 "Spring Boot" row).
  *
  * <p><strong>Sequence</strong> (RESEARCH.md Pattern 8, mirrors
- * {@code sdks/go/middleware/nethttp.go}'s extract &rarr; verify &rarr; exp
- * check &rarr; cross-tenant check &rarr; inject-identity &rarr; 401/403 JSON):
+ * {@code sdks/go/middleware/nethttp.go}'s extract &rarr; verify &rarr;
+ * inject-identity &rarr; 401/403 JSON):
  * {@link #extractToken(HttpServletRequest)} reads the {@code Authorization:
  * Bearer} header first, then the {@code axiam_access} cookie. When no
  * credentials are presented, the request is passed through unauthenticated
  * — Spring Security's own {@code authorizeHttpRequests} rules 401/403 it.
- * When a token IS presented: {@link JwksVerifier#verify(String)} checks the
- * signature (EdDSA-pinned, key sourced from the cached/rotated JWKS); an
- * explicit {@code exp} check rejects a signature-valid but expired token
- * (the resource-server trust boundary must not trust an expired token even
- * though {@link JwksVerifier#verify(String)} does not itself check expiry);
- * {@link JwksVerifier#assertTenant(JWTClaimsSet, String)} enforces the
- * cross-tenant claim check (T-20-07) — the JWKS is organization-wide, so
- * signature validity alone never implies tenant authorization. On success,
- * an {@code Authentication} is built from the verified subject and
- * scope-derived authorities and set on {@code SecurityContextHolder}.
+ * When a token IS presented, it is verified LOCALLY, so this filter MUST
+ * apply the complete CONTRACT.md &sect;10.1 minimum local-verification set —
+ * and it does so through the single
+ * {@link JwksVerifier#verifyAccessToken(String, String)} entry point:
+ * EdDSA-pinned signature before any key lookup, a <strong>required</strong>
+ * {@code exp} (an absent {@code exp} is a permanent credential and is
+ * rejected), {@code nbf} when present, a <strong>required</strong>
+ * {@code tenant_id} asserted against {@code configuredTenantId} (T-20-07 —
+ * the JWKS is organization-wide, so signature validity alone never implies
+ * tenant authorization), and {@code iss}/{@code aud} when the verifier's
+ * {@link JwksVerifier.LocalVerificationPolicy} configures them, all under a
+ * bounded, named clock skew. The signature-only primitive
+ * ({@link JwksVerifier#verifySignatureOnlyUnchecked(String)}) is deliberately
+ * never called here: a guard that checks the signature and stops is not a
+ * weaker guard, it is not a guard. On success, an {@code Authentication} is
+ * built from the verified subject and scope-derived authorities and set on
+ * {@code SecurityContextHolder}.
  *
  * <p>{@link AuthError} maps to HTTP 401, {@link AuthzError} maps to HTTP
  * 403, both via a standardized JSON error body ({@link #writeJsonError}) —
@@ -120,17 +126,15 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
 
         String token = credential.value();
         try {
-            JWTClaimsSet claims = jwksVerifier.verify(token); // signature + alg=EdDSA pinned
-
-            Date expiration = claims.getExpirationTime();
-            if (expiration != null && expiration.before(new Date())) {
-                throw new AuthError("token expired");
-            }
-
-            // MUST-carry-forward cross-tenant control (T-20-07): the JWKS is
-            // organization-wide, so signature validity alone does not imply
-            // tenant authorization.
-            JwksVerifier.assertTenant(claims, configuredTenantId);
+            // CONTRACT.md §10.1: one call applying every rule of the minimum
+            // local-verification set — EdDSA-pinned signature before key
+            // lookup, REQUIRED exp, nbf when present, REQUIRED tenant_id
+            // asserted against configuredTenantId, and iss/aud when the
+            // verifier's policy configures them, all under a bounded, named
+            // clock skew. The previous inline `exp != null && exp.before(now)`
+            // accepted a token carrying no exp at all — a permanent
+            // credential (SEC-080).
+            JWTClaimsSet claims = jwksVerifier.verifyAccessToken(token, configuredTenantId);
 
             List<GrantedAuthority> authorities = scopeToAuthorities(claims);
             var authentication = new UsernamePasswordAuthenticationToken(claims.getSubject(), null, authorities);
