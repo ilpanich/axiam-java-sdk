@@ -405,6 +405,28 @@ class JwksVerifierLocalVerificationSetTest {
         }
     }
 
+    /**
+     * &sect;13.4 observation 5. 300s satisfied rule 7 &mdash; it was named and
+     * bounded &mdash; but it was 5&times; the RECOMMENDED leeway and 5&times;
+     * what every sibling SDK fixes its value at, so an operator could widen the
+     * acceptance window on an expired token to five minutes and still be
+     * "conformant". The ceiling now equals the recommendation.
+     */
+    @Test
+    void clockSkewCeilingEqualsTheRecommendedLeeway() {
+        assertEquals(60L, JwksVerifier.MAX_CLOCK_SKEW_SECONDS);
+        assertEquals(JwksVerifier.DEFAULT_CLOCK_SKEW_SECONDS, JwksVerifier.MAX_CLOCK_SKEW_SECONDS);
+    }
+
+    /** The specific value the observation objected to must no longer construct. */
+    @Test
+    void theOldCeilingIsNowRefused() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new JwksVerifier.LocalVerificationPolicy(null, null, 300L),
+                "a 300s leeway must no longer be accepted");
+    }
+
     @Test
     void clockSkewMayBeTightenedToZero() throws Exception {
         OctetKeyPair keyPair = generateEd25519KeyPair();
