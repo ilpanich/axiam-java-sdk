@@ -102,7 +102,9 @@ class AxiamAuthenticationFilterTest {
         OctetKeyPair keyPair = generateEd25519KeyPair("key-1");
         try (MockWebServer server = startJwksServer(keyPair)) {
             AxiamAuthenticationFilter filter = filterFor(server, CONFIGURED_TENANT);
-            String expiredToken = signEdDsa(keyPair, claims(CONFIGURED_TENANT, -60_000));
+            // Well beyond the §10.1 rule 7 clock-skew leeway, so this asserts
+            // expiry rather than sitting on the skew boundary.
+            String expiredToken = signEdDsa(keyPair, claims(CONFIGURED_TENANT, -3_600_000));
 
             MockHttpServletRequest request = new MockHttpServletRequest();
             request.addHeader("Authorization", "Bearer " + expiredToken);
@@ -132,6 +134,146 @@ class AxiamAuthenticationFilterTest {
             assertTrue(chain.invoked, "an unauthenticated request must reach the chain so Spring Security's own"
                     + " access-control rules can 401/403 it");
             assertNull(SecurityContextHolder.getContext().getAuthentication());
+        }
+    }
+
+    // --- CONTRACT.md §10.1 minimum local-verification set, at the filter ---
+
+    /**
+     * The full §10.1 required negative set, asserted through the filter
+     * itself rather than only at {@code JwksVerifier}: expired; <b>no</b>
+     * {@code exp}; non-numeric {@code exp}; future {@code nbf}; different
+     * tenant; no {@code tenant_id}; {@code alg: none}; and an HS-signed token
+     * bearing the EdDSA {@code kid}. Each must 401 without reaching the
+     * protected endpoint and without populating the SecurityContext.
+     */
+    @Test
+    void filterRejectsTheWholeSection101NegativeSet() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair("key-1");
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            AxiamAuthenticationFilter filter = filterFor(server, CONFIGURED_TENANT);
+
+            long nowSeconds = System.currentTimeMillis() / 1000L;
+            java.util.Map<String, String> negatives = new java.util.LinkedHashMap<>();
+            negatives.put("expired", signEdDsa(keyPair, claims(CONFIGURED_TENANT, -3_600_000)));
+            negatives.put(
+                    "no exp",
+                    signEdDsa(
+                            keyPair,
+                            new JWTClaimsSet.Builder()
+                                    .subject("user-1")
+                                    .claim("tenant_id", CONFIGURED_TENANT)
+                                    .build()));
+            negatives.put(
+                    "non-numeric exp",
+                    signEdDsaRawPayload(keyPair, java.util.Map.of(
+                            "sub", "user-1", "tenant_id", CONFIGURED_TENANT, "exp", "not-a-number")));
+            negatives.put(
+                    "future nbf",
+                    signEdDsa(
+                            keyPair,
+                            new JWTClaimsSet.Builder()
+                                    .subject("user-1")
+                                    .claim("tenant_id", CONFIGURED_TENANT)
+                                    .expirationTime(new Date(System.currentTimeMillis() + 900_000))
+                                    .notBeforeTime(new Date(System.currentTimeMillis() + 3_600_000))
+                                    .build()));
+            negatives.put("different tenant", signEdDsa(keyPair, claims("tenant-b", 900_000)));
+            negatives.put(
+                    "no tenant_id",
+                    signEdDsa(
+                            keyPair,
+                            new JWTClaimsSet.Builder()
+                                    .subject("user-1")
+                                    .expirationTime(new Date(System.currentTimeMillis() + 900_000))
+                                    .build()));
+            negatives.put("alg:none", unsignedAlgNoneToken(nowSeconds + 900));
+            negatives.put("HS256 with an EdDSA kid", signHs256WithEdDsaKid(claims(CONFIGURED_TENANT, 900_000)));
+
+            for (var entry : negatives.entrySet()) {
+                SecurityContextHolder.clearContext();
+                MockHttpServletRequest request = new MockHttpServletRequest();
+                request.addHeader("Authorization", "Bearer " + entry.getValue());
+                MockHttpServletResponse response = new MockHttpServletResponse();
+                RecordingFilterChain chain = new RecordingFilterChain();
+
+                filter.doFilter(request, response, chain);
+
+                assertFalse(chain.invoked, entry.getKey() + " must not reach the protected endpoint");
+                assertEquals(401, response.getStatus(), entry.getKey() + " must 401");
+                assertNull(SecurityContextHolder.getContext().getAuthentication(), entry.getKey());
+                assertFalse(
+                        response.getContentAsString().contains(entry.getValue()),
+                        entry.getKey() + " must not echo the token");
+            }
+        }
+    }
+
+    /**
+     * §10.1 rules 5-6 through the filter: with an expected issuer and
+     * audience configured, the matching token authenticates (non-vacuous) and
+     * each mismatch 401s.
+     */
+    @Test
+    void filterHonoursConfiguredIssuerAndAudience() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair("key-1");
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            JwksVerifier verifier = new JwksVerifier(
+                    server.url("/").toString(),
+                    new JwksVerifier.LocalVerificationPolicy(
+                            "https://axiam.example",
+                            JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE,
+                            JwksVerifier.DEFAULT_CLOCK_SKEW_SECONDS));
+            AxiamAuthenticationFilter filter = new AxiamAuthenticationFilter(verifier, CONFIGURED_TENANT);
+
+            String matching = signEdDsa(
+                    keyPair,
+                    new JWTClaimsSet.Builder()
+                            .subject("user-1")
+                            .claim("tenant_id", CONFIGURED_TENANT)
+                            .issuer("https://axiam.example")
+                            .audience(JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE)
+                            .expirationTime(new Date(System.currentTimeMillis() + 900_000))
+                            .build());
+
+            MockHttpServletRequest okRequest = new MockHttpServletRequest();
+            okRequest.addHeader("Authorization", "Bearer " + matching);
+            MockHttpServletResponse okResponse = new MockHttpServletResponse();
+            RecordingFilterChain okChain = new RecordingFilterChain();
+            filter.doFilter(okRequest, okResponse, okChain);
+            assertTrue(okChain.invoked, "a token matching the configured issuer and audience must authenticate");
+
+            String wrongIssuer = signEdDsa(
+                    keyPair,
+                    new JWTClaimsSet.Builder()
+                            .subject("user-1")
+                            .claim("tenant_id", CONFIGURED_TENANT)
+                            .issuer("https://evil.example")
+                            .audience(JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE)
+                            .expirationTime(new Date(System.currentTimeMillis() + 900_000))
+                            .build());
+            String wrongAudience = signEdDsa(
+                    keyPair,
+                    new JWTClaimsSet.Builder()
+                            .subject("user-1")
+                            .claim("tenant_id", CONFIGURED_TENANT)
+                            .issuer("https://axiam.example")
+                            .audience("someone-else")
+                            .expirationTime(new Date(System.currentTimeMillis() + 900_000))
+                            .build());
+
+            for (String bad : new String[] {wrongIssuer, wrongAudience}) {
+                SecurityContextHolder.clearContext();
+                MockHttpServletRequest request = new MockHttpServletRequest();
+                request.addHeader("Authorization", "Bearer " + bad);
+                MockHttpServletResponse response = new MockHttpServletResponse();
+                RecordingFilterChain chain = new RecordingFilterChain();
+
+                filter.doFilter(request, response, chain);
+
+                assertFalse(chain.invoked, "an iss/aud mismatch must not reach the protected endpoint");
+                assertEquals(401, response.getStatus());
+            }
         }
     }
 
@@ -267,6 +409,46 @@ class AxiamAuthenticationFilterTest {
         SignedJWT jwt = new SignedJWT(header, claims);
         jwt.sign(new Ed25519Signer(keyPair));
         return jwt.serialize();
+    }
+
+    /**
+     * Signs an arbitrary JSON payload — needed for wrong-typed claims that
+     * {@link JWTClaimsSet.Builder} would coerce or refuse to hold.
+     */
+    private static String signEdDsaRawPayload(OctetKeyPair keyPair, java.util.Map<String, Object> payload)
+            throws Exception {
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA)
+                .type(JOSEObjectType.JWT)
+                .keyID(keyPair.getKeyID())
+                .build();
+        com.nimbusds.jose.JWSObject jws =
+                new com.nimbusds.jose.JWSObject(header, new com.nimbusds.jose.Payload(payload));
+        jws.sign(new Ed25519Signer(keyPair));
+        return jws.serialize();
+    }
+
+    /** An HS256 token whose {@code kid} names the published EdDSA key. */
+    private static String signHs256WithEdDsaKid(JWTClaimsSet claims) throws Exception {
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.HS256)
+                .type(JOSEObjectType.JWT)
+                .keyID("key-1")
+                .build();
+        SignedJWT jwt = new SignedJWT(header, claims);
+        jwt.sign(new com.nimbusds.jose.crypto.MACSigner(
+                "some-shared-secret-key-material-32b".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        return jwt.serialize();
+    }
+
+    /** Hand-assembles an {@code alg: none} token; no signer will emit one. */
+    private static String unsignedAlgNoneToken(long expSeconds) {
+        java.util.Base64.Encoder b64 = java.util.Base64.getUrlEncoder().withoutPadding();
+        String header = b64.encodeToString(
+                "{\"alg\":\"none\",\"typ\":\"JWT\",\"kid\":\"key-1\"}"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String payload = b64.encodeToString(
+                ("{\"sub\":\"user-1\",\"tenant_id\":\"" + CONFIGURED_TENANT + "\",\"exp\":" + expSeconds + "}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return header + "." + payload + ".";
     }
 
     private static MockResponse jwksResponse(OctetKeyPair publicKey) {

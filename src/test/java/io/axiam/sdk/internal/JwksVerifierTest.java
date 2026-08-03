@@ -54,7 +54,7 @@ class JwksVerifierTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String token = signEdDsa(keyPair, claims("tenant-a"));
 
-            JWTClaimsSet result = verifier.verify(token);
+            JWTClaimsSet result = verifier.verifySignatureOnlyUnchecked(token);
 
             assertEquals("tenant-a", result.getStringClaim("tenant_id"));
         }
@@ -74,7 +74,7 @@ class JwksVerifierTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String hs256Token = signHs256("some-shared-secret-key-material-32b", claims("tenant-a"));
 
-            assertThrows(AuthError.class, () -> verifier.verify(hs256Token));
+            assertThrows(AuthError.class, () -> verifier.verifySignatureOnlyUnchecked(hs256Token));
         }
     }
 
@@ -114,12 +114,12 @@ class JwksVerifierTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String token = signEdDsa(keyPair, claims("tenant-a"));
 
-            assertDoesNotThrow(() -> verifier.verify(token));
+            assertDoesNotThrow(() -> verifier.verifySignatureOnlyUnchecked(token));
         }
     }
 
     /**
-     * Proves D-08/D-09: a burst of concurrent {@link JwksVerifier#verify}
+     * Proves D-08/D-09: a burst of concurrent {@link JwksVerifier#verifySignatureOnlyUnchecked}
      * calls against a cold cache collapses to exactly one JWKS fetch, not
      * one fetch per thread.
      */
@@ -153,7 +153,7 @@ class JwksVerifierTest {
                     ready.countDown();
                     try {
                         start.await();
-                        verifier.verify(token);
+                        verifier.verifySignatureOnlyUnchecked(token);
                     } catch (Throwable t) {
                         errors.add(t);
                     } finally {

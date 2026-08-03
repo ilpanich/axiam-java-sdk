@@ -22,10 +22,53 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 ## Contract conformance
 
 This SDK conforms to CONTRACT.md §1–§13, including §6.1 mTLS (client-certificate
-authentication), the §1.1 gRPC-only `getUserInfo` operation, the §12 OIDC/SSO
-relying-party helpers, and the §13 webhook-signature verifier.
+authentication), the §1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum
+local-verification set, the §12 OIDC/SSO relying-party helpers, and the §13
+webhook-signature verifier.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
+
+## Local token verification (§10.1)
+
+`AxiamAuthenticationFilter` verifies the access token **locally**, so it applies
+the complete CONTRACT.md §10.1 minimum local-verification set through the single
+`JwksVerifier.verifyAccessToken(token, configuredTenantId)` entry point:
+
+| # | Claim | What this SDK does |
+|---|-------|--------------------|
+| 1 | signature | `alg` pinned to `EdDSA`, read off the raw JOSE header **before** any JWS parsing or JWKS lookup, so `alg: none` and HS-family confusion are rejected without ever consulting a key |
+| 2 | `exp` | **Required.** A token with no `exp` is a permanent credential and is rejected; a wrong-typed `exp` fails at claims-parse time |
+| 3 | `nbf` | Honoured when present; absent is valid |
+| 4 | `tenant_id` | **Required** and asserted against the configured tenant; a null/blank configured tenant fails closed |
+| 5 | `iss` | Checked **only** when an expected issuer is configured (optional, unset by default — no issuer is ever assumed) |
+| 6 | `aud` | Checked **only** when an expected audience is configured; a user-facing resource server should use `JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE` (`"axiam:user"`) |
+| 7 | clock skew | `JwksVerifier.DEFAULT_CLOCK_SKEW_SECONDS` (60 s), bounded by `MAX_CLOCK_SKEW_SECONDS` (300 s) — an out-of-range value is refused, never silently applied |
+
+Rules 5–7 are configured through `JwksVerifier.LocalVerificationPolicy`, or via
+three **optional** Spring properties read by the auto-configuration:
+
+```properties
+axiam.base-url=https://axiam.example.com
+axiam.tenant-id=acme-tenant
+# Optional §10.1 rule 5-7 settings; blank/absent means the claim is not checked.
+axiam.expected-issuer=https://axiam.example.com
+axiam.expected-audience=axiam:user
+axiam.clock-skew-seconds=60
+```
+
+```java
+JwksVerifier verifier = new JwksVerifier(
+        baseUrl,
+        new JwksVerifier.LocalVerificationPolicy(
+                "https://axiam.example.com",                        // or null: no iss check
+                JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE,  // or null: no aud check
+                JwksVerifier.DEFAULT_CLOCK_SKEW_SECONDS));
+```
+
+`JwksVerifier.verifySignatureOnlyUnchecked(...)` is the raw signature-only
+primitive §10.1 permits for integrators implementing their own policy. Its name
+states the omission: it checks **no** claims at all, and the SDK's own guards
+never call it.
 
 ## Getting started
 

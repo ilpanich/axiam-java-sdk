@@ -57,15 +57,41 @@ public class AxiamAutoConfiguration {
      * Builds the default {@link AxiamAuthenticationFilter} bean from {@code axiam.base-url}/
      * {@code axiam.tenant-id}, unless the consuming application already defines its own.
      *
-     * @param baseUrl  the AXIAM server base URL ({@code axiam.base-url} property)
-     * @param tenantId the configured tenant identifier ({@code axiam.tenant-id} property)
+     * <p>The CONTRACT.md &sect;10.1 rule 5&ndash;7 settings are read from three
+     * <strong>optional</strong> properties. Rules 5 and 6 are conditional
+     * ("checked when the SDK is configured with an expected value; absent
+     * configuration means no check"), so {@code axiam.expected-issuer} and
+     * {@code axiam.expected-audience} default to blank &rarr; unset, and no
+     * issuer or audience is ever assumed. {@code axiam.clock-skew-seconds}
+     * defaults to the RECOMMENDED
+     * {@link JwksVerifier#DEFAULT_CLOCK_SKEW_SECONDS} and is bounded by
+     * {@link JwksVerifier#MAX_CLOCK_SKEW_SECONDS} (rule 7 forbids an
+     * operator-settable unbounded leeway), so an out-of-range value fails
+     * context startup rather than silently widening acceptance.
+     *
+     * @param baseUrl          the AXIAM server base URL ({@code axiam.base-url} property)
+     * @param tenantId         the configured tenant identifier ({@code axiam.tenant-id} property)
+     * @param expectedIssuer   the expected {@code iss} ({@code axiam.expected-issuer} property);
+     *                         blank means the {@code iss} claim is not checked
+     * @param expectedAudience the expected {@code aud} ({@code axiam.expected-audience} property);
+     *                         blank means the {@code aud} claim is not checked
+     * @param clockSkewSeconds the &sect;10.1 rule 7 leeway in seconds
+     *                         ({@code axiam.clock-skew-seconds} property)
      * @return the default {@link AxiamAuthenticationFilter} bean
      */
     @Bean
     @ConditionalOnMissingBean(AxiamAuthenticationFilter.class)
     public AxiamAuthenticationFilter axiamAuthenticationFilter(
-            @Value("${axiam.base-url}") String baseUrl, @Value("${axiam.tenant-id}") String tenantId) {
-        return new AxiamAuthenticationFilter(new JwksVerifier(baseUrl), tenantId);
+            @Value("${axiam.base-url}") String baseUrl,
+            @Value("${axiam.tenant-id}") String tenantId,
+            @Value("${axiam.expected-issuer:}") String expectedIssuer,
+            @Value("${axiam.expected-audience:}") String expectedAudience,
+            @Value("${axiam.clock-skew-seconds:60}") long clockSkewSeconds) {
+        JwksVerifier.LocalVerificationPolicy policy = new JwksVerifier.LocalVerificationPolicy(
+                expectedIssuer.isBlank() ? null : expectedIssuer,
+                expectedAudience.isBlank() ? null : expectedAudience,
+                clockSkewSeconds);
+        return new AxiamAuthenticationFilter(new JwksVerifier(baseUrl, policy), tenantId);
     }
 
     /**

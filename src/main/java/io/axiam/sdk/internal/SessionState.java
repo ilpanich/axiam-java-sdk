@@ -212,7 +212,7 @@ public final class SessionState {
      * Local, unverified {@code exp}-claim check (no network round trip) —
      * used ONLY as a proactive-refresh hint by {@code AuthInterceptor}. The
      * interceptor hot path must never block on a full, signature-verifying
-     * JWKS fetch ({@link JwksVerifier#verify}).
+     * JWKS fetch ({@link JwksVerifier#verifyAccessToken(String, String)}).
      *
      * @param accessToken  the access token whose {@code exp} claim is checked
      * @param bufferMillis how many milliseconds before the token's actual

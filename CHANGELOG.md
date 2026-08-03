@@ -7,11 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — BREAKING
+
+- **Local token verification now applies the complete CONTRACT.md §10.1
+  minimum local-verification set.** `AxiamAuthenticationFilter` — the §10
+  Spring Boot guard, and the only place this SDK turns a token into an
+  identity without asking the server — routes through a single new entry
+  point, `JwksVerifier.verifyAccessToken(token, configuredTenantId)`. This
+  **tightens acceptance**; tokens the AXIAM server mints are unaffected (they
+  always carry `exp` and never a future `nbf`), but a guard fed tokens from
+  another signer sharing the organization-wide JWKS may start rejecting what
+  it previously accepted. That is the intent.
+
+  What changed in behaviour:
+
+  - **`exp` is now REQUIRED (§10.1 rule 2).** The filter previously ran
+    `if (expiration != null && expiration.before(new Date()))`, so a
+    signature-valid token carrying **no** `exp` — a permanent credential — was
+    accepted. This is the SEC-080 defect and nimbus-jose-jwt does not close
+    it: `JWTClaimsSet` accessors are pure getters, so `getExpirationTime()`
+    simply returns `null` for an absent claim and nothing in the library
+    objects. (nimbus *does* reject a wrong-typed `exp` — a string, a boolean —
+    at `getJWTClaimsSet()` parse time; that path is now covered by tests.)
+  - **`nbf` is now honoured (§10.1 rule 3).** It was not checked at all
+    before: a token that had not yet become valid was accepted.
+  - **A null or blank configured tenant now fails closed (§10.1 rule 4)**
+    instead of being compared against and quietly mismatching.
+  - **`iss` and `aud` are checked when configured (§10.1 rules 5-6).** Both
+    are new, **optional, and unset by default** — no issuer or audience is
+    ever assumed or hardcoded, so a deployment that configures neither sees
+    no change from these two rules. Configure them via the new
+    `JwksVerifier.LocalVerificationPolicy` record or the new optional
+    `axiam.expected-issuer` / `axiam.expected-audience` Spring properties.
+    `JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE` (`"axiam:user"`) is
+    exposed for guards fronting a user-facing resource server.
+  - **Clock skew is now a named, bounded constant (§10.1 rule 7).** Rules 2
+    and 3 allow `JwksVerifier.DEFAULT_CLOCK_SKEW_SECONDS` (60 s, the
+    RECOMMENDED value) of leeway, overridable via the policy record or the
+    new `axiam.clock-skew-seconds` property but hard-bounded by
+    `MAX_CLOCK_SKEW_SECONDS` (300 s) — an out-of-range value throws
+    `IllegalArgumentException` at construction rather than silently widening
+    acceptance. Previously there was no leeway at all, so a token within 60 s
+    of expiry that used to be rejected on a skewed clock is now accepted.
+  - **The `alg` pin is now explicit rather than incidental.**
+    `verifySignatureOnlyUnchecked` reads `alg` off the raw JOSE header before
+    any JWS parsing, so `alg: none` is rejected by the EdDSA allowlist itself
+    instead of relying on nimbus's parser refusing the header shape. The
+    parsed-header check is retained as a second assertion.
+
+- **`JwksVerifier.verify(String)` has been renamed to
+  `JwksVerifier.verifySignatureOnlyUnchecked(String)`** (source-breaking for
+  anyone who called it directly). Its behaviour is unchanged: it verifies the
+  EdDSA signature and *nothing else*. §10.1 permits such a raw primitive but
+  requires its name to make the omission obvious at the call site and forbids
+  it being the documented guard entry point — `verifyAccessToken` is now that
+  entry point.
+
+- `AxiamAutoConfiguration.axiamAuthenticationFilter(...)` gained three
+  parameters (`axiam.expected-issuer`, `axiam.expected-audience`,
+  `axiam.clock-skew-seconds`). All three properties are optional with
+  defaults, so no `application.properties` change is required; only direct
+  Java callers of the bean factory method are affected.
+
 ### Added
 
 - Add `io.axiam.sdk.webhook.AxiamWebhooks.verify` — HMAC-SHA256
   webhook-signature verification with a two-sided freshness window
   (CONTRACT.md §13, T-145)
+- `JwksVerifierLocalVerificationSetTest` and two new
+  `AxiamAuthenticationFilterTest` cases cover the complete §10.1 required
+  negative set (expired, no `exp`, non-numeric `exp`, future `nbf`, different
+  tenant, no `tenant_id`, `alg: none`, HS-signed token bearing an EdDSA kid)
+  plus issuer/audience mismatch cases, each with a non-vacuity positive. One
+  test pins nimbus's null-expiry-for-absent-`exp` behaviour so a future
+  library change surfaces loudly instead of leaving dead defensive code.
 
 ## [1.0.0-alpha23] - 2026-08-02
 
