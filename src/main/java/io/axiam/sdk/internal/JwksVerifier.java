@@ -134,8 +134,15 @@ public final class JwksVerifier {
      * configurable to an unbounded value, so anything above this (or below
      * zero) is rejected when the policy is constructed rather than silently
      * widening the acceptance window.
+     *
+     * <p>Lowered 300 &rarr; 60 (&sect;13.4 observation 5). The old ceiling
+     * satisfied rule 7 &mdash; it was named and bounded &mdash; but it was
+     * 5&times; the RECOMMENDED leeway and 5&times; what every sibling SDK fixes
+     * its value at, so an operator could widen the acceptance window on an
+     * expired token to five minutes and still be "conformant". The ceiling now
+     * equals the recommendation.
      */
-    public static final long MAX_CLOCK_SKEW_SECONDS = 300L;
+    public static final long MAX_CLOCK_SKEW_SECONDS = 60L;
 
     /**
      * The audience a &sect;10 guard fronting a user-facing resource server

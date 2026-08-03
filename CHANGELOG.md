@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — BREAKING (configuration)
+
+- **`JwksVerifier.MAX_CLOCK_SKEW_SECONDS` lowered 300 → 60 (§13.4 observation 5).**
+  The old ceiling satisfied CONTRACT.md §10.1 rule 7 — it was named and bounded —
+  but it was 5× the RECOMMENDED leeway and 5× what every sibling SDK fixes its
+  value at, so an operator could widen the acceptance window on an expired token
+  to five minutes and still be "conformant". The ceiling now equals the
+  recommendation.
+
+  A `LocalVerificationPolicy` constructed with a leeway above 60 now throws
+  `IllegalArgumentException` instead of being accepted. The default (60) is
+  unchanged, so this affects only deployments that explicitly widened it.
+
 ### Changed — BREAKING
 
 - **Local token verification now applies the complete CONTRACT.md §10.1
