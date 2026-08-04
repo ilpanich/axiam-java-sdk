@@ -224,6 +224,21 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
      */
     private static void writeJsonError(HttpServletResponse response, int status, @Nullable String message)
             throws IOException {
+        // CONTRACT.md §10.1 rule 8 — "subject of the decision". Rejecting the
+        // request is not sufficient on its own: the caller PRESENTED a
+        // credential and it failed, so no identity may remain attached to this
+        // thread afterwards. Without this, an authentication placed in the
+        // ambient context by an earlier filter (or left behind on a pooled
+        // container thread) survives the rejection, and a later read of
+        // SecurityContextHolder sees an identity this caller never
+        // authenticated as — the servlet analogue of the SEC-085 substitution.
+        //
+        // This only ever runs on a rejection path. A request that presents no
+        // credential at all returns earlier and never reaches here, so
+        // session-authenticated traffic that does not carry an AXIAM token is
+        // untouched.
+        SecurityContextHolder.clearContext();
+
         response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
         ObjectNode body = MAPPER.createObjectNode();
