@@ -288,7 +288,8 @@ class AxiamClientOidcCoverageTest {
                 "https://axiam.example.com/oauth2/revoke", "https://axiam.example.com/oauth2/introspect",
                 java.util.List.of("code"), java.util.List.of("public"), java.util.List.of("EdDSA"),
                 java.util.List.of("openid"), java.util.List.of("client_secret_post"), java.util.List.of(),
-                java.util.List.of("authorization_code"));
+                java.util.List.of("authorization_code"),
+                null, null, false, false);
 
         try (AxiamClient client = AxiamClient.builder("https://axiam.example.com", TENANT_ID)
                 .oidcClientId("app").build()) {

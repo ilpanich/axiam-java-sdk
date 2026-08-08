@@ -21,10 +21,15 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§13, including §6.1 mTLS (client-certificate
-authentication), the §1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum
-local-verification set, the §12 OIDC/SSO relying-party helpers, and the §13
-webhook-signature verifier.
+This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15 — including §6.1 mTLS
+(client-certificate authentication), the §1.1 gRPC-only `getUserInfo` operation,
+the §10.1 minimum local-verification set, the §12 OIDC/SSO relying-party helpers,
+and the §13 webhook-signature verifier.
+
+§12.7, §14 and §15 are named rather than folded into the range because they landed
+after this SDK already claimed §1–§13: widening the range silently would turn a
+statement that was true when written into a different claim without anyone editing
+it.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -356,6 +361,100 @@ silently). Additional properties: `axiam.oidc.client-id` (required),
 `axiam.oidc.client-secret` (confidential clients only), `axiam.oidc.redirect-uri`
 (required), `axiam.oidc.login-path`/`axiam.oidc.callback-path` (default
 `/oidc/login`/`/oidc/callback`), `axiam.oidc.scope`, `axiam.oidc.success-redirect`.
+
+## Device authorization grant (§14)
+
+RFC 8628 — signing in a device that cannot show a browser: a TV, a CLI, a headless
+commissioning tool.
+
+```java
+OidcTokenSet tokens = client.deviceLogin(null, null, null, authorization -> {
+    // Called BEFORE the first poll. Display it however the device can —
+    // screen, QR code, e-ink panel. The SDK never prints it for you.
+    System.out.printf("visit %s and enter %s%n",
+            authorization.verificationUri(), authorization.userCode());
+});
+```
+
+`deviceAuthorize` and `devicePoll` are also public, for an application driving its
+own loop. The polling rules are where implementations go wrong:
+
+- **`slow_down` raises the interval permanently.** An SDK that backs off for one
+  round and returns to the original interval will be told to slow down again,
+  forever.
+- **`access_denied` and `expired_token` stay distinct.** A human said no, versus
+  nobody answered — the only information the device can act on.
+- **Polling stops at `expiresIn`**, even if the server has not yet said
+  `expired_token`.
+- **A `5xx` mid-poll is not terminal.** A server restart must not lose a grant the
+  user has already approved.
+
+`deviceCode()` is `Sensitive`; `userCode()` deliberately is not — it exists to be
+read aloud, and wrapping it would defeat the one thing it is for.
+`deviceAuthorize` sends no `client_secret` and does not refuse a client built
+without one. An interrupt during the inter-poll sleep restores the thread's
+interrupt flag rather than swallowing it, so a shutting-down device can observe it.
+
+Per §14.3 rule 4, `deviceLogin` **returns** the token set; this SDK does not adopt
+it, matching its `loginClientCredentials` posture.
+
+## Token exchange (§15)
+
+RFC 8693 — a service holding a user's token exchanging it for a *narrower* one
+before calling the next service.
+
+```java
+ExchangedToken exchanged = client.tokenExchange(
+        Sensitive.of(userToken), null, List.of("orders:read"),
+        "orders-service", null, null, null);
+```
+
+Most of what this method does is refuse to be helpful:
+
+- **No default `actorToken`.** Passing `null` asks for *impersonation*; the SDK
+  will not quietly substitute the client's own session token and turn that into a
+  delegation.
+- **No auto-narrowing after `invalid_scope`.** The server refuses rather than
+  silently narrowing precisely so the caller finds out here.
+- **No refresh token, ever** — `ExchangedToken` has no such component. Re-run the
+  exchange.
+- **No adoption.** A MUST NOT, where `loginClientCredentials` adoption is a MAY.
+
+## Logout — RP-initiated and back-channel (§12.7)
+
+`logoutUrl` builds the redirect; `verifyLogoutToken` validates a token the OP
+**pushed** to your back-channel endpoint.
+
+```java
+String url = client.logoutUrl(Sensitive.of(storedIdToken));
+
+// …and at your registered backchannel_logout_uri:
+VerifiedLogoutToken verified = client.verifyLogoutToken(logoutToken, null);
+if (verified.sid() != null) {
+    endSession(verified.sid());   // that session ONLY
+}
+```
+
+The verifier is where the security weight sits — the input arrives unsolicited and
+instructs you to terminate a session. It checks the signature (same JWKS path and
+same EdDSA/`kid` discipline as §12.4), `iss`, `aud`, that `events` carries the
+back-channel-logout key (**the only thing separating a logout token from an ID
+token**), that `nonce` is *absent* (its presence is how an ID token gets replayed
+as one), that something is named, and freshness.
+
+It returns `sid`/`sub`/`jti` rather than a bare `boolean`: you have to know *which*
+session to end. **Dedup on `jti` yourself** — delivery is at-least-once, so a valid
+token legitimately arrives twice; the SDK has no durable store and an in-memory
+guard would silently drop a real second logout after a restart.
+
+## Decision reason codes (§11 rule 9)
+
+`AccessResult.reasonCode()` — on both the REST and gRPC results — distinguishes
+`no_grant` ("ask an admin for access") from `denied_by_rule` ("an admin has already
+decided"). Opposite instructions to the person on the other end, which is why the
+contract forbids collapsing them into a bare `false`. An unrecognised code is
+surfaced verbatim and never changes `allowed()`; `null` means the server did not
+send one.
 
 ## Webhook signature verification (`io.axiam.sdk.webhook`, §13)
 

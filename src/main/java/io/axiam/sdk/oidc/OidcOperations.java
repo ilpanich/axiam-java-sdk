@@ -4,8 +4,10 @@ import io.axiam.sdk.Sensitive;
 
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * The nine canonical OIDC / SSO relying-party operations (CONTRACT.md
@@ -155,4 +157,180 @@ public interface OidcOperations {
      * @return the federation completion result
      */
     SsoCompleteResult ssoComplete(String state, String code);
+
+    // -----------------------------------------------------------------------
+    // §14 Device Authorization Grant (RFC 8628)
+    // -----------------------------------------------------------------------
+
+    /**
+     * {@code POST /oauth2/device_authorization} (CONTRACT.md &sect;14.1) —
+     * starts the device grant and obtains the code pair.
+     *
+     * <p><strong>Unauthenticated by design.</strong> A device that cannot show
+     * a browser also cannot hold a client secret, so this never sends
+     * {@code client_secret} and never refuses a client built without one.
+     *
+     * @param scope         requested scope, space-separated; omitted when {@code null}
+     * @param tenantId      tenant UUID for the mandatory {@code tenant_id} query parameter
+     * @param configuration a pre-fetched discovery document, or {@code null} to fetch one
+     * @return the code pair the device shows its user
+     * @throws io.axiam.sdk.errors.AuthError when the discovery document advertises no {@code device_authorization_endpoint}
+     */
+    DeviceAuthorization deviceAuthorize(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration);
+
+    /**
+     * {@code POST /oauth2/token} with the device-code grant (CONTRACT.md
+     * &sect;14.1) — <strong>one</strong> poll attempt.
+     *
+     * <p>The raw single call, so an application driving its own loop (a UI
+     * rendering a countdown, say) can. All five RFC 8628 &sect;3.5 answers
+     * surface as {@code OAuthProtocolError} — {@code authorization_pending}
+     * and {@code slow_down} included — so a hand-rolled loop sees exactly what
+     * {@link #deviceLogin} sees. Most callers want {@code deviceLogin}.
+     *
+     * @param deviceCode    the {@code deviceCode} from {@link DeviceAuthorization}
+     * @param tenantId      tenant UUID for the {@code tenant_id} query parameter
+     * @param configuration a pre-fetched discovery document, or {@code null}
+     * @return the issued token set
+     */
+    OidcTokenSet devicePoll(Sensitive deviceCode, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration);
+
+    /**
+     * The composed &sect;14.3 helper: starts the grant, hands the caller the
+     * user code, polls to completion.
+     *
+     * <p>{@code onUserCode} is called <strong>before the first poll</strong> —
+     * &sect;14.3 rule 2 requires the caller to have had the chance to display
+     * the code before polling begins. The SDK never prints it: what the device
+     * does with it (screen, QR code, e-ink panel) is the application's
+     * decision.
+     *
+     * <p>Per &sect;14.3 rule 4 (contract 1.7 errata) the token set is
+     * <strong>returned</strong>; this SDK does not adopt it, matching its
+     * {@code loginClientCredentials} posture.
+     *
+     * <p>Polling follows &sect;14.2: the interval comes from the response;
+     * {@code slow_down} adds 5&nbsp;s <strong>permanently</strong>;
+     * {@code authorization_pending} loops; {@code access_denied} and
+     * {@code expired_token} raise distinct errors; polling stops at
+     * {@code expiresIn} even if the server has not yet said
+     * {@code expired_token}. A 5xx or transport failure mid-poll is
+     * <strong>not</strong> terminal (rule 6) — a server restart must not lose
+     * a grant the user has already approved.
+     *
+     * @param scope         requested scope, or {@code null}
+     * @param tenantId      tenant UUID for the {@code tenant_id} query parameter
+     * @param configuration a pre-fetched discovery document, or {@code null}
+     * @param onUserCode    invoked with the code pair before the first poll
+     * @return the issued token set
+     */
+    OidcTokenSet deviceLogin(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration, Consumer<DeviceAuthorization> onUserCode);
+
+    // -----------------------------------------------------------------------
+    // §15 Token Exchange (RFC 8693)
+    // -----------------------------------------------------------------------
+
+    /**
+     * {@code POST /oauth2/token} with the RFC 8693 grant (CONTRACT.md
+     * &sect;15.1) — exchanges a token for a <strong>narrower</strong> one.
+     *
+     * <p>What this method deliberately does <em>not</em> do:
+     *
+     * <ul>
+     *   <li><strong>No default {@code actorToken}</strong> (&sect;15.2
+     *       rule 1). Passing {@code null} asks for <em>impersonation</em>; the
+     *       SDK will not quietly reuse the client's own session token as the
+     *       actor and turn that into a delegation.</li>
+     *   <li><strong>No retry or downgrade on {@code unauthorized_client}</strong>
+     *       (rule 2) — a registration fact an operator must fix.</li>
+     *   <li><strong>No auto-narrowing on {@code invalid_scope}</strong>
+     *       (rule 3). The server refuses instead of silently narrowing
+     *       precisely so the caller finds out here.</li>
+     *   <li><strong>No adoption</strong> (rule 5). The returned token is
+     *       handed onward in one outbound call.</li>
+     * </ul>
+     *
+     * <p>A cross-tenant subject token answers {@code invalid_grant},
+     * identically to an expired one. The SDK does not try to tell them apart
+     * (&sect;15.3): the server collapses them because distinguishing them is a
+     * tenant-enumeration signal.
+     *
+     * @param subjectToken  the token being exchanged (&sect;15.5 secret)
+     * @param actorToken    the acting party for a <em>delegation</em>, or {@code null} for impersonation
+     * @param scopes        scopes to request, or {@code null} to omit
+     * @param audience      the service the issued token is for, or {@code null}
+     * @param resource      the RFC 8707 synonym of {@code audience}, or {@code null}
+     * @param tenantId      tenant UUID for the {@code tenant_id} query parameter
+     * @param configuration a pre-fetched discovery document, or {@code null}
+     * @return the issued, narrower token
+     * @throws io.axiam.sdk.errors.AuthError client-side, with no wire call, when no client secret is configured
+     */
+    ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable Sensitive actorToken,
+            @Nullable List<String> scopes, @Nullable String audience, @Nullable String resource,
+            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration);
+
+    // -----------------------------------------------------------------------
+    // §12.7 Logout helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Builds the RP-initiated logout URL to redirect the user agent to
+     * (CONTRACT.md &sect;12.7.2).
+     *
+     * <p>Performs <strong>no network I/O</strong> beyond the discovery fetch
+     * the SDK caches anyway, and does <strong>not</strong> clear this client's
+     * own session: whether the local session ends is the application's
+     * decision — a backend holding a service-account session must not lose it
+     * because a <em>user</em> logged out.
+     *
+     * <p>{@code end_session_endpoint} is read from discovery and never
+     * synthesised from the issuer (rule 1). {@code postLogoutRedirectUri} is
+     * passed through <strong>unvalidated against any local list</strong>
+     * (rule 3): the allow-list lives in the client's server-side registration,
+     * and a client-side copy would drift and reject a URI an operator had just
+     * registered.
+     *
+     * @param idToken               a previously-issued ID token, placed in {@code id_token_hint}
+     * @param postLogoutRedirectUri where the OP should send the browser afterwards, or {@code null}
+     * @param state                 an opaque value echoed back on the redirect — generated and checked by the caller (rule 2), never by the SDK
+     * @param configuration         a pre-fetched discovery document, or {@code null}
+     * @return the absolute logout URL
+     * @throws io.axiam.sdk.errors.AuthError when the discovery document advertises no {@code end_session_endpoint}
+     */
+    String logoutUrl(Sensitive idToken, @Nullable String postLogoutRedirectUri, @Nullable String state,
+            @Nullable OidcConfiguration configuration);
+
+    /**
+     * Verifies a back-channel logout token the OP POSTed to this
+     * application's {@code backchannel_logout_uri} (CONTRACT.md &sect;12.7.3).
+     *
+     * <p>Every check exists because skipping it has a name:
+     *
+     * <ol>
+     *   <li><strong>Signature</strong>, through the same &sect;12.4 JWKS
+     *       verifier the ID-token path uses — no second key-fetching path —
+     *       with the same {@code kid}-required discipline.</li>
+     *   <li><strong>{@code iss}/{@code aud}</strong>: a token minted for
+     *       another RP is not accepted here.</li>
+     *   <li><strong>{@code events} carries the back-channel-logout key.</strong>
+     *       This is what distinguishes a logout token from an ID token;
+     *       skipping it means accepting a replayed ID token as a logout
+     *       instruction.</li>
+     *   <li><strong>{@code nonce} is absent.</strong> Back-Channel Logout 1.0
+     *       &sect;2.4 forbids it, and its presence is the documented signature
+     *       of an ID token being replayed. Rejected, not ignored.</li>
+     *   <li><strong>At least one of {@code sid}/{@code sub}</strong> — a token
+     *       naming neither identifies nothing.</li>
+     *   <li><strong>{@code exp} in the future, {@code iat} recent.</strong></li>
+     * </ol>
+     *
+     * @param logoutToken   the compact JWS the OP posted
+     * @param configuration a pre-fetched discovery document, or {@code null}
+     * @return the {@code sid}/{@code sub}/{@code jti} the token names — never a bare boolean, because the RP has to know <em>which</em> session to end
+     * @throws io.axiam.sdk.errors.AuthError on any failed check
+     */
+    VerifiedLogoutToken verifyLogoutToken(String logoutToken, @Nullable OidcConfiguration configuration);
 }

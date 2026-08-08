@@ -172,9 +172,10 @@ public final class GrpcAuthzClient implements AutoCloseable {
      *
      * @param allowed whether the checked action is permitted
      * @param reason  a human-readable deny reason, or {@code null} when {@code allowed}
+     * @param reasonCode machine-readable decision reason (CONTRACT.md &sect;11 rule 9, B1 deny-override): {@code "allowed"}, {@code "no_grant"} or {@code "denied_by_rule"}. <strong>The two refusals mean opposite things to the person on the other end</strong> — {@code no_grant} says <em>ask an admin for access</em>, {@code denied_by_rule} says <em>an admin has already decided</em> — which is why the contract forbids collapsing them into a bare {@code false}. {@code null} when the server omits the field, so a newer SDK against an older server degrades rather than failing. An unrecognised value is surfaced verbatim and never changes {@code allowed}, which is why this is a {@code String} rather than an enum
      *                is {@code true} or the server did not supply one
      */
-    public record AccessResult(boolean allowed, @Nullable String reason) {
+    public record AccessResult(boolean allowed, @Nullable String reason, @Nullable String reasonCode) {
     }
 
     /** A single access check request for {@link #batchCheck}. {@code subjectId} defaults to
@@ -540,7 +541,15 @@ public final class GrpcAuthzClient implements AutoCloseable {
 
     private static AccessResult toAccessResult(CheckAccessResponse resp) {
         String reason = resp.getDenyReason();
-        return new AccessResult(resp.getAllowed(), reason.isEmpty() ? null : reason);
+        // proto3 renders an unset string as "", so an older server that never
+        // set field 3 is indistinguishable from one that set it empty — both
+        // mean "no reason code", and both map to null rather than to "",
+        // which would be a value callers could accidentally branch on.
+        String reasonCode = resp.getReasonCode();
+        return new AccessResult(
+                resp.getAllowed(),
+                reason.isEmpty() ? null : reason,
+                reasonCode.isEmpty() ? null : reasonCode);
     }
 
     private static List<AccessResult> toAccessResults(BatchCheckAccessResponse resp) {
