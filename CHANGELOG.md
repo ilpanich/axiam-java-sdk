@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **§18 `AxiamClient.close()` semantics** — idempotent via `compareAndSet` (a concurrent
+  double-close does the work once), clears the memo, and use-after-close throws `NetworkError`
+  rather than silently reconnecting. It does **not** log out and never reaches the network:
+  the server-side session outlives the client object, and a `close()` that logged out would
+  end every user's session on each deploy.
+- **§19 telemetry hooks** — `Builder.telemetryHook(...)`, the **sealed** `TelemetryEvent`
+  hierarchy (`RequestStart`, `RequestEnd`, `Retry`, `Refresh`) and `examples/telemetry-hook`.
+  A throwing hook cannot fail the operation that fired it, and no event payload can carry a
+  token. One request pair per *attempt*.
+- **§17 decision memo — opt-in, off by default** — `Builder.decisionMemoTtl(...)`, clamped to
+  `DecisionMemo.MAX_TTL` (5 s), thread-safe. Allows and denies memoized identically, failures
+  never memoized, cleared on any credential change.
+  **Reads-your-own-writes is not guaranteed.**
+- `Builder.retryDisabled()` (§16.6). No builder method for the attempt cap, base or delay
+  cap: §16.1 forbids raising them.
+- `Retry.withRetry` gains an attempt-aware overload that passes the 1-based attempt to the
+  operation and emits the §16.5 retry event.
+
+### Changed
+
+- Re-vendored `CONTRACT.md` at **1.8.2**. `openapi.json` unchanged — docs-only contract revs.
+- `login`, `verifyMfa`, `refresh` and `logout` clear the decision memo (§17.1 rule 9) and
+  reject after close (§18.1 rule 4).
+
+### Notes
+
+- §16's arithmetic is **unchanged**: this SDK's policy was already conformant, and of the
+  five SDKs that had invented one it was the only one that got both full jitter and
+  `Retry-After`-as-a-floor right. The contract adopted its parameters.
+
 ## [1.0.0-alpha24] - 2026-08-04
 
 ### Added
