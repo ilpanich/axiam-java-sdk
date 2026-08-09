@@ -391,14 +391,6 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
 
         /**
-         * Permitted ID-token clock skew (CONTRACT.md &sect;12.4 rule 5).
-         * <strong>Clamped</strong> at 60 seconds: a larger value is silently
-         * reduced. Defaults to 60 seconds when never called.
-         *
-         * @param skew the requested permitted clock skew
-         * @return this builder, for chaining
-         */
-        /**
          * Disables the CONTRACT.md §16 bounded read-only retry policy, making
          * every operation exactly one attempt.
          *
@@ -469,6 +461,14 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             return this;
         }
 
+        /**
+         * Permitted ID-token clock skew (CONTRACT.md &sect;12.4 rule 5).
+         * <strong>Clamped</strong> at 60 seconds: a larger value is silently
+         * reduced. Defaults to 60 seconds when never called.
+         *
+         * @param skew the requested permitted clock skew
+         * @return this builder, for chaining
+         */
         public Builder oidcClockSkew(Duration skew) {
             this.oidcClockSkewSec = (int) Math.min(skew.toSeconds(), IdTokenValidator.MAX_CLOCK_SKEW_SEC);
             return this;
