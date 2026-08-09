@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import com.nimbusds.jwt.JWTClaimsSet;
+
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.ErrorMapper;
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.errors.OAuthProtocolError;
 import io.axiam.sdk.internal.DiscoveryCache;
 import io.axiam.sdk.internal.JwksVerifier;
 import io.axiam.sdk.internal.RefreshGuard;
@@ -15,6 +18,8 @@ import io.axiam.sdk.internal.Retry;
 import io.axiam.sdk.internal.SessionState;
 import io.axiam.sdk.internal.SingleFlight;
 import io.axiam.sdk.oidc.AuthorizationRequest;
+import io.axiam.sdk.oidc.DeviceAuthorization;
+import io.axiam.sdk.oidc.ExchangedToken;
 import io.axiam.sdk.oidc.IdTokenClaims;
 import io.axiam.sdk.oidc.IdTokenValidator;
 import io.axiam.sdk.oidc.IntrospectionResult;
@@ -24,6 +29,7 @@ import io.axiam.sdk.oidc.OidcPkce;
 import io.axiam.sdk.oidc.OidcTokenSet;
 import io.axiam.sdk.oidc.SsoCompleteResult;
 import io.axiam.sdk.oidc.SsoStartResult;
+import io.axiam.sdk.oidc.VerifiedLogoutToken;
 
 import okhttp3.java.net.cookiejar.JavaNetCookieJar;
 import okhttp3.FormBody;
@@ -67,14 +73,17 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
@@ -698,9 +707,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      *
      * @param allowed whether the checked action is permitted
      * @param reason  a human-readable deny reason, or {@code null} when {@code allowed}
+     * @param reasonCode machine-readable decision reason (CONTRACT.md &sect;11 rule 9, B1 deny-override): {@code "allowed"}, {@code "no_grant"} or {@code "denied_by_rule"}. <strong>The two refusals mean opposite things to the person on the other end</strong> — {@code no_grant} says <em>ask an admin for access</em>, {@code denied_by_rule} says <em>an admin has already decided</em> — which is why the contract forbids collapsing them into a bare {@code false}. {@code null} when the server omits the field, so a newer SDK against an older server degrades rather than failing. An unrecognised value is surfaced verbatim and never changes {@code allowed}, which is why this is a {@code String} rather than an enum
      *                is {@code true} or the server did not supply one
      */
-    public record AccessResult(boolean allowed, @Nullable String reason) {
+    public record AccessResult(boolean allowed, @Nullable String reason, @Nullable String reasonCode) {
     }
 
     /**
@@ -883,7 +893,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             JsonNode wire = readJson(response);
             boolean allowed = wire.path("allowed").asBoolean(false);
             String reason = wire.hasNonNull("reason") ? wire.get("reason").asText() : null;
-            return new AccessResult(allowed, reason);
+            // §11 rule 9: surfaced verbatim, including a code this SDK has
+            // never heard of — the outcome is carried by `allowed` alone, so
+            // an unknown code can never change it.
+            String reasonCode = wire.hasNonNull("reason_code") ? wire.get("reason_code").asText() : null;
+            return new AccessResult(allowed, reason, reasonCode);
         }
     }
 
@@ -897,7 +911,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             for (JsonNode item : wire.path("results")) {
                 boolean allowed = item.path("allowed").asBoolean(false);
                 String reason = item.hasNonNull("reason") ? item.get("reason").asText() : null;
-                results.add(new AccessResult(allowed, reason));
+                String reasonCode = item.hasNonNull("reason_code") ? item.get("reason_code").asText() : null;
+                results.add(new AccessResult(allowed, reason, reasonCode));
             }
             return results;
         }
@@ -1355,7 +1370,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 textList(wire, "scopes_supported"),
                 textList(wire, "token_endpoint_auth_methods_supported"),
                 textList(wire, "claims_supported"),
-                textList(wire, "grant_types_supported"));
+                textList(wire, "grant_types_supported"),
+                wire.hasNonNull("device_authorization_endpoint")
+                        ? wire.get("device_authorization_endpoint").asText() : null,
+                wire.hasNonNull("end_session_endpoint")
+                        ? wire.get("end_session_endpoint").asText() : null,
+                wire.path("backchannel_logout_supported").asBoolean(false),
+                wire.path("backchannel_logout_session_supported").asBoolean(false));
     }
 
     private static List<String> textList(JsonNode wire, String field) {
@@ -1406,6 +1427,323 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                     + "AxiamClient construction time (CONTRACT.md §12).");
         }
         return oidcClientId;
+    }
+
+    // -----------------------------------------------------------------------
+    // §14 Device Authorization Grant (RFC 8628)
+    // -----------------------------------------------------------------------
+
+    /** {@code grant_type} of the device access-token request (RFC 8628 §3.4). */
+    private static final String DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+
+    /**
+     * Polling interval used when the authorization response omits
+     * {@code interval} (RFC 8628 §3.2, §14.2 rule 2). An SDK MUST NOT
+     * hard-code a faster floor.
+     */
+    static final int DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5;
+
+    /**
+     * Seconds added to the polling interval on each {@code slow_down}
+     * (§14.2 rule 1). The increase is permanent and cumulative.
+     */
+    static final int SLOW_DOWN_INCREMENT_SECONDS = 5;
+
+    @Override
+    public DeviceAuthorization deviceAuthorize(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        String endpoint = config.device_authorization_endpoint();
+        if (endpoint == null || endpoint.isEmpty()) {
+            throw new AuthError("the authorization server's discovery document advertises no "
+                    + "device_authorization_endpoint: this server does not support the device grant "
+                    + "(CONTRACT.md §14.1)");
+        }
+
+        // No client_secret, ever: §14.1 makes this operation unauthenticated
+        // because a device that cannot show a browser cannot keep a secret.
+        FormBody.Builder form = new FormBody.Builder().add("client_id", requireOidcClientId());
+        if (scope != null) {
+            form.add("scope", scope);
+        }
+
+        String url = oauth2Url(endpoint, tenantId);
+        try (Response response = executeFormPost(url, form.build())) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(response.code(), response,
+                        "device authorization request failed");
+            }
+            JsonNode wire = readJson(response);
+            int interval = wire.path("interval").asInt(0);
+            return new DeviceAuthorization(
+                    Sensitive.of(wire.path("device_code").asText()),
+                    wire.path("user_code").asText(),
+                    wire.path("verification_uri").asText(),
+                    wire.hasNonNull("verification_uri_complete")
+                            ? wire.get("verification_uri_complete").asText() : null,
+                    wire.path("expires_in").asInt(),
+                    // §14.2 rule 2: the interval comes from the response; only
+                    // its absence falls back to the RFC default. A server-sent
+                    // 0 is treated as absent — polling with no delay is never
+                    // what the server meant.
+                    interval > 0 ? interval : DEFAULT_DEVICE_POLL_INTERVAL_SECONDS);
+        }
+    }
+
+    /** {@link #deviceAuthorize(String, UUID, OidcConfiguration)} with every optional argument defaulted.
+     *
+     * @return the code pair the device shows its user
+     */
+    public DeviceAuthorization deviceAuthorize() {
+        return deviceAuthorize(null, null, null);
+    }
+
+    @Override
+    public OidcTokenSet devicePoll(Sensitive deviceCode, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody form = new FormBody.Builder()
+                .add("grant_type", DEVICE_CODE_GRANT_TYPE)
+                .add("device_code", deviceCode.expose())
+                .add("client_id", requireOidcClientId())
+                .build();
+        JsonNode wire = postToken(config, form, tenantId);
+        // No nonce: the device grant has no authorization request to carry one.
+        return buildTokenSet(wire, config, null);
+    }
+
+    @Override
+    public OidcTokenSet deviceLogin(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration, Consumer<DeviceAuthorization> onUserCode) {
+        Objects.requireNonNull(onUserCode, "onUserCode");
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        DeviceAuthorization authorization = deviceAuthorize(scope, tenantId, config);
+
+        // §14.3 rule 2 — before any polling.
+        onUserCode.accept(authorization);
+
+        int intervalSeconds = authorization.interval();
+        long remainingSeconds = authorization.expiresIn();
+
+        while (true) {
+            // §14.2 rule 4: the deadline is authoritative. Checking before
+            // sleeping keeps the SDK from issuing a request that can only be
+            // refused, and reports it under the same expired_token code the
+            // server would have used — so a caller's branch does not care
+            // which side noticed first.
+            if (intervalSeconds >= remainingSeconds) {
+                throw new OAuthProtocolError("expired_token",
+                        "the device authorization expired before the user completed it "
+                                + "(client-side deadline from expires_in; CONTRACT.md §14.2 rule 4)");
+            }
+            remainingSeconds -= intervalSeconds;
+
+            try {
+                Thread.sleep(Duration.ofSeconds(intervalSeconds));
+            } catch (InterruptedException e) {
+                // Restore the flag rather than swallowing it: a caller
+                // shutting the device down must be able to observe the
+                // interrupt, and a swallowed one would leave this loop as the
+                // only thing that noticed.
+                Thread.currentThread().interrupt();
+                throw new NetworkError("device polling was interrupted", e);
+            }
+
+            try {
+                return devicePoll(authorization.deviceCode(), tenantId, config);
+            } catch (OAuthProtocolError e) {
+                switch (e.error()) {
+                    case "authorization_pending" -> {
+                        continue;
+                    }
+                    case "slow_down" -> {
+                        // §14.2 rule 1: cumulative, never reset.
+                        intervalSeconds += SLOW_DOWN_INCREMENT_SECONDS;
+                        continue;
+                    }
+                    // expired_token / access_denied / invalid_grant — terminal.
+                    default -> throw e;
+                }
+            } catch (NetworkError e) {
+                // §14.2 rule 6: transport and 5xx failures are not among the
+                // five protocol answers and are not terminal — a server
+                // restart must not lose a grant the user has already approved.
+                continue;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // §15 Token Exchange (RFC 8693)
+    // -----------------------------------------------------------------------
+
+    /** {@code grant_type} of an RFC 8693 exchange. */
+    private static final String TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
+
+    /** The only {@code subject_token_type}/{@code actor_token_type} AXIAM accepts. */
+    private static final String ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
+
+    @Override
+    public ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable Sensitive actorToken,
+            @Nullable List<String> scopes, @Nullable String audience, @Nullable String resource,
+            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", TOKEN_EXCHANGE_GRANT_TYPE)
+                .add("subject_token", subjectToken.expose())
+                .add("subject_token_type", ACCESS_TOKEN_TYPE);
+        if (actorToken != null) {
+            form.add("actor_token", actorToken.expose());
+            // Sent exactly when actor_token is: RFC 8693 §2.1 requires the
+            // pair, and the type alone is a malformed request.
+            form.add("actor_token_type", ACCESS_TOKEN_TYPE);
+        }
+        if (scopes != null && !scopes.isEmpty()) {
+            form.add("scope", String.join(" ", scopes));
+        }
+        if (audience != null) {
+            form.add("audience", audience);
+        }
+        if (resource != null) {
+            form.add("resource", resource);
+        }
+        form.add("client_id", requireOidcClientId());
+        form.add("client_secret", requireOidcClientSecret("tokenExchange"));
+
+        String url = oauth2Url(config.token_endpoint(), tenantId);
+        try (Response response = executeFormPost(url, form.build())) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(response.code(), response,
+                        "token exchange request failed");
+            }
+            JsonNode wire = readJson(response);
+            return new ExchangedToken(
+                    Sensitive.of(wire.path("access_token").asText()),
+                    wire.path("issued_token_type").asText(),
+                    wire.path("token_type").asText(),
+                    wire.path("expires_in").asInt(),
+                    wire.hasNonNull("scope") ? wire.get("scope").asText() : null);
+        }
+    }
+
+    /** {@link #tokenExchange} with every optional argument defaulted.
+     *
+     * @param subjectToken the token being exchanged
+     * @return the issued, narrower token
+     */
+    public ExchangedToken tokenExchange(Sensitive subjectToken) {
+        return tokenExchange(subjectToken, null, null, null, null, null, null);
+    }
+
+    // -----------------------------------------------------------------------
+    // §12.7 Logout helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * The {@code events} member that distinguishes a logout token from an ID
+     * token (OIDC Back-Channel Logout 1.0 §2.4).
+     */
+    private static final String BACKCHANNEL_LOGOUT_EVENT =
+            "http://schemas.openid.net/event/backchannel-logout";
+
+    /**
+     * Maximum accepted age for a logout token's {@code iat}, in seconds.
+     * AXIAM issues them with a 120 s lifetime; this bound is the same order
+     * and stops a token captured from a mis-configured RP being replayed days
+     * later.
+     */
+    private static final long MAX_LOGOUT_TOKEN_AGE_SECONDS = 300L;
+
+    @Override
+    public String logoutUrl(Sensitive idToken, @Nullable String postLogoutRedirectUri,
+            @Nullable String state, @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        String endpoint = config.end_session_endpoint();
+        if (endpoint == null || endpoint.isEmpty()) {
+            throw new AuthError("the authorization server's discovery document advertises no "
+                    + "end_session_endpoint: this server does not support RP-initiated logout "
+                    + "(CONTRACT.md §12.7.2 rule 1)");
+        }
+        HttpUrl url = HttpUrl.parse(endpoint);
+        if (url == null) {
+            throw new NetworkError("end_session_endpoint is not a valid URL");
+        }
+        HttpUrl.Builder builder = url.newBuilder().addQueryParameter("id_token_hint", idToken.expose());
+        if (postLogoutRedirectUri != null) {
+            builder.addQueryParameter("post_logout_redirect_uri", postLogoutRedirectUri);
+        }
+        if (state != null) {
+            builder.addQueryParameter("state", state);
+        }
+        return builder.build().toString();
+    }
+
+    /** {@link #logoutUrl} with every optional argument defaulted.
+     *
+     * @param idToken a previously-issued ID token for {@code id_token_hint}
+     * @return the absolute logout URL
+     */
+    public String logoutUrl(Sensitive idToken) {
+        return logoutUrl(idToken, null, null, null);
+    }
+
+    @Override
+    public VerifiedLogoutToken verifyLogoutToken(String logoutToken,
+            @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+
+        // Same JWKS path — and therefore the same EdDSA pinning and
+        // kid-required discipline — as §12.4. No second key-fetching route.
+        JWTClaimsSet claims = oidcJwksVerifierFor(config.jwks_uri()).verifyForOidc(logoutToken);
+
+        if (!config.issuer().equals(claims.getIssuer())) {
+            throw new AuthError("logout token issuer does not match the discovery document");
+        }
+        List<String> audiences = claims.getAudience();
+        if (audiences == null || !audiences.contains(requireOidcClientId())) {
+            throw new AuthError("logout token audience does not match this client_id");
+        }
+
+        // Without this check the whole method is an elaborate way to accept an
+        // ID token.
+        Object events = claims.getClaim("events");
+        if (!(events instanceof Map<?, ?> eventMap)
+                || !(eventMap.get(BACKCHANNEL_LOGOUT_EVENT) instanceof Map<?, ?>)) {
+            throw new AuthError("not a logout token: the events claim does not carry "
+                    + BACKCHANNEL_LOGOUT_EVENT);
+        }
+
+        if (claims.getClaim("nonce") != null) {
+            throw new AuthError("logout token carries a nonce, which Back-Channel Logout 1.0 §2.4 "
+                    + "forbids: this is an ID token being replayed as a logout token");
+        }
+
+        String sid = claims.getClaim("sid") instanceof String s ? s : null;
+        String sub = claims.getSubject();
+        if (sid == null && sub == null) {
+            throw new AuthError("logout token names neither sid nor sub, so it identifies no session");
+        }
+
+        long nowSec = System.currentTimeMillis() / 1000L;
+        long skew = oidcClockSkewSec != null ? oidcClockSkewSec : 0L;
+        Date exp = claims.getExpirationTime();
+        Date iat = claims.getIssueTime();
+        if (exp == null || (exp.getTime() / 1000L) + skew < nowSec) {
+            throw new AuthError("logout token has expired");
+        }
+        if (iat == null || (iat.getTime() / 1000L) - skew > nowSec) {
+            throw new AuthError("logout token was issued in the future");
+        }
+        if (nowSec - (iat.getTime() / 1000L) > MAX_LOGOUT_TOKEN_AGE_SECONDS + skew) {
+            throw new AuthError("logout token is too old to be a live delivery");
+        }
+
+        String jti = claims.getJWTID();
+        if (jti == null || jti.isEmpty()) {
+            throw new AuthError("logout token carries no jti, so the RP cannot dedup redeliveries");
+        }
+
+        return new VerifiedLogoutToken(sid, sub, jti);
     }
 
     private String requireOidcClientSecret(String operation) {

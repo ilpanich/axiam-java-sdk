@@ -114,12 +114,92 @@ public final class OidcTestSupport {
                 + "\"scopes_supported\":[\"openid\",\"profile\"],"
                 + "\"token_endpoint_auth_methods_supported\":[\"client_secret_post\"],"
                 + "\"claims_supported\":[\"sub\",\"iss\"],"
-                + "\"grant_types_supported\":[\"authorization_code\",\"refresh_token\",\"client_credentials\"]"
+                + "\"grant_types_supported\":[\"authorization_code\",\"refresh_token\",\"client_credentials\","
+                + "\"urn:ietf:params:oauth:grant-type:device_code\","
+                + "\"urn:ietf:params:oauth:grant-type:token-exchange\"],"
+                + "\"device_authorization_endpoint\":\"" + trimmed + "/oauth2/device_authorization\","
+                + "\"end_session_endpoint\":\"" + trimmed + "/oauth2/end_session\","
+                + "\"backchannel_logout_supported\":true,"
+                + "\"backchannel_logout_session_supported\":true"
                 + "}";
         return new MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/json")
                 .setBody(body);
+    }
+
+    /**
+     * A discovery document with the &sect;14/&sect;12.7 endpoints deliberately
+     * absent — the shape an older AXIAM, or a third-party OP without those
+     * features, publishes. Used to assert the SDK errors rather than
+     * concatenating a URL onto the issuer (&sect;12.7.2 rule 1).
+     *
+     * @param baseUrl the mock server's base URL
+     * @return the mock response
+     */
+    public static MockResponse discoveryResponseWithoutOptionalEndpoints(String baseUrl) {
+        String trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        String body = "{"
+                + "\"issuer\":\"" + trimmed + "\","
+                + "\"authorization_endpoint\":\"" + trimmed + "/oauth2/authorize\","
+                + "\"token_endpoint\":\"" + trimmed + "/oauth2/token\","
+                + "\"userinfo_endpoint\":\"" + trimmed + "/oauth2/userinfo\","
+                + "\"jwks_uri\":\"" + trimmed + "/oauth2/jwks\","
+                + "\"revocation_endpoint\":\"" + trimmed + "/oauth2/revoke\","
+                + "\"introspection_endpoint\":\"" + trimmed + "/oauth2/introspect\","
+                + "\"response_types_supported\":[\"code\"],"
+                + "\"subject_types_supported\":[\"public\"],"
+                + "\"id_token_signing_alg_values_supported\":[\"EdDSA\"],"
+                + "\"scopes_supported\":[\"openid\"],"
+                + "\"token_endpoint_auth_methods_supported\":[\"client_secret_post\"],"
+                + "\"claims_supported\":[\"sub\"],"
+                + "\"grant_types_supported\":[\"authorization_code\"]"
+                + "}";
+        return new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(body);
+    }
+
+    /**
+     * Builds a {@code 200 application/json} {@code DeviceAuthorizationResponse}.
+     *
+     * @param baseUrl    the mock server's base URL
+     * @param expiresIn  the grant lifetime in seconds
+     * @param interval   the poll interval in seconds; {@code null} omits the field
+     * @return the mock response
+     */
+    public static MockResponse deviceAuthorizationResponse(String baseUrl, int expiresIn,
+            @org.jspecify.annotations.Nullable Integer interval) {
+        String trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        StringBuilder body = new StringBuilder("{")
+                .append("\"device_code\":\"device-code-value\",")
+                .append("\"user_code\":\"WDJB-MJHT\",")
+                .append("\"verification_uri\":\"").append(trimmed).append("/device\",")
+                .append("\"verification_uri_complete\":\"").append(trimmed).append("/device?user_code=WDJB-MJHT\",")
+                .append("\"expires_in\":").append(expiresIn);
+        if (interval != null) {
+            body.append(",\"interval\":").append(interval);
+        }
+        body.append("}");
+        return new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(body.toString());
+    }
+
+    /**
+     * Builds an OAuth2 error response body.
+     *
+     * @param status the HTTP status
+     * @param code   the RFC 6749 {@code error} code
+     * @return the mock response
+     */
+    public static MockResponse oauthError(int status, String code) {
+        return new MockResponse()
+                .setResponseCode(status)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"error\":\"" + code + "\",\"error_description\":\"" + code + " description\"}");
     }
 
     /**
