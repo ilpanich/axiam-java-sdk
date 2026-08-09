@@ -13,7 +13,11 @@ import io.axiam.sdk.errors.NetworkError;
 import io.axiam.sdk.errors.OAuthProtocolError;
 import io.axiam.sdk.internal.DiscoveryCache;
 import io.axiam.sdk.internal.JwksVerifier;
+import io.axiam.sdk.internal.DecisionMemo;
 import io.axiam.sdk.internal.RefreshGuard;
+import io.axiam.sdk.internal.TelemetryDispatcher;
+import io.axiam.sdk.telemetry.TelemetryEvent;
+import io.axiam.sdk.telemetry.TelemetryHook;
 import io.axiam.sdk.internal.Retry;
 import io.axiam.sdk.internal.SessionState;
 import io.axiam.sdk.internal.SingleFlight;
@@ -83,6 +87,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -140,6 +146,22 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private final @Nullable Integer oidcClockSkewSec;
     private final DiscoveryCache<OidcConfiguration> oidcDiscoveryCache;
     private final Map<String, JwksVerifier> oidcJwksVerifiers = new ConcurrentHashMap<>();
+
+    /**
+     * §16.1 disable switch. There is deliberately no field for the attempt cap,
+     * base delay or delay cap: §16.1 forbids raising them above the contract's
+     * values, and eleven SDKs agreeing on one table is the point.
+     */
+    private final boolean retryEnabled;
+
+    /** §17 decision memo. Disabled unless the builder was given a TTL. */
+    private final DecisionMemo<AccessResult> decisionMemo;
+
+    /** §19 telemetry dispatcher. Inert unless a hook was installed. */
+    private final TelemetryDispatcher telemetry;
+
+    /** §18 shutdown flag, read on every operation. */
+    private final AtomicBoolean closed = new AtomicBoolean(false);
     private final SingleFlight<OidcTokenSet> oidcRefreshSingleFlight = new SingleFlight<>();
 
     /**
@@ -182,6 +204,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         private @Nullable Sensitive oidcClientSecret;
         private long oidcDiscoveryTtlMillis = MIN_OIDC_DISCOVERY_TTL_MILLIS;
         private @Nullable Integer oidcClockSkewSec;
+        private boolean retryEnabled = true;
+        private @Nullable Duration decisionMemoTtl;
+        private @Nullable TelemetryHook telemetryHook;
 
         private Builder(String baseUrl, String tenantId) {
             this.baseUrl = baseUrl;
@@ -373,6 +398,77 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
          * @param skew the requested permitted clock skew
          * @return this builder, for chaining
          */
+        /**
+         * Disables the CONTRACT.md §16 bounded read-only retry policy, making
+         * every operation exactly one attempt.
+         *
+         * <p>That is the right choice for a caller who owns their own retry
+         * layer — they know their deadline and this SDK does not — but it is
+         * not a way to make failures quieter: a transient {@code NetworkError}
+         * simply surfaces immediately.
+         *
+         * <p>§16.1 permits this switch but forbids raising the attempt cap,
+         * base delay or delay cap above the contract's values, so there is no
+         * builder method for those.
+         *
+         * @return this builder
+         */
+        public Builder retryDisabled() {
+            this.retryEnabled = false;
+            return this;
+        }
+
+        /**
+         * Enables the CONTRACT.md §17 client-side decision memo.
+         *
+         * <p><strong>Disabled by default</strong> — §11.2 rule 6's ban on
+         * caching authorization decisions is still the default behaviour, and
+         * this is the single opt-in exception.
+         *
+         * <p><strong>What you are accepting:</strong> the staleness bound is
+         * {@code ttl} in <em>both</em> directions. A grant revoked on the
+         * server can still read as allowed for up to the TTL, and a grant just
+         * added can still read as denied for up to the TTL.
+         *
+         * <p><strong>Reads-your-own-writes is not guaranteed.</strong> An admin
+         * UI that grants a role and immediately re-checks is the case that
+         * breaks, and it breaks silently. If that is your workload, do not set
+         * this.
+         *
+         * <p>{@code ttl} is clamped to {@link DecisionMemo#MAX_TTL} rather than
+         * rejected. Allows and denies are memoized identically (asymmetric
+         * caching leaks the outcome through latency), failures are never
+         * memoized, and the memo is cleared on any credential change.
+         *
+         * @param ttl how long a decision may be reused
+         * @return this builder
+         */
+        public Builder decisionMemoTtl(Duration ttl) {
+            this.decisionMemoTtl = ttl;
+            return this;
+        }
+
+        /**
+         * Installs a CONTRACT.md §19 telemetry sink.
+         *
+         * <p>It receives request start/end, §16 retry and §9 refresh events, so
+         * metrics can be wired without this library depending on any metrics
+         * API.
+         *
+         * <p>A hook that throws cannot fail the operation that fired it (§19.2
+         * rule 2), and no event payload can carry a token — {@code
+         * TelemetryEvent} is a sealed hierarchy of records with fixed component
+         * lists (§19.2 rule 3). It is invoked on the calling thread, so it must
+         * not block.
+         *
+         * @param hook the sink
+         * @return this builder
+         */
+        public Builder telemetryHook(TelemetryHook hook) {
+            this.telemetryHook = hook;
+            return this;
+        }
+
         public Builder oidcClockSkew(Duration skew) {
             this.oidcClockSkewSec = (int) Math.min(skew.toSeconds(), IdTokenValidator.MAX_CLOCK_SKEW_SEC);
             return this;
@@ -407,6 +503,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.oidcClientSecret = b.oidcClientSecret;
         this.oidcClockSkewSec = b.oidcClockSkewSec;
         this.oidcDiscoveryCache = new DiscoveryCache<>(b.oidcDiscoveryTtlMillis, MIN_OIDC_DISCOVERY_TTL_MILLIS);
+        this.retryEnabled = b.retryEnabled;
+        // §17.1 rule 1 — off unless the caller asked for it.
+        this.decisionMemo = new DecisionMemo<>(b.decisionMemoTtl);
+        this.telemetry = new TelemetryDispatcher(b.telemetryHook);
 
         CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
         this.refreshGuard = new RefreshGuard();
@@ -456,6 +556,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     @Override
     public void close() {
+        // Idempotent (CONTRACT.md §18.1 rule 2): cleanup runs from error paths,
+        // and an error path that itself throws hides the original failure.
+        // compareAndSet also means a concurrent double-close does the work once.
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        decisionMemo.clear();
         httpClient.dispatcher().executorService().shutdown();
         httpClient.connectionPool().evictAll();
         okhttp3.Cache cache = httpClient.cache();
@@ -466,6 +573,30 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 // best-effort — nothing actionable on a failed cache close.
             }
         }
+    }
+
+    /**
+     * Throws if {@link #close()} has been called (CONTRACT.md §18.1 rule 4).
+     *
+     * <p>Use-after-close is an error, not a silent reconnect: a client that
+     * quietly rebuilt its transport would make {@code close()} meaningless and
+     * hide the lifecycle bug that caused the call.
+     */
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new NetworkError("client is closed: this AxiamClient was shut down with close()");
+        }
+    }
+
+    /**
+     * Drops memoized decisions (CONTRACT.md §17.1 rule 9).
+     *
+     * <p>Entries are keyed by subject rather than session, so a
+     * re-authentication as a <em>different</em> principal would otherwise
+     * inherit the previous one's decisions.
+     */
+    private void onCredentialChange() {
+        decisionMemo.clear();
     }
 
     // ------------------------------------------------------------------
@@ -544,6 +675,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      *         or an MFA challenge to complete via {@link #verifyMfa}
      */
     public LoginResult login(String email, String password) {
+        ensureOpen();
+        onCredentialChange();
         ObjectNode body = MAPPER.createObjectNode();
         body.put("tenant_slug", tenantId);
         UUID orgId = session.configuredOrgId();
@@ -591,6 +724,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return the login outcome; {@code mfaRequired} is always {@code false} on success
      */
     public LoginResult verifyMfa(Sensitive mfaToken, String totpCode) {
+        ensureOpen();
+        onCredentialChange();
         ObjectNode body = MAPPER.createObjectNode();
         body.put("challenge_token", mfaToken.expose());
         body.put("totp_code", totpCode);
@@ -620,6 +755,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * call itself is {@link AuthError} with no retry (&sect;9.3).
      */
     public void refresh() {
+        ensureOpen();
+        onCredentialChange();
         String observedAccess = session.cachedAccessToken();
         if (observedAccess == null) {
             throw new AuthError("no access token to refresh — call login() first");
@@ -641,6 +778,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * token's {@code jti} claim.
      */
     public void logout() {
+        ensureOpen();
+        onCredentialChange();
         String access = session.cachedAccessToken();
         if (access == null) {
             throw new AuthError("no active session to log out");
@@ -724,13 +863,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return the check outcome (allowed/denied, with an optional deny reason)
      */
     public AccessResult checkAccess(String action, String resourceId, @Nullable String scope) {
-        ObjectNode body = MAPPER.createObjectNode();
-        body.put("action", action);
-        body.put("resource_id", resourceId);
-        if (scope != null) {
-            body.put("scope", scope);
-        }
-        return Retry.withRetry(() -> sendCheckAccess(body), AxiamClient::isRetryableNetworkError);
+        return memoizedCheck(null, action, resourceId, scope);
     }
 
     /** {@link #checkAccess(String, String, String)} with no sub-resource scope.
@@ -764,14 +897,52 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return the check outcome (allowed/denied, with an optional deny reason)
      */
     public AccessResult checkAccess(String subjectId, String action, String resourceId, @Nullable String scope) {
+        return memoizedCheck(subjectId, action, resourceId, scope);
+    }
+
+    /**
+     * The shared body of both {@code checkAccess} overloads: §18 guard, §17
+     * memo, §16 retry, §19 telemetry.
+     *
+     * <p>The call is a {@code POST} but changes no server state, so it is
+     * retry-eligible: §16.2's test is "changes no server state", <em>not</em>
+     * "is a GET". Gating on the verb would exclude the single most important
+     * operation this policy covers.
+     */
+    private AccessResult memoizedCheck(@Nullable String subjectId, String action,
+                                       String resourceId, @Nullable String scope) {
+        ensureOpen();
+
+        // §17: consult the memo first. Disabled by default, in which case this
+        // is one map lookup that always misses.
+        String key = DecisionMemo.key(subjectId, resourceId, action, scope);
+        AccessResult memoized = decisionMemo.get(key);
+        if (memoized != null) {
+            return memoized;
+        }
+
         ObjectNode body = MAPPER.createObjectNode();
-        body.put("subject_id", subjectId);
+        if (subjectId != null) {
+            body.put("subject_id", subjectId);
+        }
         body.put("action", action);
         body.put("resource_id", resourceId);
         if (scope != null) {
             body.put("scope", scope);
         }
-        return Retry.withRetry(() -> sendCheckAccess(body), AxiamClient::isRetryableNetworkError);
+
+        AccessResult result = Retry.withRetry(
+                retryEnabled ? Retry.DEFAULT_MAX_ATTEMPTS : 1,
+                attempt -> sendCheckAccess(body, "checkAccess", attempt),
+                AxiamClient::isRetryableNetworkError,
+                telemetry,
+                "checkAccess");
+
+        // Only a decision the server actually returned is memoized: reaching
+        // here means success, so §17.1 rule 7's ban on caching a failure is
+        // structural rather than a check that could be forgotten.
+        decisionMemo.put(key, result);
+        return result;
     }
 
     /** {@code CompletableFuture} async twin of
@@ -873,7 +1044,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ObjectNode body = MAPPER.createObjectNode();
         body.set("checks", checksArray);
 
-        return Retry.withRetry(() -> sendBatchCheck(body), AxiamClient::isRetryableNetworkError);
+        ensureOpen();
+        return Retry.withRetry(
+                retryEnabled ? Retry.DEFAULT_MAX_ATTEMPTS : 1,
+                attempt -> sendBatchCheck(body, "batchCheck", attempt),
+                AxiamClient::isRetryableNetworkError,
+                telemetry,
+                "batchCheck");
     }
 
     /** {@code CompletableFuture} async twin of {@link #batchCheck}.
@@ -885,11 +1062,14 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return CompletableFuture.supplyAsync(() -> batchCheck(checks));
     }
 
-    private AccessResult sendCheckAccess(ObjectNode body) {
+    private AccessResult sendCheckAccess(ObjectNode body, String operation, int attempt) {
+        TelemetryDispatcher.Span span = telemetry.startRequest(operation, "POST", CHECK_PATH, attempt);
         try (Response response = executeJsonPost(CHECK_PATH, body)) {
             if (!response.isSuccessful()) {
+                span.end(response.code(), TelemetryEvent.Outcome.FAILURE);
                 throw ErrorMapper.fromHttpStatus(response.code(), "checkAccess failed", response);
             }
+            span.end(response.code(), TelemetryEvent.Outcome.SUCCESS);
             JsonNode wire = readJson(response);
             boolean allowed = wire.path("allowed").asBoolean(false);
             String reason = wire.hasNonNull("reason") ? wire.get("reason").asText() : null;
@@ -901,11 +1081,14 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
     }
 
-    private List<AccessResult> sendBatchCheck(ObjectNode body) {
+    private List<AccessResult> sendBatchCheck(ObjectNode body, String operation, int attempt) {
+        TelemetryDispatcher.Span span = telemetry.startRequest(operation, "POST", BATCH_CHECK_PATH, attempt);
         try (Response response = executeJsonPost(BATCH_CHECK_PATH, body)) {
             if (!response.isSuccessful()) {
+                span.end(response.code(), TelemetryEvent.Outcome.FAILURE);
                 throw ErrorMapper.fromHttpStatus(response.code(), "batchCheck failed", response);
             }
+            span.end(response.code(), TelemetryEvent.Outcome.SUCCESS);
             JsonNode wire = readJson(response);
             List<AccessResult> results = new ArrayList<>();
             for (JsonNode item : wire.path("results")) {

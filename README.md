@@ -21,7 +21,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15 — including §6.1 mTLS
+This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19 — including §6.1 mTLS
 (client-certificate authentication), the §1.1 gRPC-only `getUserInfo` operation,
 the §10.1 minimum local-verification set, the §12 OIDC/SSO relying-party helpers,
 and the §13 webhook-signature verifier.
@@ -514,3 +514,87 @@ this SDK.
 ## Status
 
 Java SDK, extracted from the AXIAM monorepo into its own repository.
+
+## Client quality-of-life (CONTRACT.md §16–§19)
+
+### Retry policy (§16)
+
+Read-only authorization checks — `checkAccess` (both overloads) and `batchCheck` — retry
+transient failures under the contract's normative table: **3 attempts** (1 initial + 2
+retries), 200 ms base, 5 s cap, **full jitter** (uniform over `[0, backoff]`), and
+`Retry-After` honored as a **floor**.
+
+This SDK's `Retry` was already conformant — it is the implementation whose parameters the
+contract adopted, and of the five SDKs that had invented a policy it was the only one that
+got jitter and `Retry-After` both right. D5 adds the disable switch and the §16.5 retry
+event; the arithmetic is unchanged.
+
+```java
+// Turn it off if you own your own retry layer — you know your deadline, this SDK doesn't.
+AxiamClient client = AxiamClient.builder(baseUrl, "acme").retryDisabled().build();
+```
+
+There is deliberately no builder method for the attempt cap, base delay or delay cap: §16.1
+forbids raising them, and eleven SDKs agreeing on one table is the point.
+
+### Deterministic shutdown (§18)
+
+`close()` releases the client's local resources. It is idempotent — a concurrent double-close
+does the work once — and any call afterwards throws `NetworkError` naming the cause rather
+than silently reconnecting.
+
+**`close()` does not log out.** It never reaches the network. The server-side session
+deliberately outlives the client object — that is what lets a process restart and resume — so
+a `close()` that logged out would silently end every user's session on each deploy. Call
+`logout()` first if ending the session is what you want.
+
+### Telemetry hooks (§19)
+
+Wire metrics without this library depending on any metrics API:
+
+```java
+AxiamClient client = AxiamClient.builder(baseUrl, "acme")
+    .telemetryHook(event -> {
+        if (event instanceof TelemetryEvent.RequestEnd end) {
+            histogram.record(end.duration().toMillis(), /* labels */);
+        } else if (event instanceof TelemetryEvent.Retry retry) {
+            counter.increment(/* labels */);
+        }
+    })
+    .build();
+```
+
+- **A hook that throws cannot fail the operation that fired it.** Telemetry is not permitted
+  to fail an authorization check.
+- **No event payload can carry a token.** `TelemetryEvent` is a **sealed** hierarchy of
+  records with fixed component lists — no code outside the SDK can add a variant, which is
+  what makes that guarantee checkable rather than aspirational.
+- **Path templates, not URLs**, so a metric label cannot become a cardinality bomb.
+
+One `RequestStart`/`RequestEnd` pair is emitted **per attempt**, so you can count real wire
+calls. See [`examples/telemetry-hook`](examples/telemetry-hook).
+
+### Decision memo (§17) — opt-in, off by default
+
+An optional TTL-bounded cache for `checkAccess` results. **Disabled by default**, because
+§11.2 rule 6's ban on caching authorization decisions is still the default behaviour.
+
+```java
+AxiamClient client = AxiamClient.builder(baseUrl, "acme")
+    .decisionMemoTtl(Duration.ofSeconds(5))
+    .build();
+```
+
+**What you are accepting.** The staleness bound is the TTL, in *both* directions: a grant
+revoked on the server can still read as allowed for up to the TTL, and a grant just added can
+still read as denied for up to the TTL.
+
+> **Reads-your-own-writes is not guaranteed.** An admin UI that grants a role and immediately
+> re-checks is the case that breaks, and it breaks silently. If that is your workload, leave
+> this off.
+
+The TTL is clamped to `DecisionMemo.MAX_TTL` (5 s) rather than rejected. Allows and denies are
+memoized identically — asymmetric caching would leak which outcome occurred through latency.
+Failures are never memoized: caching a transport error as a deny would turn a blip into a
+TTL-long outage. The memo is cleared on `login`, `verifyMfa`, `refresh` and `logout`, since
+entries are keyed by subject rather than by session. It is thread-safe.

@@ -3,6 +3,8 @@ package io.axiam.sdk.internal;
 import java.security.SecureRandom;
 import java.util.Random;
 import java.util.function.Predicate;
+import java.time.Duration;
+import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
 /**
@@ -90,6 +92,65 @@ public final class Retry {
      */
     public static <T> T withRetry(int maxAttempts, Supplier<T> op, Predicate<RuntimeException> retryable) {
         return withRetry(maxAttempts, op, retryable, Thread::sleep, new SecureRandom());
+    }
+
+    /**
+     * Attempt-aware overload that also emits the §16.5 retry event.
+     *
+     * <p>{@code op} receives the 1-based attempt number so it can label its §19
+     * request pair. §19.2 rule 5 requires one pair per attempt so a caller can
+     * count real wire calls; passing 1 every time would make a retried call
+     * indistinguishable from a single slow one.
+     *
+     * @param <T>         the type {@code op} produces
+     * @param maxAttempts the maximum number of attempts (must be &gt;= 1)
+     * @param op          the idempotent operation, given the attempt number
+     * @param retryable   decides whether a thrown exception should trigger a retry
+     * @param telemetry   the §19 dispatcher notified before each retry wait
+     * @param operation   canonical operation name for the retry event
+     * @return {@code op}'s result, once it succeeds
+     */
+    public static <T> T withRetry(int maxAttempts, IntFunction<T> op,
+                                  Predicate<RuntimeException> retryable,
+                                  TelemetryDispatcher telemetry, String operation) {
+        return withRetry(maxAttempts, op, retryable, Thread::sleep, new SecureRandom(),
+                telemetry, operation);
+    }
+
+    /** Test-injectable twin of the attempt-aware overload. */
+    static <T> T withRetry(int maxAttempts, IntFunction<T> op,
+                           Predicate<RuntimeException> retryable,
+                           Sleeper sleeper, Random random,
+                           TelemetryDispatcher telemetry, String operation) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts must be >= 1");
+        }
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return op.apply(attempt);
+            } catch (RuntimeException e) {
+                boolean lastAttempt = attempt == maxAttempts;
+                if (!retryable.test(e) || lastAttempt) {
+                    throw e;
+                }
+
+                long delay = computeDelayMillis(attempt, e, random);
+                // §16.5 — without this event a retried-then-succeeded call is
+                // invisible: a slow success with no signal that the server is
+                // failing.
+                telemetry.emit(new io.axiam.sdk.telemetry.TelemetryEvent.Retry(
+                        operation, attempt, Duration.ofMillis(delay), String.valueOf(e.getMessage())));
+                try {
+                    sleeper.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+        // Unreachable: the loop above always either returns or throws.
+        throw new IllegalStateException("unreachable");
     }
 
     /**
