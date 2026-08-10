@@ -19,7 +19,8 @@ public sealed interface TelemetryEvent
         permits TelemetryEvent.RequestStart,
                 TelemetryEvent.RequestEnd,
                 TelemetryEvent.Retry,
-                TelemetryEvent.Refresh {
+                TelemetryEvent.Refresh,
+                TelemetryEvent.ConfigClamped {
 
     /** Why a request finished. */
     enum Outcome {
@@ -90,5 +91,32 @@ public sealed interface TelemetryEvent
      * @param duration how long the refresh, or the wait for one, took
      */
     record Refresh(RefreshRole role, Duration duration) implements TelemetryEvent {
+    }
+
+    /**
+     * Emitted at construction, once per caller-supplied setting the SDK clamped
+     * (&#167;19.1, &#167;19.2 rule 6).
+     *
+     * <p>Two places in the contract require clamping rather than rejecting:
+     * &#167;16.1's attempt cap, base delay and delay cap, and &#167;17.1 rule 2's
+     * memo TTL. Both clamps are right — rejecting would break a caller whose
+     * configuration was merely optimistic, and honoring would let one client
+     * become the herd &#167;16 exists to prevent. Doing it <em>silently</em> is
+     * the part that is wrong.
+     *
+     * <p>An operator who set a 60-second memo TTL believes they have one. They
+     * have five seconds, and their staleness reasoning is off by a factor of
+     * twelve with nothing anywhere to say so.
+     *
+     * <p>Not emitted for a value already within its limit: an event that fires
+     * when nothing happened trains its reader to ignore it.
+     *
+     * @param setting           the setting's name, e.g. {@code decisionMemoTtl}
+     * @param requested         the value the caller asked for, rendered
+     * @param effective         the value actually in force, rendered
+     * @param contractReference the §-reference for the limit, e.g. {@code §17.1 rule 2}
+     */
+    record ConfigClamped(String setting, String requested, String effective,
+                         String contractReference) implements TelemetryEvent {
     }
 }

@@ -1,5 +1,6 @@
 package io.axiam.sdk.internal;
 
+import io.axiam.sdk.telemetry.TelemetryEvent;
 import java.time.Duration;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -194,6 +195,35 @@ public final class DecisionMemo<T> {
      */
     public synchronized void clear() {
         entries.clear();
+    }
+
+    /**
+     * Emits a {@link TelemetryEvent.ConfigClamped} if the requested TTL was
+     * clamped (CONTRACT.md &#167;19.2 rule 6).
+     *
+     * <p>This is the clamp that matters most to get right: an operator who set a
+     * 60-second TTL believes their staleness bound is 60 seconds. It is five, and
+     * without this event nothing anywhere says so.
+     *
+     * <p>Nothing is emitted when the requested value was already inside the
+     * limit, or when the memo is disabled — an event that fires when nothing
+     * happened trains its reader to ignore it.
+     *
+     * @param requested the TTL the caller asked for, or null
+     * @param telemetry the §19 dispatcher
+     */
+    public void reportClamp(@Nullable Duration requested, TelemetryDispatcher telemetry) {
+        if (requested == null || requested.isNegative() || requested.isZero()) {
+            return;
+        }
+        if (requested.toMillis() == ttlMillis) {
+            return;
+        }
+        telemetry.emit(new TelemetryEvent.ConfigClamped(
+                "decisionMemoTtl",
+                requested.toString(),
+                Duration.ofMillis(ttlMillis).toString(),
+                "§17.1 rule 2"));
     }
 
     /**

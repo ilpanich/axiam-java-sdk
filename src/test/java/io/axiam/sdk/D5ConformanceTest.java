@@ -369,6 +369,78 @@ class D5ConformanceTest {
     }
 
     @Test
+    @DisplayName("§19.2 rule 6: a clamped setting is reported, not swallowed")
+    void clampedSettingIsReported() {
+        // An operator who set a 60-second memo TTL believes their staleness
+        // bound is 60 seconds. It is five. Clamping is right — honoring would
+        // give one client a multi-minute revocation window — but doing it
+        // silently leaves their reasoning wrong by a factor of twelve with
+        // nothing anywhere to say so.
+        List<TelemetryEvent> events = new ArrayList<>();
+        try (AxiamClient client = builder()
+                .decisionMemoTtl(Duration.ofMinutes(1))
+                .telemetryHook(events::add)
+                .build()) {
+            List<TelemetryEvent.ConfigClamped> clamps = clampsIn(events);
+            assertEquals(1, clamps.size());
+            assertEquals("decisionMemoTtl", clamps.get(0).setting());
+            assertEquals(Duration.ofMinutes(1).toString(), clamps.get(0).requested());
+            assertEquals(DecisionMemo.MAX_TTL.toString(), clamps.get(0).effective());
+            assertEquals("§17.1 rule 2", clamps.get(0).contractReference());
+        }
+    }
+
+    @Test
+    @DisplayName("§19.2 rule 6: a value already inside its limit reports nothing")
+    void inRangeSettingReportsNothing() {
+        // An event that fires when nothing happened trains its reader to ignore
+        // it, which costs exactly the case above.
+        List<TelemetryEvent> events = new ArrayList<>();
+        try (AxiamClient client = builder()
+                .decisionMemoTtl(Duration.ofSeconds(2))
+                .telemetryHook(events::add)
+                .build()) {
+            assertTrue(clampsIn(events).isEmpty(), "2s is inside the 5s ceiling");
+        }
+        // The boundary itself is not a clamp either.
+        events.clear();
+        try (AxiamClient client = builder()
+                .decisionMemoTtl(DecisionMemo.MAX_TTL)
+                .telemetryHook(events::add)
+                .build()) {
+            assertTrue(clampsIn(events).isEmpty(), "the ceiling exactly is not a clamp");
+        }
+    }
+
+    @Test
+    @DisplayName("§19.2 rule 6: the disabled default reports nothing")
+    void disabledMemoReportsNoClamp() {
+        // Never configuring the memo is not a setting that got overridden.
+        List<TelemetryEvent> events = new ArrayList<>();
+        try (AxiamClient client = builder().telemetryHook(events::add).build()) {
+            assertTrue(clampsIn(events).isEmpty());
+        }
+        events.clear();
+        try (AxiamClient client = builder()
+                .decisionMemoTtl(Duration.ofSeconds(-5))
+                .telemetryHook(events::add)
+                .build()) {
+            assertTrue(clampsIn(events).isEmpty(),
+                    "a negative TTL disables the memo; it is not clamped to the ceiling");
+        }
+    }
+
+    private static List<TelemetryEvent.ConfigClamped> clampsIn(List<TelemetryEvent> events) {
+        List<TelemetryEvent.ConfigClamped> clamps = new ArrayList<>();
+        for (TelemetryEvent e : events) {
+            if (e instanceof TelemetryEvent.ConfigClamped clamped) {
+                clamps.add(clamped);
+            }
+        }
+        return clamps;
+    }
+
+    @Test
     @DisplayName("§19: an uninstalled dispatcher costs nothing and cannot throw")
     void uninstalledDispatcherIsInert() {
         TelemetryDispatcher dispatcher = new TelemetryDispatcher(null);
