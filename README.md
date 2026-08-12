@@ -362,6 +362,60 @@ silently). Additional properties: `axiam.oidc.client-id` (required),
 (required), `axiam.oidc.login-path`/`axiam.oidc.callback-path` (default
 `/oidc/login`/`/oidc/callback`), `axiam.oidc.scope`, `axiam.oidc.success-redirect`.
 
+## UMA 2.0 — protecting resources whose owner isn't the caller (§20)
+
+For a resource server holding data that belongs to *users*: instead of
+answering an unauthorized request with a bare 403, tell the caller where to go
+and get authority.
+
+Registration and the ticket grant live on `AxiamClient`
+(`umaRegisterResource` / `umaReadResource` / `umaUpdateResource` /
+`umaDeleteResource` / `umaListResources`, `umaRequestTicket`,
+`umaExchangeTicket`). Every Protection API call takes the **PAT** as an
+explicit first argument — a client-credentials token carrying `uma_protection`
+(§20.2 rule 1) rather than the client's ambient session, because that session is
+usually a *user* session and a minted ticket binds to a `client_id`.
+
+The registered id **is** the AXIAM resource id, so UMA scopes are AXIAM
+actions: the same grants — deny rules included — govern an RPT-carrying request
+and an ordinary one.
+
+**Emitting the challenge.** Hand a `UmaChallenger` to the §11 interceptor and a
+denial carries the ticket with it:
+
+```java
+UmaChallenger challenger = new UmaChallenger(
+        "invoices", client.oidcDiscover().issuer(), pat, client);
+registry.addInterceptor(new AxiamAuthorizationInterceptor(client, challenger));
+// A denied @AxiamRequireAccess handler now answers 403 with
+//   WWW-Authenticate: UMA realm="invoices", as_uri="…", ticket="…"
+```
+
+Opt-in, deliberately: minting on every denial by default would put a Protection
+API call — and a live credential — behind every unauthorized request. And a
+minting failure still denies plainly, never a 500 and never an allow.
+
+**Consuming it.** `UmaChallenge.parse(header)` parses and *stops there*. It does
+not exchange the ticket, because the `as_uri` it names was chosen by the server
+that just refused you; auto-redeeming would send the requesting party's token
+wherever a 403 pointed. The trust decision is the caller's:
+
+```java
+UmaChallenge challenge = UmaChallenge.parse(response.header("WWW-Authenticate"));
+if (challenge != null && trustworthy(challenge.asUri())) {
+    RequestingPartyToken rpt =
+            client.umaExchangeTicket(challenge.ticket(), userToken, null, null);
+}
+```
+
+`umaExchangeTicket` sends **one** request and never retries — the documented
+exception to the §16 retry policy, because a ticket is consumed before the
+request is evaluated, so a retry cannot succeed and under concurrency is exactly
+the double redemption to avoid. On failure, obtain a *new* ticket.
+
+Both halves run in [`examples/uma-resource-server`](examples/uma-resource-server)
+and [`examples/uma-client`](examples/uma-client).
+
 ## Device authorization grant (§14)
 
 RFC 8628 — signing in a device that cannot show a browser: a TV, a CLI, a headless

@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than by widening `ErrorMapper`'s 400/401 rows — an ordinary REST 403 still maps to
   `AuthzError`, unchanged.
 
+- **§20.3 challenge emission from the §11 interceptor.** `AxiamAuthorizationInterceptor`
+  gains a second constructor taking a `UmaChallenger` (realm, `as_uri`, PAT, client); with
+  one, an `@AxiamRequireAccess` denial mints a permission ticket for the action that was
+  refused and returns it as `WWW-Authenticate: UMA` alongside the unchanged 403 body.
+
+  It is **opt-in** because emitting a challenge means minting a credential: an interceptor
+  that did it by default would turn every unauthorized request into a Protection API call,
+  which is a denial-of-service amplifier pointed at your own authorization server. And a
+  **minting failure is not an escalation** — an expired PAT or an unreachable Protection API
+  still yields the plain 403, never a 500 and never an allow. The requested scope is the
+  AXIAM *action*, so the ticket asks for exactly the authority just refused and the engine's
+  deny rules keep applying to whatever RPT comes back.
+
+  Paired with `examples/uma-resource-server` and `examples/uma-client`, which demonstrate
+  both halves: emitting the challenge, and consuming it — including the trust decision §20.3
+  keeps in the caller's hands rather than auto-exchanging against whatever host a 403 named.
+
 - **§18 `AxiamClient.close()` semantics** — idempotent via `compareAndSet` (a concurrent
   double-close does the work once), clears the memo, and use-after-close throws `NetworkError`
   rather than silently reconnecting. It does **not** log out and never reaches the network:

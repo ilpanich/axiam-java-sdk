@@ -4,12 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.axiam.sdk.AxiamClient;
+import io.axiam.sdk.Sensitive;
 import io.axiam.sdk.annotations.AxiamRequireAccess;
 import io.axiam.sdk.annotations.AxiamRequireAuth;
 import io.axiam.sdk.annotations.AxiamRequireRole;
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.AuthzError;
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.oidc.RequestedPermission;
+import io.axiam.sdk.oidc.UmaChallenge;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -29,6 +32,7 @@ import org.springframework.web.servlet.HandlerMapping;
 
 import java.io.IOException;
 import java.lang.annotation.Annotation;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -79,6 +83,7 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
     private static final String ROLE_PREFIX = "ROLE_";
 
     private final AxiamClient client;
+    private final @Nullable UmaChallenger challenger;
 
     /**
      * Creates an interceptor that enforces the &sect;11 annotations by calling
@@ -90,7 +95,23 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
      *               reach the authz endpoint
      */
     public AxiamAuthorizationInterceptor(AxiamClient client) {
+        this(client, null);
+    }
+
+    /**
+     * Creates an interceptor that additionally answers an
+     * {@link AxiamRequireAccess} denial with a {@code WWW-Authenticate: UMA}
+     * challenge (&sect;20.3, emit half).
+     *
+     * @param client     as above
+     * @param challenger the challenge emitter, or {@code null} for the plain
+     *                   &sect;11 behaviour. See {@link UmaChallenger} for why
+     *                   this is opt-in and why a minting failure still denies
+     *                   rather than escalating
+     */
+    public AxiamAuthorizationInterceptor(AxiamClient client, @Nullable UmaChallenger challenger) {
         this.client = client;
+        this.challenger = challenger;
     }
 
     @Override
@@ -146,9 +167,7 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
         try {
             AxiamClient.AccessResult result = client.checkAccess(subjectId, action, resourceId, scope);
             if (!result.allowed()) {
-                LOG.debug("authorization denied: action={} resource_id={}", action, resourceId);
-                writeError(response, HttpServletResponse.SC_FORBIDDEN,
-                        "authorization_denied", "access denied");
+                deny(response, action, resourceId);
                 return false;
             }
             return true;
@@ -159,14 +178,59 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
             writeError(response, 503, "authz_unavailable", "authorization service unavailable");
             return false;
         } catch (AuthzError e) {
-            LOG.debug("authorization denied: action={} resource_id={}", action, resourceId);
-            writeError(response, HttpServletResponse.SC_FORBIDDEN,
-                    "authorization_denied", "access denied");
+            deny(response, action, resourceId);
             return false;
         } catch (AuthError e) {
             writeError(response, HttpServletResponse.SC_UNAUTHORIZED,
                     "authentication_failed", "authentication required");
             return false;
+        }
+    }
+
+    /**
+     * The single deny path for a resource check: a 403, carrying a
+     * {@code WWW-Authenticate: UMA} challenge when — and only when — this
+     * interceptor was built with a {@link UmaChallenger}.
+     */
+    private void deny(HttpServletResponse response, String action, String resourceId) throws IOException {
+        LOG.debug("authorization denied: action={} resource_id={}", action, resourceId);
+        UmaChallenger emitter = challenger;
+        if (emitter != null) {
+            String header = mintChallenge(emitter, action, resourceId);
+            if (header != null) {
+                response.setHeader("WWW-Authenticate", header);
+            }
+        }
+        writeError(response, HttpServletResponse.SC_FORBIDDEN, "authorization_denied", "access denied");
+    }
+
+    /**
+     * Mints one ticket for the pair that was just refused and formats the
+     * challenge, or returns {@code null} when that fails.
+     *
+     * <p>The requested scope is the AXIAM <em>action</em> (§20.2): asking for
+     * anything else would offer the caller authority other than the one they
+     * were denied, and would step outside the grants the engine just evaluated.
+     *
+     * <p>Every failure is swallowed deliberately. A PAT that expired, a
+     * Protection API that is down, a resource that declares none of the
+     * requested scopes — none of these change the answer to the request, which
+     * was already "no". Letting them turn a deny into a 500 would give the
+     * outage a second consequence; letting them turn it into an allow would be
+     * a security bug.
+     */
+    private static @Nullable String mintChallenge(UmaChallenger emitter, String action, String resourceId) {
+        try {
+            Sensitive ticket = emitter.client().umaRequestTicket(
+                    emitter.pat(),
+                    List.of(RequestedPermission.of(UUID.fromString(resourceId), List.of(action))));
+            return UmaChallenge.header(emitter.realm(), emitter.asUri(), ticket);
+        } catch (RuntimeException e) {
+            // The class of the failure, never its message: an error body from
+            // the Protection API is not something to widen into a response.
+            LOG.debug("uma ticket minting failed ({}); denying without a challenge",
+                    e.getClass().getSimpleName());
+            return null;
         }
     }
 
