@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **§20 UMA 2.0 — Protection API and ticket grant (contract 1.10).** New `OidcOperations`
+  methods on `AxiamClient`: `umaRegisterResource` / `umaReadResource` / `umaUpdateResource` /
+  `umaDeleteResource` / `umaListResources`, `umaRequestTicket`, `umaExchangeTicket`, plus the
+  `ResourceSet` / `RequestedPermission` / `RptPermission` / `RequestingPartyToken` records and
+  `UmaChallenge` with its static `parse` / `header` helpers.
+
+  Two behaviours are load-bearing rather than incidental, and both are asserted by counting
+  requests. **`umaExchangeTicket` never retries** — the one documented exception to the §16
+  retry policy, because a ticket is consumed before the request is evaluated, so a retry
+  cannot succeed and under concurrency is exactly the second redemption that
+  ilpanich/axiam#302's measured residual describes. And **`UmaChallenge.parse` does not
+  exchange the ticket it parsed**: the `as_uri` names an authorization server the caller has
+  not chosen to trust.
+
+  The PAT is an explicit first argument on every Protection API call rather than being taken
+  from the client's session, because that session is usually a *user* session and a ticket
+  binds to a `client_id`.
+
+  `access_denied` on the ticket grant arrives as **403** (UMA 2.0 §3.3.6), unlike RFC 8628's,
+  which is a 400. It is mapped to `OAuthProtocolError` by a mapper local to this grant rather
+  than by widening `ErrorMapper`'s 400/401 rows — an ordinary REST 403 still maps to
+  `AuthzError`, unchanged.
+
 - **§18 `AxiamClient.close()` semantics** — idempotent via `compareAndSet` (a concurrent
   double-close does the work once), clears the memo, and use-after-close throws `NetworkError`
   rather than silently reconnecting. It does **not** log out and never reaches the network:
