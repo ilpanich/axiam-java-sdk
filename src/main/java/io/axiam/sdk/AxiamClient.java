@@ -24,6 +24,9 @@ import io.axiam.sdk.internal.SingleFlight;
 import io.axiam.sdk.oidc.AuthorizationRequest;
 import io.axiam.sdk.oidc.DeviceAuthorization;
 import io.axiam.sdk.oidc.ExchangedToken;
+import io.axiam.sdk.oidc.RequestedPermission;
+import io.axiam.sdk.oidc.RequestingPartyToken;
+import io.axiam.sdk.oidc.ResourceSet;
 import io.axiam.sdk.oidc.IdTokenClaims;
 import io.axiam.sdk.oidc.IdTokenValidator;
 import io.axiam.sdk.oidc.IntrospectionResult;
@@ -1820,6 +1823,200 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public ExchangedToken tokenExchange(Sensitive subjectToken) {
         return tokenExchange(subjectToken, null, null, null, null, null, null);
+    }
+
+    // -----------------------------------------------------------------------
+    // §20 UMA 2.0 — Protection API and ticket grant
+    // -----------------------------------------------------------------------
+
+    /** {@code grant_type} of the UMA ticket grant (UMA 2.0 §3.3.1). */
+    private static final String UMA_TICKET_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:uma-ticket";
+
+    /** The only {@code claim_token_format} AXIAM v1 accepts (§20.2 rule 2). */
+    private static final String UMA_CLAIM_TOKEN_FORMAT = "urn:ietf:params:oauth:token-type:access_token";
+
+    private static final String RREG_PATH = "/uma2/rreg/resource_set";
+
+    @Override
+    public ResourceSet umaRegisterResource(Sensitive pat, ResourceSet resource) {
+        JsonNode wire = umaProtectionJson("POST", RREG_PATH, pat, umaResourcePayload(resource),
+                "uma resource registration failed");
+        return resourceSetFromWire(wire);
+    }
+
+    @Override
+    public ResourceSet umaReadResource(Sensitive pat, UUID resourceId) {
+        JsonNode wire = umaProtectionJson("GET", RREG_PATH + "/" + resourceId, pat, null,
+                "uma resource read failed");
+        return resourceSetFromWire(wire);
+    }
+
+    @Override
+    public ResourceSet umaUpdateResource(Sensitive pat, UUID resourceId, ResourceSet resource) {
+        JsonNode wire = umaProtectionJson("PUT", RREG_PATH + "/" + resourceId, pat,
+                umaResourcePayload(resource), "uma resource update failed");
+        return resourceSetFromWire(wire);
+    }
+
+    @Override
+    public void umaDeleteResource(Sensitive pat, UUID resourceId) {
+        umaProtectionJson("DELETE", RREG_PATH + "/" + resourceId, pat, null,
+                "uma resource delete failed");
+    }
+
+    @Override
+    public List<UUID> umaListResources(Sensitive pat) {
+        JsonNode wire = umaProtectionJson("GET", RREG_PATH, pat, null, "uma resource list failed");
+        List<UUID> ids = new ArrayList<>();
+        if (wire != null && wire.isArray()) {
+            for (JsonNode id : wire) {
+                ids.add(UUID.fromString(id.asText()));
+            }
+        }
+        return List.copyOf(ids);
+    }
+
+    @Override
+    public Sensitive umaRequestTicket(Sensitive pat, List<RequestedPermission> permissions) {
+        ArrayNode body = MAPPER.createArrayNode();
+        for (RequestedPermission permission : permissions) {
+            ObjectNode entry = body.addObject();
+            entry.put("resource_id", permission.resourceId().toString());
+            ArrayNode scopes = entry.putArray("resource_scopes");
+            permission.resourceScopes().forEach(scopes::add);
+        }
+        JsonNode wire = umaProtectionJson("POST", "/uma2/perm", pat, body,
+                "uma ticket request failed");
+        return Sensitive.of(wire.path("ticket").asText());
+    }
+
+    @Override
+    public RequestingPartyToken umaExchangeTicket(Sensitive ticket, Sensitive claimToken,
+            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration) {
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", UMA_TICKET_GRANT_TYPE)
+                .add("ticket", ticket.expose())
+                .add("claim_token", claimToken.expose())
+                .add("claim_token_format", UMA_CLAIM_TOKEN_FORMAT)
+                .add("client_id", requireOidcClientId())
+                .add("client_secret", requireOidcClientSecret("umaExchangeTicket"));
+
+        String url = oauth2Url(config.token_endpoint(), tenantId);
+        // One POST, no retry wrapper. See the interface's rule-6 note — this is
+        // the §16 exception, and it is load-bearing rather than stylistic.
+        try (Response response = executeFormPost(url, form.build())) {
+            if (!response.isSuccessful()) {
+                throw mapUmaGrantError(response, "uma ticket exchange request failed");
+            }
+            JsonNode wire = readJson(response);
+            return new RequestingPartyToken(
+                    Sensitive.of(wire.path("access_token").asText()),
+                    wire.path("token_type").asText(),
+                    wire.path("expires_in").asInt());
+        }
+    }
+
+    /**
+     * Maps an error from the <strong>uma-ticket grant</strong>, where
+     * {@code access_denied} arrives as HTTP <strong>403</strong> (UMA 2.0
+     * §3.3.6) rather than the 400 every other OAuth2 error uses.
+     *
+     * <p>§20.4 requires dispatching on the {@code error} field rather than the
+     * status, so the code reaches the caller whichever status carries it. This
+     * is kept local to the ticket grant on purpose:
+     * {@link ErrorMapper#fromOAuth2Response} applies the OAuth2 mapping to
+     * 400/401 only, and widening that globally would change how every OAuth2
+     * endpoint's 403 is reported — a cross-cutting change this grant does not
+     * need and did not ask for. An ordinary REST 403 keeps mapping to
+     * {@code AuthzError}.
+     */
+    private static RuntimeException mapUmaGrantError(Response response, String fallbackMessage) {
+        if (response.code() == 403 && response.body() != null) {
+            try {
+                String body = response.peekBody(8192).string();
+                if (!body.isBlank()) {
+                    JsonNode root = MAPPER.readTree(body);
+                    if (root.hasNonNull("error") && root.get("error").isTextual()) {
+                        String description = root.hasNonNull("error_description")
+                                ? root.get("error_description").asText()
+                                : fallbackMessage;
+                        return new OAuthProtocolError(root.get("error").asText(), description);
+                    }
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Malformed/non-JSON body: fall through rather than let a parse
+                // failure mask the real status.
+            }
+        }
+        return ErrorMapper.fromOAuth2Response(response.code(), response, fallbackMessage);
+    }
+
+    /**
+     * The wire body for a register/update.
+     *
+     * <p>{@code resource_scopes} is always sent, even when empty: an update
+     * <strong>replaces</strong> the scope list, and omitting the key would
+     * leave the server's copy untouched (§20.2 rule 8).
+     */
+    private static ObjectNode umaResourcePayload(ResourceSet resource) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("name", resource.name());
+        if (resource.type() != null) {
+            body.put("type", resource.type());
+        }
+        ArrayNode scopes = body.putArray("resource_scopes");
+        resource.resourceScopes().forEach(scopes::add);
+        return body;
+    }
+
+    private static ResourceSet resourceSetFromWire(JsonNode wire) {
+        List<String> scopes = new ArrayList<>();
+        for (JsonNode scope : wire.path("resource_scopes")) {
+            scopes.add(scope.asText());
+        }
+        return new ResourceSet(
+                wire.hasNonNull("_id") ? UUID.fromString(wire.get("_id").asText()) : null,
+                wire.path("name").asText(),
+                wire.hasNonNull("type") ? wire.get("type").asText() : null,
+                List.copyOf(scopes));
+    }
+
+    /**
+     * A PAT-authenticated Protection API request.
+     *
+     * <p>The PAT goes in {@code Authorization}. It is an explicit argument on
+     * every Protection API call rather than this client's own session, because
+     * a PAT must be a <strong>client-credentials</strong> token — a ticket
+     * binds to the {@code client_id} that minted it — and this client's session
+     * is usually a <em>user</em> session (§20.2 rule 1).
+     */
+    private @Nullable JsonNode umaProtectionJson(String method, String path, Sensitive pat,
+            @Nullable JsonNode body, String fallbackMessage) {
+        RequestBody payload = null;
+        if (body != null) {
+            try {
+                payload = RequestBody.create(MAPPER.writeValueAsBytes(body), JSON);
+            } catch (IOException e) {
+                throw new NetworkError("failed to encode request: " + e.getMessage(), e);
+            }
+        }
+        Request request = new Request.Builder()
+                .url(baseUrl + path)
+                .header("Authorization", "Bearer " + pat.expose())
+                .method(method, payload)
+                .build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(response.code(), response, fallbackMessage);
+            }
+            if (response.code() == 204) {
+                return null;
+            }
+            return readJson(response);
+        } catch (IOException e) {
+            throw new NetworkError(fallbackMessage + ": " + e.getMessage(), e);
+        }
     }
 
     // -----------------------------------------------------------------------

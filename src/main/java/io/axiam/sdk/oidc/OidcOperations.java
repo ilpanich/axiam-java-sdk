@@ -273,6 +273,126 @@ public interface OidcOperations {
             @Nullable UUID tenantId, @Nullable OidcConfiguration configuration);
 
     // -----------------------------------------------------------------------
+    // §20 UMA 2.0 — Protection API and ticket grant
+    // -----------------------------------------------------------------------
+
+    /**
+     * {@code POST /uma2/rreg/resource_set} — registers a resource set
+     * (CONTRACT.md &sect;20.1).
+     *
+     * <p>The {@code pat} is an explicit parameter, not this client's session.
+     * A Protection API Token must be a <strong>client-credentials</strong>
+     * token, because a ticket binds to the {@code client_id} that minted it —
+     * and this client's session is usually a <em>user</em> session, which
+     * names no client to bind to (&sect;20.2 rule 1).
+     *
+     * @param pat      the Protection API Token
+     * @param resource the resource set to register
+     * @return the registered set, carrying the server-assigned id
+     */
+    ResourceSet umaRegisterResource(Sensitive pat, ResourceSet resource);
+
+    /**
+     * {@code GET /uma2/rreg/resource_set/{id}} — reads a resource set
+     * (&sect;20.1).
+     *
+     * @param pat        the Protection API Token
+     * @param resourceId the resource set id
+     * @return the resource set
+     */
+    ResourceSet umaReadResource(Sensitive pat, UUID resourceId);
+
+    /**
+     * {@code PUT /uma2/rreg/resource_set/{id}} — replaces a resource set
+     * (&sect;20.1).
+     *
+     * <p><strong>The scope list is replaced, not merged</strong> (&sect;20.2
+     * rule 8). Whatever {@code resource.resourceScopes()} holds becomes the
+     * complete declared set; omitting a scope removes it, which is how a
+     * resource server drops an authority. This method performs no
+     * read-before-write.
+     *
+     * @param pat        the Protection API Token
+     * @param resourceId the resource set id
+     * @param resource   the new state
+     * @return the updated resource set
+     */
+    ResourceSet umaUpdateResource(Sensitive pat, UUID resourceId, ResourceSet resource);
+
+    /**
+     * {@code DELETE /uma2/rreg/resource_set/{id}} — deregisters (&sect;20.1).
+     *
+     * @param pat        the Protection API Token
+     * @param resourceId the resource set id
+     */
+    void umaDeleteResource(Sensitive pat, UUID resourceId);
+
+    /**
+     * {@code GET /uma2/rreg/resource_set} — lists the ids <strong>this
+     * client</strong> registered (&sect;20.1).
+     *
+     * <p>Not the tenant's whole resource tree: a protection scope does not
+     * entitle a caller to enumerate it.
+     *
+     * @param pat the Protection API Token
+     * @return the registered resource set ids
+     */
+    List<UUID> umaListResources(Sensitive pat);
+
+    /**
+     * {@code POST /uma2/perm} — mints a permission ticket (&sect;20.1).
+     *
+     * <p>Scope names are validated <strong>here</strong>, against each
+     * resource's declared set. Asking for an undeclared scope is a
+     * {@code 400}, not a denial — the two are different failures, and this SDK
+     * surfaces the distinction the server draws rather than flattening it.
+     *
+     * @param pat         the Protection API Token
+     * @param permissions the pairs the resource server requires
+     * @return the opaque ticket
+     */
+    Sensitive umaRequestTicket(Sensitive pat, List<RequestedPermission> permissions);
+
+    /**
+     * {@code POST /oauth2/token} with the uma-ticket grant (&sect;20.1) —
+     * exchanges a ticket for an RPT.
+     *
+     * <p><strong>This method never retries.</strong> It issues exactly one
+     * request and is outside the &sect;16 retry policy — not on {@code 5xx},
+     * not on timeout, not on any transport failure (&sect;20.2 rule 6). The
+     * ticket is consumed <em>before</em> the request is evaluated, so a failed
+     * exchange has already spent it: a retry cannot succeed, and under
+     * concurrency it is precisely the second redemption that
+     * ilpanich/axiam#302's measured residual describes. On failure, request a
+     * <strong>new</strong> ticket.
+     *
+     * <p>What this method deliberately does not do:
+     * <ul>
+     *   <li><strong>No default {@code claimToken}</strong> (rule 2) — it is
+     *       required. Defaulting it to the resource server's own PAT would
+     *       mint an RPT for the resource server instead of for the user.</li>
+     *   <li><strong>No auto-narrowing on {@code access_denied}</strong>
+     *       (rule 3). A partial grant is refused whole.</li>
+     *   <li><strong>No adoption</strong> (rule 4). The RPT is the
+     *       <em>requesting party's</em> token.</li>
+     * </ul>
+     *
+     * <p>The four ticket refusals — unknown, expired, already used, wrong
+     * client — all answer {@code invalid_grant} with one message. This SDK
+     * does not try to tell them apart (&sect;20.4): the server collapses them
+     * so a caller cannot probe for live ticket handles.
+     *
+     * @param ticket        the permission ticket
+     * @param claimToken    the requesting party's access token
+     * @param tenantId      tenant UUID for the {@code tenant_id} query parameter, or {@code null}
+     * @param configuration a pre-fetched discovery document, or {@code null}
+     * @return the requesting party token
+     * @throws io.axiam.sdk.errors.AuthError client-side, with no wire call, when no client secret is configured
+     */
+    RequestingPartyToken umaExchangeTicket(Sensitive ticket, Sensitive claimToken,
+            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration);
+
+    // -----------------------------------------------------------------------
     // §12.7 Logout helpers
     // -----------------------------------------------------------------------
 
