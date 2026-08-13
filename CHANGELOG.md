@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **§15.7 external-IdP subject tokens (X4).** `tokenExchange` can now exchange a token minted by
+  a trusted external IdP — a partner's Entra, Okta or Keycloak — for an AXIAM token scoped to
+  what the resolved AXIAM user may actually do. No new operation: a new eight-argument
+  `OidcOperations.tokenExchange` overload taking `subjectTokenType`, plus the public
+  `OidcOperations.ACCESS_TOKEN_TYPE` / `JWT_TOKEN_TYPE` constants.
+
+  **Source- and binary-additive.** The existing seven-argument method becomes a `default` that
+  delegates with a `null` type, so every existing caller — and any other implementor of
+  `OidcOperations` — keeps compiling and keeps sending `…:access_token`.
+
+  **The type is the caller's to name, never the SDK's to guess.** §15.7 forbids inspecting the
+  subject token to pick it, because which kind of token you hold is something only you know and
+  a wrong guess is the difference between a request that is refused and one that is silently
+  reinterpreted. A JWT-shaped subject token does **not** change what is sent, which is asserted
+  by a test.
+
+  Also asserted: an `actorToken` alongside an external subject token surfaces `invalid_request`
+  with no retry and no request rewriting; a refused refresh or ID token type is never retried as
+  a different type; the one normative description — `the subject token's issuer is not
+  configured for token exchange`, meaning *fix the AXIAM trust config* rather than *fix your
+  token* — reaches the caller intact; and nothing re-exchanges an exchanged token, which both
+  server paths refuse because exchanges do not compose.
+
+  `CONTRACT.md` and `openapi.json` re-synced from `ilpanich/axiam@main` (contract 1.10 → 1.12
+  plus §15.7), which also brings contract 1.11's lifted §12.6 deferral, contract 1.12's
+  `/oauth2/*` error rows dispatching on the `error` field at any status, and the
+  `TokenExchangeTrust` schemas behind the X4 provider configuration.
+
 - **§20 UMA 2.0 — Protection API and ticket grant (contract 1.10).** New `OidcOperations`
   methods on `AxiamClient`: `umaRegisterResource` / `umaReadResource` / `umaUpdateResource` /
   `umaDeleteResource` / `umaListResources`, `umaRequestTicket`, `umaExchangeTicket`, plus the

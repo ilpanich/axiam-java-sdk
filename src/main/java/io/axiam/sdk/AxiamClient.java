@@ -1770,18 +1770,22 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /** {@code grant_type} of an RFC 8693 exchange. */
     private static final String TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
 
-    /** The only {@code subject_token_type}/{@code actor_token_type} AXIAM accepts. */
-    private static final String ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
-
     @Override
-    public ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable Sensitive actorToken,
+    public ExchangedToken tokenExchange(Sensitive subjectToken,
+            @Nullable String subjectTokenType, @Nullable Sensitive actorToken,
             @Nullable List<String> scopes, @Nullable String audience, @Nullable String resource,
             @Nullable UUID tenantId, @Nullable OidcConfiguration configuration) {
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         FormBody.Builder form = new FormBody.Builder()
                 .add("grant_type", TOKEN_EXCHANGE_GRANT_TYPE)
                 .add("subject_token", subjectToken.expose())
-                .add("subject_token_type", ACCESS_TOKEN_TYPE);
+                // Whatever the caller named, verbatim. The subject token is
+                // NEVER decoded to pick this (§15.7): which kind of token the
+                // caller holds is the caller's to know, and a guess here is
+                // the difference between a request that is refused and one
+                // that is silently reinterpreted.
+                .add("subject_token_type",
+                        subjectTokenType != null ? subjectTokenType : ACCESS_TOKEN_TYPE);
         if (actorToken != null) {
             form.add("actor_token", actorToken.expose());
             // Sent exactly when actor_token is: RFC 8693 §2.1 requires the
@@ -1822,7 +1826,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return the issued, narrower token
      */
     public ExchangedToken tokenExchange(Sensitive subjectToken) {
-        return tokenExchange(subjectToken, null, null, null, null, null, null);
+        return tokenExchange(subjectToken, null, null, null, null, null, null, null);
     }
 
     // -----------------------------------------------------------------------
