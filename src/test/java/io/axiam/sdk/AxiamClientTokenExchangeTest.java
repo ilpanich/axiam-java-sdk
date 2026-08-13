@@ -3,6 +3,7 @@ package io.axiam.sdk;
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.OAuthProtocolError;
 import io.axiam.sdk.oidc.ExchangedToken;
+import io.axiam.sdk.oidc.OidcOperations;
 import io.axiam.sdk.testutil.OidcTestSupport;
 
 import okhttp3.mockwebserver.MockResponse;
@@ -264,6 +265,211 @@ class AxiamClientTokenExchangeTest {
 
                 assertFalse(error.getMessage().contains(SUBJECT_TOKEN));
                 assertFalse(error.getMessage().contains(ACTOR_TOKEN));
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // §15.7 — external-IdP subject tokens (X4)
+    //
+    // No new operation: the same tokenExchange carries a partner IdP's token.
+    // What changes is which subject tokens the server accepts and what its
+    // refusals mean, so these tests are about not getting in the way of
+    // either.
+    // -----------------------------------------------------------------------
+
+    /**
+     * A token minted by a partner's IdP. Opaque to the SDK — deliberately not
+     * a well-formed JWT, because nothing here may decode it.
+     */
+    private static final String EXTERNAL_SUBJECT_TOKEN = "partner-idp-subject-token";
+
+    /**
+     * The one normative {@code error_description} (&sect;15.7). It means "fix
+     * the AXIAM trust configuration", not "fix your token".
+     */
+    private static final String ISSUER_NOT_CONFIGURED =
+            "the subject token's issuer is not configured for token exchange";
+
+    private static MockResponse oauthErrorWithDescription(String code, String description) {
+        return new MockResponse()
+                .setResponseCode(400)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"error\":\"" + code + "\",\"error_description\":\"" + description + "\"}");
+    }
+
+    @Test
+    void anExternalSubjectTokenTypeIsSentVerbatim() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(exchangeResponse("read:orders", false));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                ExchangedToken result = client.tokenExchange(
+                        Sensitive.of(EXTERNAL_SUBJECT_TOKEN), OidcOperations.JWT_TOKEN_TYPE,
+                        null, List.of("read:orders"), "https://orders.internal", null, null, null);
+
+                server.takeRequest();
+                String body = server.takeRequest().getBody().readUtf8();
+                // The caller named …:jwt, so …:jwt goes on the wire. §15.7:
+                // the SDK must not inspect the subject token to pick this,
+                // and must not override it.
+                assertTrue(body.contains("subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Ajwt"),
+                        "the caller's …:jwt must reach the wire, got: " + body);
+                assertTrue(body.contains("subject_token=" + EXTERNAL_SUBJECT_TOKEN));
+                // Delegation across a trust boundary is unsupported; nothing
+                // may add one.
+                assertFalse(body.contains("actor_token"),
+                        "§15.7: no actor_token may be invented for an external exchange");
+
+                // The cross-domain path is not a different result shape, and
+                // §15.2 rules 6-7 still hold.
+                assertEquals(ISSUED_TOKEN, result.accessToken().expose());
+                assertEquals("urn:ietf:params:oauth:token-type:access_token",
+                        result.issuedTokenType());
+                assertEquals("read:orders", result.scope());
+            }
+        }
+    }
+
+    @Test
+    void theSubjectTokenTypeIsNeverInferredFromTheToken() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(exchangeResponse("orders:read", false));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                // A subject token that *looks* exactly like a JWT. An SDK that
+                // sniffed the token would send …:jwt here; §15.7 says it must
+                // not look, so the caller's silence still means the §15.1
+                // same-domain default.
+                String jwtShaped =
+                        "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJodHRwczovL3BhcnRuZXIuZXhhbXBsZS8ifQ.sig";
+                client.tokenExchange(Sensitive.of(jwtShaped));
+
+                server.takeRequest();
+                String body = server.takeRequest().getBody().readUtf8();
+                assertTrue(body.contains(
+                        "subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"),
+                        "§15.7: the token's shape must not pick the type, got: " + body);
+            }
+        }
+    }
+
+    @Test
+    void anActorTokenWithAnExternalSubjectTokenIsRefusedWithoutRetry() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(oauthErrorWithDescription("invalid_request",
+                    "actor_token is not supported for an external subject token"));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
+                        () -> client.tokenExchange(Sensitive.of(EXTERNAL_SUBJECT_TOKEN),
+                                OidcOperations.JWT_TOKEN_TYPE, Sensitive.of(ACTOR_TOKEN),
+                                null, null, null, null, null));
+
+                assertEquals("invalid_request", error.error());
+                // §15.7: no retry, and no rewriting. Dropping the actor token
+                // and re-sending would turn a delegation the caller asked for
+                // into an impersonation they did not.
+                assertEquals(2, server.getRequestCount(), "discovery + exactly one exchange");
+                server.takeRequest();
+                String body = server.takeRequest().getBody().readUtf8();
+                assertTrue(body.contains("actor_token=" + ACTOR_TOKEN),
+                        "the request must be sent as written, actor token included");
+                assertTrue(body.contains("subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Ajwt"),
+                        "subject_token_type must not be rewritten");
+            }
+        }
+    }
+
+    @Test
+    void aRefusedSubjectTokenTypeIsNeverRetriedAsAnother() throws Exception {
+        // A refresh token is a re-authentication credential and an ID token is
+        // an assertion to a client about a login; neither is a bearer
+        // credential for an API, so both are refused BY NAME. Retrying as
+        // …:jwt would present one as if it were.
+        for (String refused : List.of("urn:ietf:params:oauth:token-type:refresh_token",
+                "urn:ietf:params:oauth:token-type:id_token")) {
+            try (MockWebServer server = new MockWebServer()) {
+                String base = server.url("/").toString();
+                server.enqueue(OidcTestSupport.discoveryResponse(base));
+                server.enqueue(oauthErrorWithDescription("invalid_request",
+                        "unsupported subject_token_type"));
+                server.start();
+
+                try (AxiamClient client = confidential(base).build()) {
+                    assertThrows(OAuthProtocolError.class,
+                            () -> client.tokenExchange(Sensitive.of(EXTERNAL_SUBJECT_TOKEN),
+                                    refused, null, null, null, null, null, null));
+
+                    assertEquals(2, server.getRequestCount(), "no retry after a refused type");
+                    server.takeRequest();
+                    String body = server.takeRequest().getBody().readUtf8();
+                    assertTrue(body.contains("subject_token_type="
+                                    + java.net.URLEncoder.encode(refused, "UTF-8")),
+                            "§15.7: the refused type must be sent as named, not swapped");
+                }
+            }
+        }
+    }
+
+    @Test
+    void theIssuerNotConfiguredDescriptionReachesTheCallerIntact() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(oauthErrorWithDescription("invalid_grant", ISSUER_NOT_CONFIGURED));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
+                        () -> client.tokenExchange(Sensitive.of(EXTERNAL_SUBJECT_TOKEN),
+                                OidcOperations.JWT_TOKEN_TYPE, null, null, null, null, null, null));
+
+                assertEquals("invalid_grant", error.error());
+                // This is the ONLY distinguishable external failure, and the
+                // whole point of it is that an integrator can tell "fix the
+                // AXIAM trust config" from "fix your token". Truncating or
+                // rewording it destroys that.
+                assertEquals(ISSUER_NOT_CONFIGURED, error.errorDescription());
+            }
+        }
+    }
+
+    @Test
+    void noHelperReExchangesAnExternallyExchangedToken() throws Exception {
+        // Tokens minted from an external subject token carry ext_exchange, and
+        // BOTH exchange paths refuse a subject token bearing it: exchanges do
+        // not compose. The SDK's part is to never feed a result back in by
+        // itself.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(exchangeResponse("read:orders", false));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                ExchangedToken result = client.tokenExchange(
+                        Sensitive.of(EXTERNAL_SUBJECT_TOKEN), OidcOperations.JWT_TOKEN_TYPE,
+                        null, null, null, null, null, null);
+
+                assertEquals(ISSUED_TOKEN, result.accessToken().expose());
+                // Exactly one exchange happened (plus discovery): nothing
+                // looped the result back in. §15.2 rule 5 is what stops it —
+                // had the result been adopted, the next exchange would carry
+                // it as a *subject* token, which is exactly the re-exchange
+                // §15.7 forbids, arrived at by accident rather than by
+                // decision.
+                assertEquals(2, server.getRequestCount(),
+                        "discovery + exactly one exchange — nothing re-exchanged the result");
             }
         }
     }

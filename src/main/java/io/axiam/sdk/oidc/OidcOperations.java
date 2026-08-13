@@ -234,6 +234,25 @@ public interface OidcOperations {
     // -----------------------------------------------------------------------
 
     /**
+     * The {@code actor_token_type} this SDK sends, and the
+     * {@code subject_token_type} it sends when the caller names none — an
+     * AXIAM-issued access token (&sect;15.1).
+     */
+    String ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
+
+    /**
+     * A JWT from a trusted external issuer — the cross-domain exchange of
+     * &sect;15.7.
+     *
+     * <p>Pass it as the {@code subjectTokenType} of
+     * {@link #tokenExchange(Sensitive, String, Sensitive, java.util.List, String, String, UUID, OidcConfiguration)}
+     * to exchange a partner IdP's token. AXIAM also accepts
+     * {@link #ACCESS_TOKEN_TYPE} for an external issuer, and refuses refresh
+     * and ID token types <strong>by name</strong>.
+     */
+    String JWT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt";
+
+    /**
      * {@code POST /oauth2/token} with the RFC 8693 grant (CONTRACT.md
      * &sect;15.1) — exchanges a token for a <strong>narrower</strong> one.
      *
@@ -268,9 +287,62 @@ public interface OidcOperations {
      * @return the issued, narrower token
      * @throws io.axiam.sdk.errors.AuthError client-side, with no wire call, when no client secret is configured
      */
-    ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable Sensitive actorToken,
+    default ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable Sensitive actorToken,
             @Nullable List<String> scopes, @Nullable String audience, @Nullable String resource,
-            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration);
+            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration) {
+        return tokenExchange(subjectToken, null, actorToken, scopes, audience, resource, tenantId,
+                configuration);
+    }
+
+    /**
+     * {@code POST /oauth2/token} with the RFC 8693 grant, naming what kind of
+     * token {@code subjectToken} is — the <strong>external-IdP</strong>
+     * exchange of CONTRACT.md &sect;15.7.
+     *
+     * <p>Same operation as the overload above, and every rule there still
+     * applies. &sect;15.7 adds no new operation: what changes is which subject
+     * tokens the server accepts and what its refusals mean. A partner runs
+     * their own IdP (Entra, Okta, Keycloak), their service calls yours
+     * carrying <em>their</em> token, and you present it here to get an AXIAM
+     * token scoped to what the resolved AXIAM user may actually do.
+     *
+     * <p><strong>{@code subjectTokenType} is yours to name, never the SDK's to
+     * guess.</strong> The SDK never reads {@code subjectToken} to decide it
+     * (&sect;15.7): which kind of token you hold is something only you know,
+     * and a wrong guess is the difference between a request that is refused
+     * and one that is silently reinterpreted. AXIAM refuses refresh and ID
+     * token types <em>by name</em>, and the SDK will not retry a refusal as a
+     * different type.
+     *
+     * <p><strong>{@code actorToken} must be {@code null} here.</strong>
+     * Delegation across a trust boundary is unsupported in v1 and is refused
+     * with {@code invalid_request} — which this SDK surfaces rather than
+     * working around by dropping the actor and re-sending.
+     *
+     * <p>One {@code error_description} is normative and worth matching on:
+     * {@code the subject token's issuer is not configured for token exchange},
+     * carried on {@code invalid_grant}. It is the <em>only</em> distinguishable
+     * external failure, and it means <em>fix the AXIAM trust configuration</em>
+     * rather than <em>fix your token</em>.
+     *
+     * @param subjectToken     the token being exchanged (&sect;15.5 secret)
+     * @param subjectTokenType what kind of token {@code subjectToken} is, or
+     *                         {@code null} for {@code …:access_token} — the
+     *                         same-domain exchange of &sect;15.1. Pass
+     *                         {@link #JWT_TOKEN_TYPE} for a partner IdP's JWT.
+     * @param actorToken       the acting party for a <em>delegation</em>, or {@code null} for impersonation
+     * @param scopes           scopes to request, or {@code null} to omit
+     * @param audience         the service the issued token is for, or {@code null}
+     * @param resource         the RFC 8707 synonym of {@code audience}, or {@code null}
+     * @param tenantId         tenant UUID for the {@code tenant_id} query parameter
+     * @param configuration    a pre-fetched discovery document, or {@code null}
+     * @return the issued token
+     * @throws io.axiam.sdk.errors.AuthError client-side, with no wire call, when no client secret is configured
+     */
+    ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable String subjectTokenType,
+            @Nullable Sensitive actorToken, @Nullable List<String> scopes,
+            @Nullable String audience, @Nullable String resource, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration);
 
     // -----------------------------------------------------------------------
     // §20 UMA 2.0 — Protection API and ticket grant
