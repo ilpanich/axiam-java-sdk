@@ -287,13 +287,6 @@ public interface OidcOperations {
      * @return the issued, narrower token
      * @throws io.axiam.sdk.errors.AuthError client-side, with no wire call, when no client secret is configured
      */
-    default ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable Sensitive actorToken,
-            @Nullable List<String> scopes, @Nullable String audience, @Nullable String resource,
-            @Nullable UUID tenantId, @Nullable OidcConfiguration configuration) {
-        return tokenExchange(subjectToken, null, actorToken, scopes, audience, resource, tenantId,
-                configuration);
-    }
-
     /**
      * {@code POST /oauth2/token} with the RFC 8693 grant, naming what kind of
      * token {@code subjectToken} is — the <strong>external-IdP</strong>
@@ -326,10 +319,14 @@ public interface OidcOperations {
      * rather than <em>fix your token</em>.
      *
      * @param subjectToken     the token being exchanged (&sect;15.5 secret)
-     * @param subjectTokenType what kind of token {@code subjectToken} is, or
-     *                         {@code null} for {@code …:access_token} — the
-     *                         same-domain exchange of &sect;15.1. Pass
-     *                         {@link #JWT_TOKEN_TYPE} for a partner IdP's JWT.
+     * @param subjectTokenType what kind of token {@code subjectToken} is.
+     *                         <strong>Required</strong> (&sect;15.1) — there is
+     *                         no default, because a default would be this SDK
+     *                         choosing which kind of credential you hold. Pass
+     *                         {@link #ACCESS_TOKEN_TYPE} for the same-domain
+     *                         exchange, or {@link #JWT_TOKEN_TYPE} for a
+     *                         partner IdP's JWT. {@code null} or blank is
+     *                         refused client-side, with no wire call.
      * @param actorToken       the acting party for a <em>delegation</em>, or {@code null} for impersonation
      * @param scopes           scopes to request, or {@code null} to omit
      * @param audience         the service the issued token is for, or {@code null}
@@ -339,7 +336,7 @@ public interface OidcOperations {
      * @return the issued token
      * @throws io.axiam.sdk.errors.AuthError client-side, with no wire call, when no client secret is configured
      */
-    ExchangedToken tokenExchange(Sensitive subjectToken, @Nullable String subjectTokenType,
+    ExchangedToken tokenExchange(Sensitive subjectToken, String subjectTokenType,
             @Nullable Sensitive actorToken, @Nullable List<String> scopes,
             @Nullable String audience, @Nullable String resource, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration);

@@ -459,7 +459,9 @@ before calling the next service.
 
 ```java
 ExchangedToken exchanged = client.tokenExchange(
-        Sensitive.of(userToken), null, List.of("orders:read"),
+        Sensitive.of(userToken),
+        OidcOperations.ACCESS_TOKEN_TYPE,   // required (§15.1), no default
+        null, List.of("orders:read"),
         "orders-service", null, null, null);
 ```
 
@@ -484,15 +486,15 @@ overload that lets you name what kind of token you hold:
 ```java
 ExchangedToken exchanged = client.tokenExchange(
         Sensitive.of(partnerToken),
-        OidcOperations.JWT_TOKEN_TYPE,   // named, never guessed
+        OidcOperations.JWT_TOKEN_TYPE,   // required; named, never guessed
         null,                            // no actor token, ever, here
         List.of("read:orders"), "https://orders.internal", null, null, null);
 ```
 
-- **`subjectTokenType` is yours to state.** The SDK never decodes the subject
-  token to pick it, and never overrides what you named. The seven-argument
-  overload still sends `OidcOperations.ACCESS_TOKEN_TYPE`, the same-domain
-  exchange above.
+- **`subjectTokenType` is yours to state, and is required** (§15.1). The SDK
+  never decodes the subject token to pick it, and never overrides what you
+  named. There is no default: `null` or blank is refused client-side with no
+  wire call, because a default would be the SDK choosing for you.
 - **No actor token.** Delegation across a trust boundary is unsupported in v1;
   sending one is `invalid_request`, which the SDK will not work around by
   dropping it and re-sending.
