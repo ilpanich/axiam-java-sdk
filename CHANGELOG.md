@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (contract 1.13): `tokenExchange`'s `subjectTokenType` is now required**, and the
+  seven-argument overload that defaulted it is **removed**.
+
+  It shipped as a `default` method delegating with a `null` type — which satisfied §15.7's
+  "never inspect the subject token" while leaving the rule it serves unenforced: an overload
+  that fills the argument in *is* a default the SDK applies whenever the caller says nothing.
+  §15.1 now makes it required, so the overload had to go rather than be deprecated: it was the
+  default, in method form.
+
+  The one-argument convenience `tokenExchange(Sensitive)` becomes
+  `tokenExchange(Sensitive, String)` for the same reason — it was the shortest path to the very
+  default being removed, since a caller reaching for the convenience form would have had the
+  type chosen for them.
+
+  Java cannot demand a non-null argument at compile time, so the demand lands at the call:
+  `null` or blank throws `AuthError` **client-side, with no wire call** — not even discovery —
+  naming the argument and both constants.
+
+  **Migration** — one argument, naming what you were previously getting by silence:
+
+  ```java
+  ExchangedToken exchanged = client.tokenExchange(
+          Sensitive.of(userToken),
+          OidcOperations.ACCESS_TOKEN_TYPE,   // <- add this
+          null, List.of("orders:read"), "orders-service", null, null, null);
+  ```
+
+  Implementors of `OidcOperations` other than `AxiamClient` lose an inherited method and must
+  implement the eight-argument form.
+
+  This closes a gap rather than opening one: `subject_token_type` has always been required *on
+  the wire*, and the SDK was covering for that with a constant which stopped being the only
+  legal value when X4 landed.
+
 ### Added
 
 - **§15.7 external-IdP subject tokens (X4).** `tokenExchange` can now exchange a token minted by
@@ -15,9 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OidcOperations.tokenExchange` overload taking `subjectTokenType`, plus the public
   `OidcOperations.ACCESS_TOKEN_TYPE` / `JWT_TOKEN_TYPE` constants.
 
-  **Source- and binary-additive.** The existing seven-argument method becomes a `default` that
-  delegates with a `null` type, so every existing caller — and any other implementor of
-  `OidcOperations` — keeps compiling and keeps sending `…:access_token`.
+  (This shipped as a source- and binary-additive overload with an `…:access_token` default;
+  contract 1.13 removed both the default and the overload — see *Changed* above.)
 
   **The type is the caller's to name, never the SDK's to guess.** §15.7 forbids inspecting the
   subject token to pick it, because which kind of token you hold is something only you know and

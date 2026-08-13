@@ -68,7 +68,7 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), null,
+                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE, null,
                         List.of("orders:read", "orders:write"), "orders-service", null, null, null);
 
                 server.takeRequest();
@@ -98,7 +98,7 @@ class AxiamClientTokenExchangeTest {
 
             try (AxiamClient client = AxiamClient.builder(base, TENANT_ID).oidcClientId("api-gateway").build()) {
                 assertThrows(AuthError.class,
-                        () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN)));
+                        () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE));
                 // Only discovery went out.
                 assertEquals(1, server.getRequestCount());
             }
@@ -114,7 +114,7 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                client.tokenExchange(Sensitive.of(SUBJECT_TOKEN));
+                client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE);
 
                 server.takeRequest();
                 String body = server.takeRequest().getBody().readUtf8();
@@ -137,7 +137,8 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), Sensitive.of(ACTOR_TOKEN),
+                client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE,
+                                Sensitive.of(ACTOR_TOKEN),
                         null, null, null, null, null);
 
                 server.takeRequest();
@@ -166,7 +167,7 @@ class AxiamClientTokenExchangeTest {
 
                 try (AxiamClient client = confidential(base).build()) {
                     OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
-                            () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), null,
+                            () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE, null,
                                     List.of("orders:read", "orders:admin"), null, null, null, null));
 
                     assertEquals(code, error.error());
@@ -191,7 +192,7 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN));
+                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE);
                 assertFalse(result.toString().contains("should-not-exist"));
                 assertEquals(ISSUED_TOKEN, result.accessToken().expose());
             }
@@ -207,7 +208,7 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), null,
+                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE, null,
                         List.of("orders:read", "orders:write"), null, null, null, null);
 
                 // §15.2 rule 7: the response scope is the GRANTED set and may
@@ -226,7 +227,7 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                assertNull(client.tokenExchange(Sensitive.of(SUBJECT_TOKEN)).scope());
+                assertNull(client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE).scope());
             }
         }
     }
@@ -240,7 +241,7 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN));
+                ExchangedToken result = client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE);
                 assertFalse(result.toString().contains(ISSUED_TOKEN),
                         "§15.5: the issued token is a bearer credential and must not render");
                 assertFalse(result.accessToken().toString().contains(ISSUED_TOKEN));
@@ -260,7 +261,8 @@ class AxiamClientTokenExchangeTest {
 
             try (AxiamClient client = confidential(base).build()) {
                 OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
-                        () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), Sensitive.of(ACTOR_TOKEN),
+                        () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE,
+                                Sensitive.of(ACTOR_TOKEN),
                                 null, null, null, null, null));
 
                 assertFalse(error.getMessage().contains(SUBJECT_TOKEN));
@@ -343,19 +345,49 @@ class AxiamClientTokenExchangeTest {
             server.start();
 
             try (AxiamClient client = confidential(base).build()) {
-                // A subject token that *looks* exactly like a JWT. An SDK that
-                // sniffed the token would send …:jwt here; §15.7 says it must
-                // not look, so the caller's silence still means the §15.1
-                // same-domain default.
+                // A subject token that *looks* exactly like a JWT, presented as
+                // an access token. An SDK that sniffed the token would
+                // "correct" this to …:jwt; §15.7 says it must not look, so what
+                // the caller named is what goes out. Being able to hold this
+                // wrong is the point: only the caller knows.
                 String jwtShaped =
                         "eyJhbGciOiJFZERTQSJ9.eyJpc3MiOiJodHRwczovL3BhcnRuZXIuZXhhbXBsZS8ifQ.sig";
-                client.tokenExchange(Sensitive.of(jwtShaped));
+                client.tokenExchange(Sensitive.of(jwtShaped), OidcOperations.ACCESS_TOKEN_TYPE);
 
                 server.takeRequest();
                 String body = server.takeRequest().getBody().readUtf8();
                 assertTrue(body.contains(
                         "subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"),
-                        "§15.7: the token's shape must not pick the type, got: " + body);
+                        "§15.7: the token's shape must not override the caller, got: " + body);
+            }
+        }
+    }
+
+    @Test
+    void anOmittedSubjectTokenTypeNeverReachesTheWire() throws Exception {
+        // §15.1: the type is REQUIRED and has no default. Java cannot demand a
+        // non-null argument at compile time, so the demand lands at the call —
+        // client-side, with no wire call. Sending …:access_token instead would
+        // be the SDK choosing on the caller's behalf, which §15.7 forbids; and
+        // for a caller who actually held a refresh token it would trade the
+        // invalid_request that NAMES the type for a generic invalid_grant.
+        for (String omitted : new String[] {null, "", "   "}) {
+            try (MockWebServer server = new MockWebServer()) {
+                String base = server.url("/").toString();
+                server.enqueue(OidcTestSupport.discoveryResponse(base));
+                server.start();
+
+                try (AxiamClient client = confidential(base).build()) {
+                    AuthError error = assertThrows(AuthError.class,
+                            () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), omitted));
+
+                    assertEquals(0, server.getRequestCount(),
+                            "not even discovery: the refusal precedes every wire call");
+                    // The message has to name the way out, or the caller has to
+                    // go read §15.1 to find it.
+                    assertTrue(error.getMessage().contains("subjectTokenType"),
+                            "the error should name the missing argument, got: " + error.getMessage());
+                }
             }
         }
     }

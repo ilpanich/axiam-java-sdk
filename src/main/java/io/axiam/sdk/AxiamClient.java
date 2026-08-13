@@ -1772,9 +1772,19 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     @Override
     public ExchangedToken tokenExchange(Sensitive subjectToken,
-            @Nullable String subjectTokenType, @Nullable Sensitive actorToken,
+            String subjectTokenType, @Nullable Sensitive actorToken,
             @Nullable List<String> scopes, @Nullable String audience, @Nullable String resource,
             @Nullable UUID tenantId, @Nullable OidcConfiguration configuration) {
+        // §15.1: subjectTokenType is required and has no default. Java cannot
+        // demand a non-null argument at compile time, so the demand lands here —
+        // client-side, with no wire call, rather than sending …:access_token on
+        // the caller's behalf and letting the server refuse a token they never
+        // described (§15.7).
+        if (subjectTokenType == null || subjectTokenType.isBlank()) {
+            throw new AuthError("tokenExchange requires subjectTokenType (§15.1): pass "
+                    + "OidcOperations.ACCESS_TOKEN_TYPE for an AXIAM access token, or "
+                    + "OidcOperations.JWT_TOKEN_TYPE for a trusted external issuer's JWT");
+        }
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         FormBody.Builder form = new FormBody.Builder()
                 .add("grant_type", TOKEN_EXCHANGE_GRANT_TYPE)
@@ -1784,8 +1794,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 // caller holds is the caller's to know, and a guess here is
                 // the difference between a request that is refused and one
                 // that is silently reinterpreted.
-                .add("subject_token_type",
-                        subjectTokenType != null ? subjectTokenType : ACCESS_TOKEN_TYPE);
+                .add("subject_token_type", subjectTokenType);
         if (actorToken != null) {
             form.add("actor_token", actorToken.expose());
             // Sent exactly when actor_token is: RFC 8693 §2.1 requires the
@@ -1820,13 +1829,21 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
     }
 
-    /** {@link #tokenExchange} with every optional argument defaulted.
+    /** {@link #tokenExchange} with every <em>optional</em> argument defaulted.
      *
-     * @param subjectToken the token being exchanged
+     * <p>{@code subjectTokenType} is not among them. It was, through contract
+     * 1.12, and this overload took only the subject token — which made it the
+     * shortest path to the very default &sect;15.1 removed, since a caller
+     * reaching for the convenience form would have had the type chosen for
+     * them. It now takes both required arguments and nothing else.
+     *
+     * @param subjectToken     the token being exchanged
+     * @param subjectTokenType what kind of token it is — {@link OidcOperations#ACCESS_TOKEN_TYPE}
+     *                         or {@link OidcOperations#JWT_TOKEN_TYPE} (&sect;15.1)
      * @return the issued, narrower token
      */
-    public ExchangedToken tokenExchange(Sensitive subjectToken) {
-        return tokenExchange(subjectToken, null, null, null, null, null, null, null);
+    public ExchangedToken tokenExchange(Sensitive subjectToken, String subjectTokenType) {
+        return tokenExchange(subjectToken, subjectTokenType, null, null, null, null, null, null);
     }
 
     // -----------------------------------------------------------------------
