@@ -401,125 +401,6 @@ public final class JwksVerifier {
      *                    after a forced refetch on an unknown {@code kid}),
      *                    or the signature is invalid
      */
-    /**
-     * {@link #verifyAccessToken} plus CONTRACT.md §10.1 <b>rule 9</b> — the sender
-     * constraint (RFC 8705 §3 / RFC 7800, contract 1.15).
-     *
-     * <p>This is the guard entry point for a resource server that accepts
-     * <b>certificate-bound</b> access tokens. Pass the {@code x5t#S256} thumbprint of the
-     * client certificate on the current connection, or {@code null} if there is none;
-     * {@link #certificateThumbprintS256} computes it from DER bytes.
-     *
-     * <p>A separate method rather than a parameter on {@link #verifyAccessToken} because
-     * the two have different <i>inputs</i>: most integrations have no transport-level
-     * certificate to offer, and folding the thumbprint in would force every caller to
-     * thread a {@code null} they do not have — which reads as "no certificate" and rejects
-     * every bound token.
-     *
-     * <p><b>An unbound token is still accepted</b> here, with or without a certificate.
-     * Rule 9 constrains tokens that claim a constraint; it does not make certificates
-     * mandatory.
-     *
-     * @param token the caller's access token
-     * @param expectedTenantId as {@link #verifyAccessToken}
-     * @param presentedThumbprint the RFC 8705 §3.1 {@code x5t#S256} of the peer
-     *     certificate on this connection, or {@code null}
-     * @throws AuthError on any rule violation, rules 1–8 and 9 alike
-     */
-    public JWTClaimsSet verifySenderConstrained(
-            String token, @Nullable String expectedTenantId, @Nullable String presentedThumbprint) {
-        JWTClaimsSet claims = verifyAccessToken(token, expectedTenantId);
-        verifyCertificateBinding(claims, presentedThumbprint);
-        return claims;
-    }
-
-    /**
-     * CONTRACT.md §10.1 <b>rule 9</b> — enforce a token's sender constraint against the
-     * certificate the caller presented on <b>this</b> connection.
-     *
-     * <p>A token carrying {@code cnf} is <b>not</b> a bearer token. Accepting one without
-     * proving the caller holds the named key converts it straight back into one,
-     * discarding the whole protection the operator turned on — which is why this is a rule
-     * and not a recommendation.
-     *
-     * <p>The four cases:
-     *
-     * <table>
-     *   <caption>Rule 9 decision table</caption>
-     *   <tr><th>token's {@code cnf}</th><th>presented</th><th>result</th></tr>
-     *   <tr><td>absent</td><td>anything</td><td>returns — an ordinary bearer token</td></tr>
-     *   <tr><td>{@code x5t#S256}</td><td>equal</td><td>returns</td></tr>
-     *   <tr><td>{@code x5t#S256}</td><td>different, or null</td><td>throws</td></tr>
-     *   <tr><td>present, no {@code x5t#S256}</td><td>anything</td><td>throws</td></tr>
-     * </table>
-     *
-     * <p>The first row is why adopting this rule breaks nothing. The last row is the one
-     * that is easy to get wrong — a {@code cnf} naming a method this SDK cannot check is an
-     * <i>unverifiable constraint</i>, never <i>no constraint</i>. Read the other way, a
-     * sender-constrained token silently degrades to a bearer token the day a newer AXIAM
-     * issues a confirmation this SDK predates.
-     *
-     * <p><b>The thumbprint must come from the transport</b> — the TLS peer certificate
-     * (under a servlet container, {@code jakarta.servlet.request.X509Certificate}), or a
-     * value a <i>trusted</i> terminating proxy forwarded over a channel your application
-     * controls. Never from a caller-settable request header: a forgeable input makes the
-     * whole mechanism decorative.
-     *
-     * @throws AuthError on any of the three rejecting rows
-     */
-    public static void verifyCertificateBinding(
-            JWTClaimsSet claims, @Nullable String presentedThumbprint) {
-        Object cnf = claims.getClaim("cnf");
-        if (cnf == null) {
-            return;
-        }
-        if (!(cnf instanceof Map<?, ?> cnfMap)) {
-            throw new AuthError("token cnf claim is malformed");
-        }
-
-        Object expected = cnfMap.get("x5t#S256");
-        if (!(expected instanceof String expectedThumbprint) || expectedThumbprint.isEmpty()) {
-            throw new AuthError(
-                    "token carries a cnf confirmation naming a method this SDK cannot verify "
-                            + "(CONTRACT.md §10.1 rule 9 — an unverifiable constraint is not an "
-                            + "absent one)");
-        }
-        if (presentedThumbprint == null || presentedThumbprint.isEmpty()) {
-            throw new AuthError(
-                    "token is certificate-bound but no client certificate was presented");
-        }
-        // Constant-time. The thumbprint is usually public — it derives from a certificate
-        // sent in the clear during the handshake — so this is defence in depth. It matters
-        // most for a self-signed client, where the registered thumbprint is the whole
-        // credential.
-        if (!MessageDigest.isEqual(
-                expectedThumbprint.getBytes(StandardCharsets.UTF_8),
-                presentedThumbprint.getBytes(StandardCharsets.UTF_8))) {
-            throw new AuthError(
-                    "token is bound to a different client certificate than the one presented");
-        }
-    }
-
-    /**
-     * Compute the RFC 8705 §3.1 {@code x5t#S256} thumbprint of a DER client certificate:
-     * base64url-encoded SHA-256, <b>without</b> padding.
-     *
-     * <p>Unpadded is not a style choice — RFC 7515 §2 defines base64url in JOSE as omitting
-     * {@code =}, and a padded value will not compare equal to what AXIAM put in the token.
-     *
-     * @param der the DER encoding of the peer's leaf certificate
-     *     ({@code X509Certificate.getEncoded()})
-     */
-    public static String certificateThumbprintS256(byte[] der) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(der);
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
-        } catch (NoSuchAlgorithmException e) {
-            // SHA-256 is mandatory in every conforming JRE (JCA standard names).
-            throw new IllegalStateException("SHA-256 unavailable", e);
-        }
-    }
-
     public JWTClaimsSet verifySignatureOnlyUnchecked(String token) {
         // Algorithm pinning FIRST, straight off the raw JOSE header and
         // before any JWS parsing or JWKS lookup (CONTRACT.md §10.1 rule 1,
@@ -575,6 +456,131 @@ public final class JwksVerifier {
             throw new AuthError("malformed claims: " + e.getMessage());
         }
     }
+
+    /**
+     * {@link #verifyAccessToken} plus CONTRACT.md §10.1 <b>rule 9</b> — the sender
+     * constraint (RFC 8705 §3 / RFC 7800, contract 1.15).
+     *
+     * <p>This is the guard entry point for a resource server that accepts
+     * <b>certificate-bound</b> access tokens. Pass the {@code x5t#S256} thumbprint of the
+     * client certificate on the current connection, or {@code null} if there is none;
+     * {@link #certificateThumbprintS256} computes it from DER bytes.
+     *
+     * <p>A separate method rather than a parameter on {@link #verifyAccessToken} because
+     * the two have different <i>inputs</i>: most integrations have no transport-level
+     * certificate to offer, and folding the thumbprint in would force every caller to
+     * thread a {@code null} they do not have — which reads as "no certificate" and rejects
+     * every bound token.
+     *
+     * <p><b>An unbound token is still accepted</b> here, with or without a certificate.
+     * Rule 9 constrains tokens that claim a constraint; it does not make certificates
+     * mandatory.
+     *
+     * @param token the caller's access token
+     * @param expectedTenantId as {@link #verifyAccessToken}
+     * @param presentedThumbprint the RFC 8705 §3.1 {@code x5t#S256} of the peer
+     *     certificate on this connection, or {@code null}
+     * @return the token's claims, once rules 1-9 have all passed
+     * @throws AuthError on any rule violation, rules 1–8 and 9 alike
+     */
+    public JWTClaimsSet verifySenderConstrained(
+            String token, @Nullable String expectedTenantId, @Nullable String presentedThumbprint) {
+        JWTClaimsSet claims = verifyAccessToken(token, expectedTenantId);
+        verifyCertificateBinding(claims, presentedThumbprint);
+        return claims;
+    }
+
+    /**
+     * CONTRACT.md §10.1 <b>rule 9</b> — enforce a token's sender constraint against the
+     * certificate the caller presented on <b>this</b> connection.
+     *
+     * <p>A token carrying {@code cnf} is <b>not</b> a bearer token. Accepting one without
+     * proving the caller holds the named key converts it straight back into one,
+     * discarding the whole protection the operator turned on — which is why this is a rule
+     * and not a recommendation.
+     *
+     * <p>The four cases:
+     *
+     * <table>
+     *   <caption>Rule 9 decision table</caption>
+     *   <tr><th>token's {@code cnf}</th><th>presented</th><th>result</th></tr>
+     *   <tr><td>absent</td><td>anything</td><td>returns — an ordinary bearer token</td></tr>
+     *   <tr><td>{@code x5t#S256}</td><td>equal</td><td>returns</td></tr>
+     *   <tr><td>{@code x5t#S256}</td><td>different, or null</td><td>throws</td></tr>
+     *   <tr><td>present, no {@code x5t#S256}</td><td>anything</td><td>throws</td></tr>
+     * </table>
+     *
+     * <p>The first row is why adopting this rule breaks nothing. The last row is the one
+     * that is easy to get wrong — a {@code cnf} naming a method this SDK cannot check is an
+     * <i>unverifiable constraint</i>, never <i>no constraint</i>. Read the other way, a
+     * sender-constrained token silently degrades to a bearer token the day a newer AXIAM
+     * issues a confirmation this SDK predates.
+     *
+     * <p><b>The thumbprint must come from the transport</b> — the TLS peer certificate
+     * (under a servlet container, {@code jakarta.servlet.request.X509Certificate}), or a
+     * value a <i>trusted</i> terminating proxy forwarded over a channel your application
+     * controls. Never from a caller-settable request header: a forgeable input makes the
+     * whole mechanism decorative.
+     *
+     * @param claims the verified claims of the token being guarded
+     * @param presentedThumbprint the RFC 8705 §3.1 {@code x5t#S256} of the peer
+     *     certificate on this connection, or {@code null} when there is none
+     * @throws AuthError on any of the three rejecting rows
+     */
+    public static void verifyCertificateBinding(
+            JWTClaimsSet claims, @Nullable String presentedThumbprint) {
+        Object cnf = claims.getClaim("cnf");
+        if (cnf == null) {
+            return;
+        }
+        if (!(cnf instanceof Map<?, ?> cnfMap)) {
+            throw new AuthError("token cnf claim is malformed");
+        }
+
+        Object expected = cnfMap.get("x5t#S256");
+        if (!(expected instanceof String expectedThumbprint) || expectedThumbprint.isEmpty()) {
+            throw new AuthError(
+                    "token carries a cnf confirmation naming a method this SDK cannot verify "
+                            + "(CONTRACT.md §10.1 rule 9 — an unverifiable constraint is not an "
+                            + "absent one)");
+        }
+        if (presentedThumbprint == null || presentedThumbprint.isEmpty()) {
+            throw new AuthError(
+                    "token is certificate-bound but no client certificate was presented");
+        }
+        // Constant-time. The thumbprint is usually public — it derives from a certificate
+        // sent in the clear during the handshake — so this is defence in depth. It matters
+        // most for a self-signed client, where the registered thumbprint is the whole
+        // credential.
+        if (!MessageDigest.isEqual(
+                expectedThumbprint.getBytes(StandardCharsets.UTF_8),
+                presentedThumbprint.getBytes(StandardCharsets.UTF_8))) {
+            throw new AuthError(
+                    "token is bound to a different client certificate than the one presented");
+        }
+    }
+
+    /**
+     * Compute the RFC 8705 §3.1 {@code x5t#S256} thumbprint of a DER client certificate:
+     * base64url-encoded SHA-256, <b>without</b> padding.
+     *
+     * <p>Unpadded is not a style choice — RFC 7515 §2 defines base64url in JOSE as omitting
+     * {@code =}, and a padded value will not compare equal to what AXIAM put in the token.
+     *
+     * @param der the DER encoding of the peer's leaf certificate
+     *     ({@code X509Certificate.getEncoded()})
+     * @return the 43-character base64url thumbprint
+     */
+    public static String certificateThumbprintS256(byte[] der) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(der);
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is mandatory in every conforming JRE (JCA standard names).
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
 
     /**
      * CONTRACT.md &sect;12.4 rules 1&ndash;2 entry point for OIDC ID-token
