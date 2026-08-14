@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -544,5 +545,133 @@ class JwksVerifierLocalVerificationSetTest {
         });
         server.start();
         return server;
+    }
+
+    // --- Rule 9: sender-constrained (certificate-bound) access tokens -------------
+    //
+    // CONTRACT.md §10.1 rule 9 (contract 1.15, RFC 8705 §3 / RFC 7800). A token carrying
+    // `cnf` is not a bearer token and must not be accepted as one.
+    //
+    // Three negatives and one positive. The POSITIVE is the one that matters most: rule 9
+    // must not become "every caller must present a certificate", which would break every
+    // deployment that does not use mTLS at all.
+
+    /** A real 43-character base64url x5t#S256, and a different one. */
+    private static final String THUMBPRINT = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+    private static final String OTHER_THUMBPRINT = "bWluZS1ub3QteW91cnMtdGhpcy1pcy00My1jaGFyc18";
+
+    private static JWTClaimsSet boundClaims(String thumbprint) {
+        return validClaims().claim("cnf", Map.of("x5t#S256", thumbprint)).build();
+    }
+
+    /** The regression test that keeps rule 9 from becoming a certificate mandate. */
+    @Test
+    void rule9UnboundTokenIsAcceptedWithOrWithoutACertificate() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair();
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            String token = signEdDsa(keyPair, validClaims().build());
+
+            assertDoesNotThrow(() -> verifier.verifySenderConstrained(token, TENANT, null));
+            assertDoesNotThrow(() -> verifier.verifySenderConstrained(token, TENANT, THUMBPRINT));
+        }
+    }
+
+    @Test
+    void rule9BoundTokenIsAcceptedWithItsOwnCertificate() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair();
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            String token = signEdDsa(keyPair, boundClaims(THUMBPRINT));
+
+            JWTClaimsSet claims = verifier.verifySenderConstrained(token, TENANT, THUMBPRINT);
+
+            assertEquals("user-1", claims.getSubject());
+        }
+    }
+
+    @Test
+    void rule9BoundTokenIsRejectedWithNoCertificate() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair();
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            String token = signEdDsa(keyPair, boundClaims(THUMBPRINT));
+
+            AuthError e = assertThrows(
+                    AuthError.class, () -> verifier.verifySenderConstrained(token, TENANT, null));
+            assertTrue(e.getMessage().contains("no client certificate was presented"));
+        }
+    }
+
+    @Test
+    void rule9BoundTokenIsRejectedWithADifferentCertificate() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair();
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            String token = signEdDsa(keyPair, boundClaims(THUMBPRINT));
+
+            AuthError e = assertThrows(
+                    AuthError.class,
+                    () -> verifier.verifySenderConstrained(token, TENANT, OTHER_THUMBPRINT));
+            assertTrue(e.getMessage().contains("different client certificate"));
+        }
+    }
+
+    /**
+     * The subtle one. A {@code cnf} naming a confirmation method this SDK cannot check is
+     * an unverifiable constraint, never <i>no</i> constraint — read the other way, a
+     * sender-constrained token silently degrades to a bearer token the day a newer AXIAM
+     * issues a confirmation this SDK predates.
+     */
+    @Test
+    void rule9UnverifiableConfirmationIsRejectedNotIgnored() {
+        JWTClaimsSet dpopish = validClaims()
+                .claim("cnf", Map.of("jkt", "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"))
+                .build();
+
+        for (String presented : new String[] {null, THUMBPRINT}) {
+            AuthError e = assertThrows(
+                    AuthError.class,
+                    () -> JwksVerifier.verifyCertificateBinding(dpopish, presented));
+            assertTrue(e.getMessage().contains("cannot verify"), e.getMessage());
+        }
+    }
+
+    /**
+     * {@code verifyAccessToken} deliberately does not apply rule 9 — it has no transport to
+     * ask for a peer certificate. Asserted so the split cannot be collapsed by accident.
+     */
+    @Test
+    void rule9VerifyAccessTokenDoesNotApplyIt() throws Exception {
+        OctetKeyPair keyPair = generateEd25519KeyPair();
+        try (MockWebServer server = startJwksServer(keyPair)) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            String token = signEdDsa(keyPair, boundClaims(THUMBPRINT));
+
+            JWTClaimsSet claims = verifier.verifyAccessToken(token, TENANT);
+
+            assertDoesNotThrow(() -> JwksVerifier.verifyCertificateBinding(claims, THUMBPRINT));
+            assertThrows(
+                    AuthError.class, () -> JwksVerifier.verifyCertificateBinding(claims, null));
+        }
+    }
+
+    /**
+     * RFC 7515 §2 base64url: unpadded, {@code -}/{@code _} rather than {@code +}/{@code /}.
+     * A padded or standard-base64 value will not compare equal to what AXIAM put in the
+     * token.
+     */
+    @Test
+    void rule9ThumbprintHelperProducesUnpaddedBase64Url() {
+        byte[] der = new byte[512];
+        java.util.Arrays.fill(der, (byte) 0x42);
+
+        String tp = JwksVerifier.certificateThumbprintS256(der);
+
+        assertEquals(43, tp.length());
+        assertFalse(tp.contains("="));
+        assertFalse(tp.contains("+"));
+        assertFalse(tp.contains("/"));
+        assertEquals(tp, JwksVerifier.certificateThumbprintS256(der));
     }
 }
