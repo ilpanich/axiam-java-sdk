@@ -171,9 +171,13 @@ public final class GrpcAuthzClient implements AutoCloseable {
     /** The outcome of a single authorization check (mirrors {@code CheckAccessResponse}).
      *
      * @param allowed whether the checked action is permitted
-     * @param reason  a human-readable deny reason, or {@code null} when {@code allowed}
+     * @param reason  a human-readable deny reason, or {@code null} when {@code allowed} is
+     *                {@code true} or the server did not supply one. Sourced from the wire
+     *                response's {@code reason} (field 4, contract 1.19), falling back to the
+     *                deprecated {@code deny_reason} (field 2) only when {@code reason} is absent
+     *                (CONTRACT.md &sect;11.2 rule 9, SDK-Q10). This is the SDK's ONE reason
+     *                accessor; {@code deny_reason} is never exposed on the public surface
      * @param reasonCode machine-readable decision reason (CONTRACT.md &sect;11 rule 9, B1 deny-override): {@code "allowed"}, {@code "no_grant"} or {@code "denied_by_rule"}. <strong>The two refusals mean opposite things to the person on the other end</strong> — {@code no_grant} says <em>ask an admin for access</em>, {@code denied_by_rule} says <em>an admin has already decided</em> — which is why the contract forbids collapsing them into a bare {@code false}. {@code null} when the server omits the field, so a newer SDK against an older server degrades rather than failing. An unrecognised value is surfaced verbatim and never changes {@code allowed}, which is why this is a {@code String} rather than an enum
-     *                is {@code true} or the server did not supply one
      */
     public record AccessResult(boolean allowed, @Nullable String reason, @Nullable String reasonCode) {
     }
@@ -540,11 +544,27 @@ public final class GrpcAuthzClient implements AutoCloseable {
     }
 
     private static AccessResult toAccessResult(CheckAccessResponse resp) {
-        String reason = resp.getDenyReason();
-        // proto3 renders an unset string as "", so an older server that never
-        // set field 3 is indistinguishable from one that set it empty — both
-        // mean "no reason code", and both map to null rather than to "",
-        // which would be a value callers could accidentally branch on.
+        // SDK-Q10 / CONTRACT.md §11.2 rule 9 (contract 1.19): read `reason`
+        // (field 4), falling back to the deprecated `deny_reason` (field 2)
+        // only when `reason` is absent. `reason` has explicit presence
+        // precisely so a client can tell a pre-SDK-Q10 server (refuses with
+        // `reason` unset and `deny_reason` populated) from an allow (nothing
+        // to say) — which is why the fallback is guarded by `hasReason()`
+        // rather than by an emptiness/truthiness check: an explicitly-empty
+        // `reason` must NOT fall back to `deny_reason`. Both fields carry the
+        // identical string on a current server; `deny_reason` is removed at
+        // AXIAM 2.0, at which point this fallback arm — and the
+        // `@SuppressWarnings("deprecation")` it needs — goes with it.
+        // Callers see one `reason` accessor on {@link AccessResult}, never
+        // two.
+        @SuppressWarnings("deprecation")
+        String reason = resp.hasReason() ? resp.getReason() : resp.getDenyReason();
+        // An empty value becomes null rather than "" — the same rule
+        // reasonCode follows below, and for the same reason: "" is a value
+        // callers could accidentally branch on.
+        // proto3 renders an unset `string` as "", so an older server that
+        // never set field 3 is indistinguishable from one that set it empty —
+        // both mean "no reason code", and both map to null rather than to "".
         String reasonCode = resp.getReasonCode();
         return new AccessResult(
                 resp.getAllowed(),
