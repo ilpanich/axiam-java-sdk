@@ -18,10 +18,15 @@ import java.util.Set;
  * logical request once, the correct layer for business-logic header
  * injection and proactive refresh.
  *
- * <p>Every request gets {@code X-Tenant-Id} (&sect;5); a bearer token is
- * added when one is cached; the stored CSRF token is echoed on
+ * <p>Every same-host request gets {@code X-Tenant-Id} (&sect;5); a bearer
+ * token is added when one is cached; the stored CSRF token is echoed on
  * POST/PUT/PATCH/DELETE (&sect;3); a fresh {@code X-CSRF-Token} response
- * header is captured for the next request.
+ * header is captured for the next request. A discovery-document-derived
+ * {@code /oauth2/*} request also gets {@code X-Tenant-Id} even when its host
+ * differs from {@code base_url} (CONTRACT.md &sect;12.1 note 2 calls the
+ * header unconditional there) — but never the bearer/CSRF headers, which
+ * stay strictly same-host per &sect;3A (follow-up F-15, T9 conformance
+ * review).
  *
  * <p>The proactive-refresh check performs a non-blocking cached-token read
  * ({@link SessionState#cachedAccessToken()}) — it never acquires
@@ -70,11 +75,19 @@ public final class AuthInterceptor implements Interceptor {
         boolean isRefreshCall = SessionState.isRefreshPath(encodedPath)
                 || SessionState.isOauth2SkipRefreshPath(encodedPath);
 
-        // Host-isolation (3A): only same-origin requests receive the tenant id,
-        // bearer token, and CSRF token. A request built against an absolute
+        // Host-isolation (3A): only same-origin requests receive the bearer
+        // token and CSRF token. A request built against an absolute
         // third-party URL (or a redirect resolved off-origin) is left
-        // undecorated so those secrets never leave our own host.
+        // undecorated for those two so those secrets never leave our own host.
         boolean sameHost = session.isBaseHost(original.url().host());
+
+        // F-15 (T9 conformance review): X-Tenant-Id is unconditional on
+        // /oauth2/* (CONTRACT.md §12.1 note 2), including a discovery-
+        // document-derived endpoint hosted off the configured base_url (e.g.
+        // a proxy-fronted deployment) -- it is NOT a secret the way the
+        // bearer/CSRF headers are, so widening its condition here does not
+        // weaken 3A's host-isolation guarantee for those two.
+        boolean tenantHeaderEligible = sameHost || SessionState.isOauth2Path(encodedPath);
 
         // Non-blocking read — never session/guard.lock() synchronously here.
         String access = session.cachedAccessToken();
@@ -83,8 +96,10 @@ public final class AuthInterceptor implements Interceptor {
         }
 
         Request.Builder builder = original.newBuilder();
-        if (sameHost) {
+        if (tenantHeaderEligible) {
             builder.header("X-Tenant-Id", session.tenantId());
+        }
+        if (sameHost) {
             if (access != null) {
                 builder.header("Authorization", "Bearer " + access);
             }
