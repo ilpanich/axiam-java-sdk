@@ -19,11 +19,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * across calls, not a background thread) and the map is bounded by
  * {@link #maxTrackedNonces} to cap worst-case memory use under a flood of
  * distinct nonces.
+ *
+ * <p><strong>Public because &sect;22 needs the same gate.</strong> The reactor
+ * runtime in {@code io.axiam.sdk.reactor} consumes signed AMQP bodies under the
+ * identical &sect;8 v2 rules, and giving it a second, subtly different replay
+ * tracker would be two implementations of one security control.
  */
-final class NonceStore {
+public final class NonceStore {
 
     /** Default cap on distinct in-flight nonces tracked at once. */
-    static final int DEFAULT_MAX_TRACKED_NONCES = 100_000;
+    public static final int DEFAULT_MAX_TRACKED_NONCES = 100_000;
 
     /** Opportunistic prune runs at least this often, in number of {@link #observe} calls. */
     private static final long PRUNE_EVERY_N_CALLS = 256;
@@ -33,11 +38,28 @@ final class NonceStore {
     private final ConcurrentHashMap<String, Instant> seenUntil = new ConcurrentHashMap<>();
     private final AtomicLong callCount = new AtomicLong();
 
-    NonceStore(Duration ttl) {
+    /**
+     * Creates a store tracking each nonce for {@code ttl}, bounded by
+     * {@link #DEFAULT_MAX_TRACKED_NONCES}.
+     *
+     * @param ttl how long a nonce stays replay-rejecting; callers pass
+     *            {@code 2 * allowedClockSkew}, so a nonce cannot be replayed for
+     *            as long as its {@code issued_at} could still pass the freshness
+     *            check. Must be positive.
+     * @throws IllegalArgumentException when {@code ttl} is zero or negative
+     */
+    public NonceStore(Duration ttl) {
         this(ttl, DEFAULT_MAX_TRACKED_NONCES);
     }
 
-    NonceStore(Duration ttl, int maxTrackedNonces) {
+    /**
+     * Creates a store with an explicit bound on distinct tracked nonces.
+     *
+     * @param ttl              how long a nonce stays replay-rejecting; must be positive
+     * @param maxTrackedNonces cap on concurrently-tracked nonces; must be positive
+     * @throws IllegalArgumentException when either argument is out of range
+     */
+    public NonceStore(Duration ttl, int maxTrackedNonces) {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive");
         }
@@ -55,8 +77,12 @@ final class NonceStore {
      *
      * <p>Atomic per-key via {@link ConcurrentHashMap#compute}: concurrent
      * deliveries carrying the same nonce cannot both be reported fresh.
+     *
+     * @param nonce the message's nonce
+     * @param now   the current instant
+     * @return {@code true} when the nonce had not been seen inside its window
      */
-    boolean observe(String nonce, Instant now) {
+    public boolean observe(String nonce, Instant now) {
         pruneIfDue(now);
 
         Instant newExpiry = now.plus(ttl);
@@ -73,8 +99,12 @@ final class NonceStore {
         return replayExpiry[0] == null;
     }
 
-    /** Best-effort bound enforcement: current number of tracked nonces. */
-    int size() {
+    /**
+     * Best-effort bound enforcement: current number of tracked nonces.
+     *
+     * @return the number of nonces currently held, expired-but-unpruned included
+     */
+    public int size() {
         return seenUntil.size();
     }
 
