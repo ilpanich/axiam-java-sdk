@@ -22,6 +22,7 @@ import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -230,7 +231,17 @@ class AxiamClientOidcCoverageTest {
                     .issueTime(new Date(System.currentTimeMillis() - 100_000))
                     .build();
             String idToken = OidcTestSupport.signEdDsa(keyPair, claims);
-            server.enqueue(OidcTestSupport.tokenResponse("access-1", null, idToken));
+            // F-13 (cross-SDK CONTRACT.md §12 conformance review, T9): the
+            // access token in the wire response deliberately carries a
+            // sentinel value. §12.4 rule 7 requires the whole token set,
+            // including this access token, to be discarded when id_token
+            // validation fails -- validation happens strictly before
+            // OidcTokenSet is constructed (see AxiamClient#buildTokenSet),
+            // so the sentinel below must never reach the caller through
+            // either the (nonexistent, since the call throws) outcome or
+            // the thrown AuthError itself.
+            String sentinelAccessToken = "should-never-be-returned";
+            server.enqueue(OidcTestSupport.tokenResponse(sentinelAccessToken, null, idToken));
             server.enqueue(OidcTestSupport.jwksResponse(keyPair.toPublicJWK()));
             server.start();
 
@@ -243,6 +254,14 @@ class AxiamClientOidcCoverageTest {
                 AuthError e = assertThrows(AuthError.class, () -> client.oidcExchange(
                         config, "code-1", "verifier-1", "https://app/cb", "nonce-1"));
                 assertEquals("token_expired", e.reason());
+                // §12.4 rule 7: an all-or-nothing discard -- the sentinel
+                // access token must appear nowhere in the error the caller
+                // observes (message or the exception's own toString/cause
+                // chain rendering).
+                assertFalse(e.getMessage() != null && e.getMessage().contains(sentinelAccessToken),
+                        "AuthError message must never contain the discarded access token: " + e.getMessage());
+                assertFalse(e.toString().contains(sentinelAccessToken),
+                        "AuthError#toString() must never contain the discarded access token: " + e);
             }
         }
     }
