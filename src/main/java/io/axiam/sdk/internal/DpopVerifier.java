@@ -88,6 +88,8 @@ public final class DpopVerifier {
         /**
          * Record {@code jti} as used until {@code expiresAt}.
          *
+         * @param jti the proof's {@code jti} claim
+         * @param expiresAt when the entry may be forgotten
          * @return {@code true} if this is the first sighting, {@code false} if it is a replay
          */
         boolean claim(String jti, Instant expiresAt);
@@ -104,6 +106,16 @@ public final class DpopVerifier {
     public static final class InMemoryJtiStore implements JtiStore {
         private final Map<String, Instant> seen = new ConcurrentHashMap<>();
 
+        /** Creates an empty store. */
+        public InMemoryJtiStore() {}
+
+        /**
+         * Record {@code jti} as used until {@code expiresAt}.
+         *
+         * @param jti the proof's {@code jti} claim
+         * @param expiresAt when the entry may be forgotten
+         * @return {@code true} if this is the first sighting, {@code false} if it is a replay
+         */
         @Override
         public boolean claim(String jti, Instant expiresAt) {
             Instant now = Instant.now();
@@ -126,7 +138,19 @@ public final class DpopVerifier {
         }
     }
 
-    /** What {@link #verifyProof} needs about the current request. */
+    /**
+     * What {@link #verifyProof} needs about the current request.
+     *
+     * @param httpMethod the request method, e.g. {@code POST}
+     * @param httpUri the full request URI; query and fragment are stripped during
+     *     comparison, so passing it with a query string is expected
+     * @param accessToken the token from the {@code Authorization} header, exactly as it
+     *     arrived — this is hashed for the {@code ath} check
+     * @param expectedJkt the token's {@code cnf.jkt}, when the caller has it; supplying it
+     *     performs check 10 inside the call
+     * @param leeway the {@code iat} window, applied in both directions
+     * @param now override for the current time, for tests
+     */
     public record DpopRequest(
             String httpMethod,
             String httpUri,
@@ -135,12 +159,24 @@ public final class DpopVerifier {
             Duration leeway,
             @Nullable Instant now) {
 
-        /** A request with the contract's default leeway and the real clock. */
+        /**
+         * A request with the contract's default leeway and the real clock.
+         *
+         * @param httpMethod the request method
+         * @param httpUri the full request URI
+         * @param accessToken the presented access token
+         * @return a request description
+         */
         public static DpopRequest of(String httpMethod, String httpUri, String accessToken) {
             return new DpopRequest(httpMethod, httpUri, accessToken, null, IAT_LEEWAY, null);
         }
 
-        /** The same request, with the token's {@code cnf.jkt} so check 10 runs here. */
+        /**
+         * The same request, with the token's {@code cnf.jkt} so check 10 runs here.
+         *
+         * @param jkt the token's {@code cnf.jkt}
+         * @return a copy carrying the expected thumbprint
+         */
         public DpopRequest withExpectedJkt(String jkt) {
             return new DpopRequest(httpMethod, httpUri, accessToken, jkt, leeway, now);
         }

@@ -592,17 +592,31 @@ public final class JwksVerifier {
     public record PresentedProofs(
             @Nullable String certificateThumbprint, @Nullable String dpopThumbprint) {
 
-        /** Neither proof — the ordinary bearer case. */
+        /**
+         * Neither proof — the ordinary bearer case.
+         *
+         * @return a pair with both thumbprints absent
+         */
         public static PresentedProofs none() {
             return new PresentedProofs(null, null);
         }
 
-        /** Only a client certificate was presented. */
+        /**
+         * Only a client certificate was presented.
+         *
+         * @param thumbprint the peer certificate's {@code x5t#S256}
+         * @return a pair carrying only the certificate thumbprint
+         */
         public static PresentedProofs certificate(String thumbprint) {
             return new PresentedProofs(thumbprint, null);
         }
 
-        /** Only a verified DPoP proof was presented. */
+        /**
+         * Only a verified DPoP proof was presented.
+         *
+         * @param thumbprint the {@code jkt} of an already verified proof
+         * @return a pair carrying only the DPoP thumbprint
+         */
         public static PresentedProofs dpop(String thumbprint) {
             return new PresentedProofs(null, thumbprint);
         }
