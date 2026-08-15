@@ -316,6 +316,89 @@ class AxiamClientOidcCoverageTest {
         }
     }
 
+    // ---- F-17 (cross-SDK CONTRACT.md §12 conformance review, T9): four
+    // one-line delegating overloads with no dedicated test — every other
+    // test in this file exercises the same operation through either the
+    // bare-String convenience overload or the full-argument overload, never
+    // the single-Sensitive-argument overload these four delegate to.
+    // AxiamClient.java: oidcRefresh(Sensitive), oidcRefreshAsync(Sensitive),
+    // introspect(Sensitive), revoke(Sensitive).
+
+    @Test
+    void oidcRefreshSensitiveOnlyOverloadDelegatesWithAllOptionalsDefaulted() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.tokenResponse("refreshed-access", null, null));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(base, TENANT_ID).oidcClientId("app").build()) {
+                OidcTokenSet result = client.oidcRefresh(Sensitive.of("refresh-tok"));
+                assertEquals("refreshed-access", result.accessToken().expose());
+            }
+        }
+    }
+
+    @Test
+    void oidcRefreshAsyncSensitiveOnlyOverloadDelegatesWithAllOptionalsDefaulted() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.tokenResponse("refreshed-access-async", null, null));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(base, TENANT_ID).oidcClientId("app").build()) {
+                OidcTokenSet result = client.oidcRefreshAsync(Sensitive.of("refresh-tok")).get(5, TimeUnit.SECONDS);
+                assertEquals("refreshed-access-async", result.accessToken().expose());
+            }
+        }
+    }
+
+    @Test
+    void introspectSensitiveOnlyOverloadDelegatesWithAllOptionalsDefaulted() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                    .setBody("{\"active\":true,\"sub\":\"user-1\"}"));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(base, TENANT_ID)
+                    .oidcClientId("app").oidcClientSecret("s").build()) {
+                IntrospectionResult result = client.introspect(Sensitive.of("tok"));
+                assertEquals(true, result.active());
+                assertEquals("user-1", result.sub());
+            }
+
+            server.takeRequest(); // discovery
+            RecordedRequest introspectRequest = server.takeRequest();
+            // The single-argument overload must not send a token_type_hint —
+            // that is only threaded through by the four-argument overload it delegates to.
+            assertFalse(introspectRequest.getBody().readUtf8().contains("token_type_hint"));
+        }
+    }
+
+    @Test
+    void revokeSensitiveOnlyOverloadDelegatesWithAllOptionalsDefaulted() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(new MockResponse().setResponseCode(200));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(base, TENANT_ID)
+                    .oidcClientId("app").oidcClientSecret("s").build()) {
+                client.revoke(Sensitive.of("tok"));
+            }
+
+            server.takeRequest(); // discovery
+            RecordedRequest revokeRequest = server.takeRequest();
+            String revokeBody = revokeRequest.getBody().readUtf8();
+            assertTrue(revokeBody.contains("token=tok"));
+            assertFalse(revokeBody.contains("token_type_hint"));
+        }
+    }
+
     private static String stripSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
