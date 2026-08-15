@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CONTRACT.md §22 — the reactor runtime (`io.axiam.sdk.reactor`).** A reactor is
+  an external process subscribed to named hook events on the AMQP bus, answering
+  allow / deny / mutate inside a timeout the server declared.
+  `ReactorServer.reactorServe(options)` consumes the **server-declared** queue,
+  verifies each event under §8 v2 (key version, MAC, freshness, nonce, in that
+  order) before the handler sees it, and signs the reply with the same tenant
+  subkey.
+
+  The canonicalization difference that costs a day if it is not stated: a reactor
+  body is signed with `hmac_signature` **present and set to `null`**, where §8's
+  own two message types omit it. `ReactorProtocol` is the only place that rule
+  lives, and `ReactorVectorTest` proves it byte-for-byte against the
+  server-generated §22.13 vectors — canonical bytes, MAC, the omission of
+  `reason`/`patch` when absent and of `require_mfa` when false, the
+  `nonce_binding` pair, the `correlation_replay` refusal, and the topology
+  strings.
+
+  Four rules are structural rather than documented. The runtime declares no
+  exchange, queue or binding (asserted against the AMQP client's own calls); a
+  handler that throws produces **no reply** rather than a synthesized `allow`, so
+  the operator's `failure_policy` still decides; a patch is sent **unfiltered**,
+  because dropping a forbidden key would leave the author believing it was set;
+  and a reply is abandoned rather than published after `timeout_ms` has elapsed.
+  `ReactorDecision` is a sealed hierarchy in which `allow` cannot carry a patch
+  and `mutate` cannot be empty, and `ReactorListener` returns `void`, so a
+  listener cannot publish a reply at all.
+
+  §22.7 is honoured as the MUST NOT it is: `authz.check`, `authz.check_batch` and
+  `token.introspect` are absent from `ReactorEvents.REGISTRY` and from every
+  constant this SDK exposes, asserted against the list rather than a comment, and
+  no interceptor equivalent is offered for them anywhere.
+
+  Interacts with the existing D5 surfaces as they already work: `close()` is
+  §18-deterministic (cancel, drain, idempotent), §19 emits one
+  `RequestStart`/`RequestEnd` pair per dispatch with the event name as the path
+  template, the signing key is wrapped in `Sensitive` per §22.12, and §16 retry
+  deliberately does **not** apply to a reply — a correlation is single-use, so a
+  resend could only add load to a server that has already moved on.
+
+  `io.axiam.sdk.amqp.NonceStore` becomes public (it was package-private): §22
+  needs the same replay gate, and two implementations of one security control is
+  one too many. Additive; no existing signature moves.
+
 - **CONTRACT.md §10.1 rule 9 extended for DPoP, and §21.7.2 proof verification
   implemented (contract 1.16/1.17).**
 
