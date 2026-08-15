@@ -182,6 +182,31 @@ public final class SessionState {
         return OAUTH2_SKIP_REFRESH_PATHS.contains(encodedPath);
     }
 
+    /**
+     * Checks whether {@code encodedPath} is an {@code /oauth2/*} endpoint —
+     * broader than {@link #isOauth2SkipRefreshPath(String)}'s three-path
+     * refresh-guard set, covering every endpoint a discovery document can
+     * advertise (token, introspection, revocation, jwks, userinfo, …).
+     *
+     * <p>Follow-up F-15 (cross-SDK CONTRACT.md &sect;12 conformance review,
+     * T9): {@code AuthInterceptor} used to gate {@code X-Tenant-Id} on
+     * same-host only (&sect;3A host isolation), which silently dropped the
+     * header on a discovery-document-derived endpoint hosted on a different
+     * origin than {@code base_url} (e.g. a proxy-fronted deployment) — but
+     * CONTRACT.md &sect;12.1 note 2 calls {@code X-Tenant-Id} unconditional
+     * on {@code /oauth2/*}. This predicate lets the interceptor emit the
+     * tenant header for any {@code /oauth2/*} request regardless of host,
+     * while the {@code Authorization} bearer token and CSRF token — the
+     * genuinely sensitive, cross-origin-leak-risk headers &sect;3A exists to
+     * protect — stay strictly same-host-gated.
+     *
+     * @param encodedPath a request URL's encoded path
+     * @return {@code true} if {@code encodedPath} starts with {@code /oauth2/}
+     */
+    public static boolean isOauth2Path(String encodedPath) {
+        return encodedPath.startsWith("/oauth2/");
+    }
+
     /** Returns the last captured CSRF token, if any.
      *
      * @return the last captured CSRF token, or {@code null} if none has been observed yet */
