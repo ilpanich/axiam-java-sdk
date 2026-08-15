@@ -539,10 +539,20 @@ public final class JwksVerifier {
 
         Object expected = cnfMap.get("x5t#S256");
         if (!(expected instanceof String expectedThumbprint) || expectedThumbprint.isEmpty()) {
+            // Includes the DPoP case: this entry point has no proof to check, so a
+            // jkt-bound token is refused rather than silently downgraded.
             throw new AuthError(
-                    "token carries a cnf confirmation naming a method this SDK cannot verify "
-                            + "(CONTRACT.md §10.1 rule 9 — an unverifiable constraint is not an "
-                            + "absent one)");
+                    "token carries a cnf confirmation naming a method this entry point cannot "
+                            + "verify (CONTRACT.md §10.1 rule 9 — an unverifiable constraint is "
+                            + "not an absent one; use verifyTokenBinding for DPoP)");
+        }
+        // A token naming BOTH methods is a conjunction (contract 1.16): this method can
+        // establish one half and must not answer for the whole. Refusing here is what
+        // stops "check whichever we can".
+        if (cnfMap.get("jkt") instanceof String jkt && !jkt.isEmpty()) {
+            throw new AuthError(
+                    "token names both a certificate and a DPoP key; both must hold "
+                            + "(CONTRACT.md §10.1 rule 9) — use verifyTokenBinding");
         }
         if (presentedThumbprint == null || presentedThumbprint.isEmpty()) {
             throw new AuthError(
@@ -557,6 +567,134 @@ public final class JwksVerifier {
                 presentedThumbprint.getBytes(StandardCharsets.UTF_8))) {
             throw new AuthError(
                     "token is bound to a different client certificate than the one presented");
+        }
+    }
+
+    /**
+     * What the caller proved about <b>this</b> connection and <b>this</b> request, for
+     * {@link #verifyTokenBinding}.
+     *
+     * <p>A record rather than two string parameters on purpose: two same-typed nullable
+     * thumbprints are exactly the pair a positional call transposes silently, and
+     * transposing them would check each proof against the wrong confirmation.
+     *
+     * @param certificateThumbprint the peer certificate's RFC 8705 {@code x5t#S256}, taken
+     *     from the TLS connection or from a trusted terminating proxy over a channel the
+     *     application controls — <b>never</b> from a caller-settable header, which would
+     *     make the whole mechanism decorative
+     * @param dpopThumbprint the {@code jkt} of an <b>already verified</b> DPoP proof.
+     *     Supply it only after checking the proof's signature, {@code htm}, {@code htu},
+     *     {@code iat} and {@code jti} for this request — {@link DpopVerifier#verifyProof}
+     *     does all ten §21.7.2 checks and returns exactly this value. A thumbprint lifted
+     *     off an unverified proof would let a proof captured from any other endpoint
+     *     authorize this one.
+     */
+    public record PresentedProofs(
+            @Nullable String certificateThumbprint, @Nullable String dpopThumbprint) {
+
+        /** Neither proof — the ordinary bearer case. */
+        public static PresentedProofs none() {
+            return new PresentedProofs(null, null);
+        }
+
+        /** Only a client certificate was presented. */
+        public static PresentedProofs certificate(String thumbprint) {
+            return new PresentedProofs(thumbprint, null);
+        }
+
+        /** Only a verified DPoP proof was presented. */
+        public static PresentedProofs dpop(String thumbprint) {
+            return new PresentedProofs(null, thumbprint);
+        }
+    }
+
+    /**
+     * CONTRACT.md §10.1 <b>rule 9</b> in full — enforce a token's sender constraint against
+     * <b>every</b> proof the caller presented (contract 1.16).
+     *
+     * <p>This is the complete rule, and the one to use unless your transport genuinely
+     * cannot produce a DPoP thumbprint.
+     *
+     * <p>The ten cases:
+     *
+     * <table>
+     *   <caption>Rule 9 decision table, extended for DPoP</caption>
+     *   <tr><th>token's {@code cnf}</th><th>certificate</th><th>DPoP</th><th>result</th></tr>
+     *   <tr><td>absent</td><td>anything</td><td>anything</td><td>returns</td></tr>
+     *   <tr><td>{@code x5t#S256}</td><td>equal</td><td>ignored</td><td>returns</td></tr>
+     *   <tr><td>{@code x5t#S256}</td><td>different</td><td>ignored</td><td>throws</td></tr>
+     *   <tr><td>{@code x5t#S256}</td><td>null</td><td>ignored</td><td>throws</td></tr>
+     *   <tr><td>{@code jkt}</td><td>ignored</td><td>equal</td><td>returns</td></tr>
+     *   <tr><td>{@code jkt}</td><td>ignored</td><td>different</td><td>throws</td></tr>
+     *   <tr><td>{@code jkt}</td><td>ignored</td><td>null</td><td>throws</td></tr>
+     *   <tr><td>both</td><td>equal</td><td>equal</td><td>returns</td></tr>
+     *   <tr><td>both</td><td>wrong/missing</td><td>—</td><td>throws</td></tr>
+     *   <tr><td>present, names neither</td><td>anything</td><td>anything</td><td>throws</td></tr>
+     * </table>
+     *
+     * <p>Two rows carry the weight. <b>Both named is a conjunction</b>: an operator who
+     * turned on two constraints asked for two, and satisfying the more convenient one is
+     * not compliance. <b>Names neither is a refusal</b>: a confirmation this SDK cannot
+     * interpret is an unverifiable constraint, and reading it as "unconstrained" is the
+     * exact downgrade rule 9 exists to prevent. That includes an <i>empty</i> {@code cnf},
+     * which is also how proto3 delivers an empty {@code CnfClaim} over gRPC (§10.3 rule 3).
+     *
+     * @param claims the verified claims of the token being guarded
+     * @param proofs what the caller proved on this connection and request
+     * @throws AuthError on any rejecting row
+     */
+    public static void verifyTokenBinding(JWTClaimsSet claims, PresentedProofs proofs) {
+        Object cnf = claims.getClaim("cnf");
+        // The fast path, and the common one. First on purpose: an unbound token is
+        // accepted with no proofs at all, which is what keeps existing deployments working
+        // when a guard adopts this rule.
+        if (cnf == null) {
+            return;
+        }
+        if (!(cnf instanceof Map<?, ?> cnfMap)) {
+            throw new AuthError("token cnf claim is malformed");
+        }
+
+        String expectedCert =
+                cnfMap.get("x5t#S256") instanceof String s && !s.isEmpty() ? s : null;
+        String expectedJkt = cnfMap.get("jkt") instanceof String s && !s.isEmpty() ? s : null;
+
+        if (expectedCert == null && expectedJkt == null) {
+            throw new AuthError(
+                    "token carries a cnf confirmation naming no method this SDK can verify "
+                            + "(CONTRACT.md §10.1 rule 9 — an unverifiable constraint is not an "
+                            + "absent one)");
+        }
+
+        // Each arm that applies must pass. Two independent checks rather than a branch on
+        // the pair, precisely so "both named" needs no case of its own — it is simply
+        // where both run.
+        if (expectedCert != null) {
+            if (proofs.certificateThumbprint() == null
+                    || proofs.certificateThumbprint().isEmpty()) {
+                throw new AuthError(
+                        "token is certificate-bound but no client certificate was presented");
+            }
+            if (!MessageDigest.isEqual(
+                    expectedCert.getBytes(StandardCharsets.UTF_8),
+                    proofs.certificateThumbprint().getBytes(StandardCharsets.UTF_8))) {
+                throw new AuthError(
+                        "token is bound to a different client certificate than the one "
+                                + "presented");
+            }
+        }
+
+        if (expectedJkt != null) {
+            if (proofs.dpopThumbprint() == null || proofs.dpopThumbprint().isEmpty()) {
+                throw new AuthError(
+                        "token is DPoP-bound but no verified DPoP proof was presented");
+            }
+            if (!MessageDigest.isEqual(
+                    expectedJkt.getBytes(StandardCharsets.UTF_8),
+                    proofs.dpopThumbprint().getBytes(StandardCharsets.UTF_8))) {
+                throw new AuthError(
+                        "token is bound to a different DPoP key than the one presented");
+            }
         }
     }
 
