@@ -5,9 +5,11 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 
 import io.axiam.sdk.Sensitive;
+import io.axiam.sdk.annotations.OnReactorEvent;
 import io.axiam.sdk.reactor.ReactorDecision;
 import io.axiam.sdk.reactor.ReactorEvent;
 import io.axiam.sdk.reactor.ReactorEvents;
+import io.axiam.sdk.reactor.ReactorHandlers;
 import io.axiam.sdk.reactor.ReactorServeOptions;
 import io.axiam.sdk.reactor.ReactorServer;
 
@@ -110,7 +112,11 @@ public final class ReactorExample {
                     // it from our own reactor id and consumes it; it declares
                     // nothing and binds nothing (§22.1).
                     .reactorId(reactorId)
-                    .handler(ReactorExample::decide)
+                    // One handler per event (§22.14) instead of a switch whose
+                    // `default` arm answers `allow` on behalf of code that never
+                    // ran. A misspelled name is refused HERE, at wiring time,
+                    // rather than becoming an event that silently never fires.
+                    .handler(ReactorHandlers.of(new Decisions()).handler())
                     .logger(LOG)
                     .build();
 
@@ -123,68 +129,79 @@ public final class ReactorExample {
     }
 
     /**
-     * The decision function. One event in, one of three answers out.
+     * The decision functions, one per event (CONTRACT.md &sect;22.14).
      *
-     * @param event the verified event
-     * @return the decision to sign and publish
+     * <p>Bound declaratively rather than through a {@code switch}: a misspelled
+     * event name is refused when {@link ReactorHandlers#of} reads the
+     * annotation, and an event this reactor did not bind produces
+     * <strong>no reply</strong>, so the registration's {@code failure_policy}
+     * decides rather than a {@code default} arm in this file deciding on its
+     * behalf.
      */
-    private static ReactorDecision decide(ReactorEvent event) {
-        return switch (event.event()) {
-            case ReactorEvents.TOKEN_PRE_ISSUE -> enrichToken(event);
-            case ReactorEvents.LOGIN_POST_AUTH -> screenLogin(event);
-            // A reactor is only ever dispatched events it registered for, so this
-            // arm means the registration and the code have drifted. Allow rather
-            // than deny: refusing an operation because our own switch is stale
-            // would be an outage caused by a typo.
-            default -> ReactorDecision.allow();
-        };
-    }
+    public static final class Decisions {
 
-    private static ReactorDecision enrichToken(ReactorEvent event) {
-        String subject = text(event, "sub");
-        if (subject == null) {
+        /**
+         * Enriches a token being issued.
+         *
+         * @param event the verified event
+         * @return the decision to sign and publish
+         */
+        @OnReactorEvent(ReactorEvents.TOKEN_PRE_ISSUE)
+        public ReactorDecision enrichToken(ReactorEvent event) {
+            String subject = text(event, "sub");
+            if (subject == null) {
+                return ReactorDecision.allow();
+            }
+
+            // An earlier reactor in the chain may already have set claims. This
+            // is read-only context: the server merges, later priority winning a
+            // contested key, so echoing these back is not how a field is
+            // preserved.
+            Map<String, String> alreadySet = event.priorPatch();
+
+            Map<String, String> patch = new LinkedHashMap<>();
+            if (!alreadySet.containsKey("ext.cost_center")) {
+                patch.put("ext.cost_center", costCentreFor(subject));
+            }
+            patch.put("ext.department", "engineering");
+
+            // `ext.` is the whole allow-list here — `sub`, `aud`, `exp`, `scope`
+            // and every other standard claim are unreachable, which is the
+            // point. Note this SDK never trims a patch for you: a forbidden key
+            // is sent as written and refused by the server, so you find out.
+            return patch.isEmpty() ? ReactorDecision.allow() : ReactorDecision.mutate(patch);
+        }
+
+        /**
+         * Vetoes or steps up an interactive sign-in.
+         *
+         * @param event the verified event
+         * @return the decision to sign and publish
+         */
+        @OnReactorEvent(ReactorEvents.LOGIN_POST_AUTH)
+        public ReactorDecision screenLogin(ReactorEvent event) {
+            String region = text(event, "region");
+            if (EMBARGOED_REGION.equals(region)) {
+                // The reason is audited. A deny with no reason still denies; the
+                // reason is for the audit trail, not for the decision.
+                return ReactorDecision.deny("sign-in from an embargoed region");
+            }
+
+            if ("true".equals(text(event, "is_admin"))) {
+                // allow + require_mfa: proceed only after step-up. Valid on
+                // login.post_auth ONLY — the server refuses it anywhere else
+                // before it even looks at the decision. Sticky across the chain:
+                // once any reactor demands step-up, no later one can clear it.
+                //
+                // A SAML or OIDC sign-in has no step-up branch, so this answer
+                // FAILS those logins rather than being silently dropped. If your
+                // tenant federates, deny here and drive enrolment out of band
+                // instead.
+                return ReactorDecision.allowRequiringStepUp();
+            }
+
             return ReactorDecision.allow();
         }
-
-        // An earlier reactor in the chain may already have set claims. This is
-        // read-only context: the server merges, later priority winning a
-        // contested key, so echoing these back is not how a field is preserved.
-        Map<String, String> alreadySet = event.priorPatch();
-
-        Map<String, String> patch = new LinkedHashMap<>();
-        if (!alreadySet.containsKey("ext.cost_center")) {
-            patch.put("ext.cost_center", costCentreFor(subject));
-        }
-        patch.put("ext.department", "engineering");
-
-        // `ext.` is the whole allow-list here — `sub`, `aud`, `exp`, `scope` and
-        // every other standard claim are unreachable, which is the point. Note
-        // this SDK never trims a patch for you: a forbidden key is sent as
-        // written and refused by the server, so you find out.
-        return patch.isEmpty() ? ReactorDecision.allow() : ReactorDecision.mutate(patch);
-    }
-
-    private static ReactorDecision screenLogin(ReactorEvent event) {
-        String region = text(event, "region");
-        if (EMBARGOED_REGION.equals(region)) {
-            // The reason is audited. A deny with no reason still denies; the
-            // reason is for the audit trail, not for the decision.
-            return ReactorDecision.deny("sign-in from an embargoed region");
-        }
-
-        if ("true".equals(text(event, "is_admin"))) {
-            // allow + require_mfa: proceed only after step-up. Valid on
-            // login.post_auth ONLY — the server refuses it anywhere else before
-            // it even looks at the decision. Sticky across the chain: once any
-            // reactor demands step-up, no later one can clear it.
-            //
-            // A SAML or OIDC sign-in has no step-up branch, so this answer FAILS
-            // those logins rather than being silently dropped. If your tenant
-            // federates, deny here and drive enrolment out of band instead.
-            return ReactorDecision.allowRequiringStepUp();
-        }
-
-        return ReactorDecision.allow();
     }
 
     private static String costCentreFor(String subject) {

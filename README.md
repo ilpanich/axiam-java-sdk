@@ -611,6 +611,58 @@ try (ReactorServer server = ReactorServer.reactorServe(options)) {
 }
 ```
 
+### Binding handlers per event (§22.14)
+
+The `switch` above is the shape every multi-event reactor grows, and its `default` arm —
+`ReactorDecision.allow()` — answers on behalf of code that never ran. That is the defect
+§22.10 rule 2 forbids the *runtime* from committing, relocated into your file where the
+rule does not reach it: an operator who set `fail_closed` on the registration has it
+defeated there.
+
+`ReactorHandlers` is §22.14's declarative form, and it uses the same annotation mechanism
+the §11 `@AxiamRequireAccess` helper already uses:
+
+```java
+public final class ClaimsReactor {
+
+    @OnReactorEvent(ReactorEvents.TOKEN_PRE_ISSUE)
+    public ReactorDecision enrich(ReactorEvent event) {
+        return ReactorDecision.mutate(Map.of("ext.department", "engineering"));
+    }
+
+    @OnReactorEvent(ReactorEvents.LOGIN_POST_AUTH)
+    public ReactorDecision screen(ReactorEvent event) {
+        return embargoed(event) ? ReactorDecision.deny("embargoed region")
+                                : ReactorDecision.allow();
+    }
+}
+
+ReactorHandlers handlers = ReactorHandlers.of(new ClaimsReactor());
+ReactorServeOptions options = ReactorServeOptions
+    .builder(channel, tenantId, Sensitive.of(subkeyHex))
+    .reactorId(reactorId)
+    .handler(handlers.handler())
+    .build();
+```
+
+- **A misspelled event is refused when the annotation is read** — `ReactorHandlers` accepts
+  only §22.5 registry names, which is also how it refuses the three hot-path operations
+  §22.7 excludes: they are in no registry row. The message names the registry, never the
+  exclusions.
+- **An unbound event abstains** — the composed handler throws
+  `UnboundReactorEventException`, and `ReactorServer` publishes **nothing** for a handler
+  that threw, so the registration's `failure_policy` decides (§22.8) exactly as it decides
+  a timeout. Never a synthesized `allow`.
+- Binding the same event twice throws rather than silently overwriting, and
+  `handlers.events()` feeds `ReactorEvents.defaultFailurePolicyFor` so you can see what an
+  unreachable reactor costs before you go live.
+
+Lambdas work too — `new ReactorHandlers().bind(ReactorEvents.TOKEN_PRE_ISSUE, fn)` — and
+both spellings are governed by the same rules. It is pure sugar: `handler()` returns exactly
+the `ReactorHandler` `ReactorServer` already takes. It opens nothing, verifies nothing,
+signs nothing, does not filter a patch, and a handler's own throwable reaches the runtime
+unwrapped so nothing is published and the log names the real failure.
+
 Register the reactor first — the queue it consumes is declared by the **server**, from a
 `POST /api/v1/reactors` registration. See [`examples/reactor`](examples/reactor) for a
 runnable one that enriches a token and screens a login.
