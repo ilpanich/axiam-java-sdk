@@ -593,6 +593,15 @@ third-party code *into* the authorization server, and this keeps it outside, rea
 through a signed reply schema the server validates before it believes a word of it.
 
 ```java
+// §8b: build the broker connection through ReactorConnections and the transport
+// rules hold by construction — amqps:// only, hostname verification on, and no
+// argument anywhere that turns either off.
+ConnectionFactory factory = ReactorConnections.connectionFactory(
+    "amqps://reactor:secret@broker.internal:5671/%2f",
+    Files.readAllBytes(Path.of("/etc/axiam/broker-ca.pem")));  // null for a public CA
+Connection connection = factory.newConnection();
+Channel channel = connection.createChannel();
+
 ReactorServeOptions options = ReactorServeOptions
     .builder(channel, tenantId, Sensitive.of(subkeyHex))
     .reactorId(reactorId)               // the queue is the server's; we only consume it
@@ -610,6 +619,35 @@ try (ReactorServer server = ReactorServer.reactorServe(options)) {
     Thread.currentThread().join();
 }
 ```
+
+### Transport security (§8b)
+
+`ReactorServeOptions.builder(channel, …)` takes an already-open channel, so the SDK cannot
+inspect how it was opened. §8b's requirements used to live only in that method's javadoc —
+"its connection MUST have been opened over `amqps://` with a trusted CA" — which meant a
+caller who built a `ConnectionFactory` from an `amqp://` URI got a working reactor, no
+warning, and signed-but-readable token decisions on the wire.
+
+`ReactorConnections` is the enforcing path:
+
+| Argument | Meaning |
+|---|---|
+| `uri` | Must be `amqps://` (rules 1 and 5). Every other scheme is refused, and so is a URI that will not parse — a security check must fail closed on an input it cannot read. |
+| `customCaPem` | CA bundle for a privately issued broker certificate (rule 2 — the common in-cluster case). Added to the system roots, never substituted for them. |
+| `clientCertPem` + `clientKeyPem` | Mutual TLS (rule 3). All-or-nothing: half an identity is refused before dialling. |
+
+Hostname verification is enabled explicitly, because the RabbitMQ Java client leaves it
+**off** by default — a certificate that verifies but names a different host is precisely the
+attack TLS exists to stop. There is deliberately no verification-skip argument under any
+name (rule 4).
+
+Note there is no loopback exception: §8b rules 1 and 5 carry no host carve-out, and the
+AXIAM server is TLS-only with no plaintext listener for one to reach.
+
+`ReactorServeOptions` still accepts any channel. Enforcing at construction cannot
+retroactively constrain a channel someone else opened, and refusing to serve on one whose
+provenance cannot be inspected would break every legitimate custom setup to catch a mistake
+`ReactorConnections` already prevents.
 
 ### Binding handlers per event (§22.14)
 

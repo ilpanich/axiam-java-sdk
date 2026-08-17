@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ReactorConnections` — CONTRACT.md §8b enforced rather than described.**
+  `ReactorServeOptions.builder(channel, …)` takes an already-open channel, and
+  §8b's requirements travelled with it as a javadoc sentence: "its connection
+  MUST have been opened over `amqps://` with a trusted CA". A javadoc MUST is a
+  note to whoever reads the javadoc — a caller who built a `ConnectionFactory`
+  from an `amqp://` URI got a working reactor, no warning, and
+  signed-but-readable token decisions on the wire.
+
+  `ReactorConnections.connectionFactory(...)` refuses every scheme but
+  `amqps://` (rules 1 and 5, with no loopback exception and no pass-through for
+  a URI that will not parse), takes a CA bundle for a privately issued broker
+  certificate (rule 2), takes a client certificate/key pair for mutual TLS
+  (rule 3, all-or-nothing), and enables hostname verification explicitly —
+  the RabbitMQ Java client leaves that **off** by default. There is no
+  verification-skip argument under any name (rule 4).
+
+  It is deliberately the twin of the Kotlin SDK's `reactorConnectionFactory`:
+  two SDKs on the same RabbitMQ client should not disagree about what a reactor
+  may connect to. `ReactorServeOptions` still accepts any channel — enforcing at
+  construction cannot retroactively constrain one somebody else opened.
+
+- `io.axiam.sdk.internal.TlsSupport`, the PEM-to-`SSLContext` plumbing behind
+  the above. Equivalent private copies already exist in `AxiamClient` (§6) and
+  `grpc.AuthClientInterceptor`, each with its own nested
+  `CompositeX509TrustManager`; adding a third inside the reactor package would
+  have been the smaller diff and the worse outcome, since independent
+  implementations of certificate verification drift invisibly. Folding the two
+  existing transports into it changes established §6/§6.1 behaviour and is left
+  to its own change.
+
 ## [1.0.0-alpha25] - 2026-08-16
 
 ### Added
