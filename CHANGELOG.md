@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing transports into it changes established §6/§6.1 behaviour and is left
   to its own change.
 
+### Changed
+
+- Re-vendor `openapi.json` at 1.0.0-alpha27 — the copy was pinned at alpha26 and
+  failing the cross-repo artifact-drift gate
+
+
 ## [1.0.0-alpha25] - 2026-08-16
 
 ### Added
