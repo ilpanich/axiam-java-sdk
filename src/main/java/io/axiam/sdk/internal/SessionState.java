@@ -18,6 +18,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.net.CookieManager;
+import java.net.CookieStore;
 import java.net.HttpCookie;
 import java.net.URI;
 import java.util.Base64;
@@ -261,6 +262,26 @@ public final class SessionState {
      * headers, captured automatically by the shared {@link CookieManager}. */
     public void clear() {
         csrfToken.set(null);
+    }
+
+    /**
+     * Evicts the session cookies from the shared jar, in addition to
+     * {@link #clear()}.
+     *
+     * <p>The ordinary way a cookie leaves the jar is the server expiring it,
+     * which is exactly what is unavailable to the one caller here: the
+     * {@code M2} mismatch in {@code AxiamClient.loginSrp}, where the response
+     * came from an endpoint that has just failed to prove it holds the
+     * account's verifier. CONTRACT.md &sect;23.3 rule 6 requires the session
+     * discarded "including any cookies the response set", so the client
+     * evicts them itself rather than trusting the other side to.
+     */
+    public void discardSessionCookies() {
+        clear();
+        CookieStore store = cookieManager.getCookieStore();
+        for (HttpCookie cookie : List.copyOf(store.get(baseUri))) {
+            store.remove(baseUri, cookie);
+        }
     }
 
     private @Nullable String cookieValue(String name) {
