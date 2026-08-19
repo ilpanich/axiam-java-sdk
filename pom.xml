@@ -101,6 +101,17 @@
       <version>1.23.0</version>
     </dependency>
     <dependency>
+      <!-- Argon2id for the §23 SRP client. The JRE ships PBKDF2 but no
+           Argon2, and §23.3 rule 4 makes BOTH KDFs mandatory for login —
+           argon2id is what a default-configured AXIAM tenant names, so an
+           optional dependency here would mean SRP login failing out of the
+           box against the server's own defaults. Hand-rolling Argon2 was the
+           alternative and is not one. -->
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>1.83</version>
+    </dependency>
+    <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
       <version>2.22.1</version>
