@@ -346,18 +346,46 @@ class OpaqueBindingTest {
     }
 
     @Test
-    @DisplayName("a refused ksf spends the handle, so a retry fails loudly")
-    void refusedKsfStillSpendsTheHandle() {
+    @DisplayName("a refused ksf leaves the exchange intact")
+    void refusedKsfLeavesTheExchangeIntact() {
+        // The key-stretching handle is built before the state is spent, so a
+        // refusal is not a spent exchange. Built the other way round the state
+        // would be out of its one-shot slot and unreachable by close() -- a
+        // leaked Rust allocation per refused attempt, which is once per login
+        // against a misconfigured tenant.
         RegistrationExchange exchange = Opaque.startRegistration(PASSWORD);
         ObjectNode unknown = MAPPER.createObjectNode();
         unknown.put("ksf", "bcrypt");
+
         assertThrows(NetworkError.class,
                 () -> exchange.finish(PASSWORD, REGISTRATION_RESPONSE, KsfParams.fromWire(unknown)));
-        // The handle was taken before the ksf was built, so it is spent.
-        // Retrying must fail rather than pass a dangling pointer across the ABI.
-        NetworkError second = assertThrows(NetworkError.class,
-                () -> exchange.finish(PASSWORD, REGISTRATION_RESPONSE, argon2id()));
-        assertTrue(second.getMessage().contains("already been completed"));
+
+        assertEquals(1, lib.statesAlive(), "the state must still be reachable");
+        assertEquals(0, lib.ksfAlive(), "a refused ksf allocates nothing to leak");
+
+        // And a caller who fixes the parameters can simply carry on.
+        String record = exchange.finish(PASSWORD, REGISTRATION_RESPONSE, argon2id());
+        assertTrue(OpaqueTestSupport.decode(record).startsWith("record:"));
+        assertEquals(0, lib.statesAlive());
+    }
+
+    @Test
+    @DisplayName("an out-of-band cost also leaves the exchange intact")
+    void outOfBandCostLeavesTheExchangeIntact() {
+        LoginExchange exchange = Opaque.startLogin(PASSWORD);
+        ObjectNode wire = MAPPER.createObjectNode();
+        wire.put("ksf", "argon2id");
+        wire.put("memory_kib", 4096);
+        wire.put("iterations", 2);
+        wire.put("parallelism", 1);
+
+        assertThrows(NetworkError.class,
+                () -> exchange.finish(PASSWORD, KE2, KsfParams.fromWire(wire)));
+
+        assertEquals(1, lib.statesAlive());
+        // Nothing spent it, so the ordinary release path still works.
+        exchange.close();
+        assertEquals(0, lib.statesAlive());
     }
 
     @Test
