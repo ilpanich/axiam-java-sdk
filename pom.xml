@@ -126,6 +126,26 @@
       <artifactId>jspecify</artifactId>
       <version>1.0.1</version>
     </dependency>
+    <!-- JNA binds libaxiam_opaque_ffi, the OPAQUE (RFC 9807) client half.
+         CONTRACT.md §23.1 forbids an SDK from implementing OPAQUE itself, so
+         the protocol comes from the same shared library the AXIAM server links.
+
+         OPTIONAL, so it does not reach a consumer's classpath transitively: a
+         REST/gRPC/AMQP consumer whose tenant does not use OPAQUE should not be
+         made to carry a native-access library. Its absence is a NoClassDefFoundError
+         the loader catches, and AxiamClient.opaqueAvailable() then answers false
+         rather than throwing at login time.
+
+         Not the Java 22 FFM API: this SDK targets Java 21, where java.lang.foreign
+         is still preview and would oblige every consumer to build with the
+         enable-preview flag. Raising the baseline to 22 to avoid one optional
+         dependency would be the larger break. -->
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna</artifactId>
+      <version>5.19.1</version>
+      <optional>true</optional>
+    </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
