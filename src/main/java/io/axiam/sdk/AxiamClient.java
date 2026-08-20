@@ -37,12 +37,11 @@ import io.axiam.sdk.oidc.OidcTokenSet;
 import io.axiam.sdk.oidc.SsoCompleteResult;
 import io.axiam.sdk.oidc.SsoStartResult;
 import io.axiam.sdk.oidc.VerifiedLogoutToken;
-import io.axiam.sdk.srp.Srp;
-import io.axiam.sdk.srp.SrpClientSession;
-import io.axiam.sdk.srp.SrpEnrollment;
-import io.axiam.sdk.srp.SrpGroup;
-import io.axiam.sdk.srp.SrpKdfParams;
-import io.axiam.sdk.srp.SrpProofs;
+import io.axiam.sdk.opaque.KsfParams;
+import io.axiam.sdk.opaque.LoginExchange;
+import io.axiam.sdk.opaque.Opaque;
+import io.axiam.sdk.opaque.OpaqueEnrollment;
+import io.axiam.sdk.opaque.RegistrationExchange;
 
 import okhttp3.java.net.cookiejar.JavaNetCookieJar;
 import okhttp3.FormBody;
@@ -120,8 +119,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     private static final String LOGIN_PATH = "/api/v1/auth/login";
     private static final String MFA_VERIFY_PATH = "/api/v1/auth/mfa/verify";
-    private static final String SRP_CHALLENGE_PATH = "/api/v1/auth/srp/challenge";
-    private static final String SRP_VERIFY_PATH = "/api/v1/auth/srp/verify";
+    private static final String OPAQUE_REGISTER_START_PATH = "/api/v1/auth/opaque/register/start";
+    private static final String OPAQUE_LOGIN_START_PATH = "/api/v1/auth/opaque/login/start";
+    private static final String OPAQUE_LOGIN_FINISH_PATH = "/api/v1/auth/opaque/login/finish";
     private static final String LOGOUT_PATH = "/api/v1/auth/logout";
     private static final String CHECK_PATH = "/api/v1/authz/check";
     private static final String BATCH_CHECK_PATH = "/api/v1/authz/check/batch";
@@ -825,133 +825,219 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     // ------------------------------------------------------------------
-    // Secure Remote Password (CONTRACT.md §23)
+    // OPAQUE, RFC 9807 (CONTRACT.md §23)
     // ------------------------------------------------------------------
 
     /**
-     * The group an exchange opens in before the server has named one.
-     *
-     * <p>The challenge response names the group, but {@code A} has to be
-     * computed <em>before</em> that response exists — so the first attempt
-     * guesses, and the exchange restarts if the server names another. The
-     * guess is AXIAM's own default, so the restart is the exceptional path
-     * rather than the normal one.
-     */
-    private static final SrpGroup SRP_OPENING_GROUP = SrpGroup.RFC5054_4096;
-
-    /**
-     * {@code POST /api/v1/auth/srp/challenge} followed by
-     * {@code /verify} — SRP-6a login (CONTRACT.md &sect;23).
+     * {@code POST /api/v1/auth/opaque/login/start} followed by
+     * {@code /finish} — OPAQUE login, RFC 9807 (CONTRACT.md &sect;23).
      *
      * <p>A sibling of {@link #login}, not a replacement. It takes the same
      * arguments and returns the same {@link LoginResult}, MFA branch included,
-     * so an application can switch a tenant to SRP without touching its own
-     * code (&sect;23.1).
+     * so an application can switch a tenant to OPAQUE without touching its own
+     * code.
      *
      * <p><strong>What this does that {@code login} does not.</strong> The
-     * password never leaves this process. What crosses the wire is {@code A}
-     * and a proof, neither of which is useful without the account's verifier —
-     * so a TLS-terminating proxy, an accidentally verbose request log, or a
-     * heap dump on the server cannot capture a plaintext password, because the
-     * server never has one. It does <strong>not</strong> protect against a
+     * password never leaves this process. What crosses the wire is a blinded
+     * group element and a MAC, neither useful without the account's
+     * registration record <em>and</em> the tenant's OPRF seed — so a
+     * TLS-terminating proxy, an accidentally verbose request log, or a heap
+     * dump on the server cannot capture a plaintext password, because the
+     * server never has one. It also means a stolen record database is not
+     * offline-crackable on its own, which is the pre-computation resistance
+     * SRP could not offer. It does <strong>not</strong> protect against a
      * compromised AXIAM server.
      *
-     * <p><strong>Cost.</strong> Runs the tenant's KDF: Argon2id at 19 MiB and
-     * t=2 by default, which is tens to hundreds of milliseconds of CPU plus
-     * that memory, per attempt. That cost is the point — it is what makes a
-     * leaked verifier no cheaper to attack than a leaked Argon2id hash.
+     * <p><strong>One round trip, and no server-proof step.</strong> SRP had to
+     * guess a group before the server named one and restart the exchange if it
+     * guessed wrong; {@code KE1} does not depend on the key-stretching
+     * function. And where the old &sect;23.3 rule 6 had to mandate an
+     * {@code M2} check in capitals — because skipping it kept only half the
+     * protocol — RFC 9807's AKE authenticates the server during the handshake,
+     * so opening {@code KE2} <em>is</em> the proof that it holds the record.
+     * There is nothing left to skip.
+     *
+     * <p><strong>Cost.</strong> Runs the tenant's key-stretching function:
+     * Argon2id at 19 MiB and t=2 by default, tens to hundreds of milliseconds
+     * of CPU plus that memory, per attempt. That cost is the point — it is what
+     * makes a stolen record expensive to attack even by someone holding the
+     * OPRF seed.
      *
      * @param usernameOrEmail the username or email to authenticate with
      * @param password        the account password, as a {@code char[]} so the
      *                        caller can clear it; this SDK clears every copy it
      *                        makes but cannot clear the caller's
      * @return the login outcome, exactly as {@link #login} returns it
-     * @throws NetworkError if the tenant has SRP disabled (the endpoint answers
-     *                      {@code 404} — a property of the tenant, not of any
-     *                      user), or if this SDK cannot perform the group or KDF
-     *                      the server named. Deliberately not {@link AuthError}:
-     *                      reporting a client capability gap as a credential
-     *                      failure would send a user off to reset a password
-     *                      that works.
-     * @throws AuthError    for a wrong password, and for a server whose
-     *                      {@code M2} does not verify — in the latter case no
-     *                      session is returned and the response's cookies are
-     *                      discarded, because an endpoint that cannot prove it
-     *                      holds the verifier is not the server it claims to be
+     * @throws NetworkError if the tenant has OPAQUE disabled (the endpoint
+     *                      answers {@code 404} — a property of the tenant, not
+     *                      of any user), if {@code libaxiam_opaque_ffi} is not
+     *                      installed, or if the server names a key-stretching
+     *                      function this SDK cannot ask for. Deliberately not
+     *                      {@link AuthError}: reporting a configuration gap as
+     *                      a credential failure would send a user off to reset
+     *                      a password that works, and would stop a caller
+     *                      falling back to {@link #login}
+     * @throws AuthError    for a wrong password, an account that does not
+     *                      exist, and a server that does not hold the record —
+     *                      indistinguishable by design. <strong>Nothing is sent
+     *                      to {@code login/finish} in that case</strong>
+     *                      (&sect;23.4 rule 7), and a caller must not retry over
+     *                      {@link #login}: that hands the plaintext to an
+     *                      endpoint that just failed to prove itself
      */
-    public LoginResult loginSrp(String usernameOrEmail, char[] password) {
+    public LoginResult loginOpaque(String usernameOrEmail, char[] password) {
         ensureOpen();
         onCredentialChange();
 
-        SrpClientSession srpSession = SrpClientSession.begin(SRP_OPENING_GROUP);
-        JsonNode challenge = srpChallenge(usernameOrEmail, srpSession);
+        try (LoginExchange exchange = Opaque.startLogin(password)) {
+            JsonNode started = opaqueStart(OPAQUE_LOGIN_START_PATH,
+                    opaqueLoginStartBody(usernameOrEmail, exchange.ke1()), "login/start");
 
-        // The server named a group other than the one A was computed in, so
-        // the exchange has to restart. Rare — the opening guess is AXIAM's own
-        // default — but a tenant on a narrower group must work rather than fail.
-        SrpGroup named = SrpGroup.fromWire(challenge.path("group").asText(""));
-        if (named != srpSession.group()) {
-            srpSession = SrpClientSession.begin(named);
-            challenge = srpChallenge(usernameOrEmail, srpSession);
-        }
-
-        // challenge.identity, never usernameOrEmail (§23.3 rule 2).
-        String identity = challenge.path("identity").asText("");
-        byte[] x = Srp.deriveX(identity, password, Srp.fromHex(challenge.path("salt").asText(""), "salt"),
-                SrpKdfParams.fromChallenge(challenge));
-        SrpProofs proofs;
-        try {
-            proofs = srpSession.finish(identity, challenge.path("salt").asText(""),
-                    challenge.path("b_pub").asText(""), x);
-        } finally {
-            java.util.Arrays.fill(x, (byte) 0);
-        }
-
-        ObjectNode body = MAPPER.createObjectNode();
-        body.put("srp_session", challenge.path("srp_session").asText(""));
-        body.put("client_proof", proofs.clientProof());
-
-        try (Response response = executeJsonPost(SRP_VERIFY_PATH, body)) {
-            int code = response.code();
-            if (code != 200 && code != 202) {
-                throw ErrorMapper.fromHttpStatus(code, "SRP login failed", response);
+            JsonNode ke2 = started.get("ke2");
+            if (ke2 == null || !ke2.isTextual()) {
+                throw new NetworkError("OPAQUE: login/start returned no `ke2`");
             }
-            JsonNode wire = readJson(response);
+            String ke3 = exchange.finish(password, ke2.asText(), KsfParams.fromWire(started));
 
-            // Mutual authentication (§23.3 rule 6), checked BEFORE anything
-            // from the response is read back as a session or reported. A rogue
-            // server that cannot prove itself must not get the chance to
-            // collect an MFA code either.
-            if (!Srp.verifyServerProof(proofs.expectedServerProof(), wire.path("server_proof").asText(null))) {
-                session.discardSessionCookies();
-                throw new AuthError("SRP: the server failed to prove it holds this account's verifier");
-            }
+            ObjectNode body = MAPPER.createObjectNode();
+            body.put("opaque_session", started.path("opaque_session").asText(""));
+            body.put("ke3", ke3);
 
-            if (code == 202) {
-                return new LoginResult(true, Sensitive.of(wire.path("challenge_token").asText()), null);
+            try (Response response = executeJsonPost(OPAQUE_LOGIN_FINISH_PATH, body)) {
+                int code = response.code();
+                if (code != 200 && code != 202) {
+                    throw ErrorMapper.fromHttpStatus(code, "OPAQUE login/finish failed", response);
+                }
+                if (code == 202) {
+                    JsonNode wire = readJson(response);
+                    return new LoginResult(true,
+                            Sensitive.of(wire.path("challenge_token").asText()), null);
+                }
+                return new LoginResult(false, null, buildUser());
             }
-            return new LoginResult(false, null, buildUser());
         }
     }
 
-    /** {@code CompletableFuture} async twin of {@link #loginSrp}.
+    /** {@code CompletableFuture} async twin of {@link #loginOpaque}.
      *
      * @param usernameOrEmail the username or email to authenticate with
      * @param password        the account password
      * @return a future resolving to the login outcome
      */
-    public CompletableFuture<LoginResult> loginSrpAsync(String usernameOrEmail, char[] password) {
-        return CompletableFuture.supplyAsync(() -> loginSrp(usernameOrEmail, password));
+    public CompletableFuture<LoginResult> loginOpaqueAsync(String usernameOrEmail, char[] password) {
+        return CompletableFuture.supplyAsync(() -> loginOpaque(usernameOrEmail, password));
     }
 
     /**
-     * Opens an SRP exchange and returns the challenge that answers it.
+     * Builds a registration record for {@code password}, to send with any
+     * request that sets one: {@code POST /api/v1/users},
+     * {@code /auth/password/change}, {@code /auth/reset/confirm} and
+     * {@code /admin/bootstrap}.
      *
-     * <p>Reuses the login body's tenant/org resolution so the two login paths
-     * cannot drift, and sends no {@code password} field — it has no business
-     * on this request.
+     * <p>The server cannot build this — it never sees the plaintext — so it has
+     * to arrive with the request or not at all.
+     *
+     * <p>Unlike the {@code srpEnrollment} it replaces this performs I/O: one
+     * {@code register/start} round trip. OPAQUE's envelope is sealed under the
+     * server's oblivious PRF, so there is no offline computation that produces
+     * a valid record.
+     *
+     * <p>Note the arguments that are gone. There is no {@code identity}: the
+     * SRP version required the account's canonical <em>username</em>, and an
+     * email there produced a verifier no login could ever satisfy, whereas a
+     * record binds to a credential identifier the server chooses. And there is
+     * no group or KDF, because those come from the {@code register/start}
+     * response — a caller cannot pick a cost the server will not honour.
+     *
+     * @param password the plaintext being enrolled
+     * @return the {@code opaque} object to attach to the request
+     * @throws NetworkError if the tenant has OPAQUE disabled, if
+     *                      {@code libaxiam_opaque_ffi} is not installed, or if
+     *                      the server names a key-stretching function this SDK
+     *                      cannot ask for
      */
-    private JsonNode srpChallenge(String usernameOrEmail, SrpClientSession srpSession) {
+    public OpaqueEnrollment opaqueEnrollment(char[] password) {
+        ensureOpen();
+
+        try (RegistrationExchange exchange = Opaque.startRegistration(password)) {
+            JsonNode started = opaqueStart(OPAQUE_REGISTER_START_PATH,
+                    opaqueRegisterStartBody(exchange.request()), "register/start");
+            String record = exchange.finish(password,
+                    started.path("registration_response").asText(""),
+                    KsfParams.fromWire(started));
+            return new OpaqueEnrollment(started.path("opaque_session").asText(""), record);
+        }
+    }
+
+    /**
+     * Whether this installation can perform OPAQUE (&sect;23.2).
+     *
+     * <p>Genuinely able to answer {@code false}, unlike the {@code srpAvailable}
+     * it replaces — which was hard-coded {@code true} on the JVM because
+     * {@code BigInteger} and BouncyCastle are always there. The protocol now
+     * comes from {@code libaxiam_opaque_ffi} via JNA, and both are optional:
+     * {@code net.java.dev.jna:jna} is an optional dependency of this SDK, and
+     * the shared library is a per-platform release asset rather than a Maven
+     * artifact. Ask before a login rather than discovering the gap mid-exchange.
+     *
+     * @return {@code true} when both are present and the library says it can
+     */
+    public boolean opaqueAvailable() {
+        return Opaque.available();
+    }
+
+    /**
+     * Sends one {@code &#42;/start} request and returns the parsed response.
+     *
+     * <p>Shared by both OPAQUE paths so the meaning of a failure cannot drift
+     * between them. A {@code 404} is a property of the tenant ("OPAQUE is off
+     * here"), not of the user and not of the credentials — so it is a
+     * {@link NetworkError} a caller can fall back on, never an
+     * {@link AuthError} that would be shown as "invalid password".
+     */
+    private JsonNode opaqueStart(String path, ObjectNode body, String what) {
+        try (Response response = executeJsonPost(path, body)) {
+            if (response.code() == 404) {
+                throw new NetworkError("OPAQUE: this tenant does not offer OPAQUE "
+                        + "(opaque_mode is disabled); use login() instead");
+            }
+            if (response.code() != 200) {
+                throw ErrorMapper.fromHttpStatus(response.code(),
+                        "OPAQUE " + what + " failed", response);
+            }
+            return readJson(response);
+        }
+    }
+
+    /**
+     * Builds the {@code login/start} body.
+     *
+     * <p>Carries the same tenant/org resolution as the password login so the
+     * two paths cannot drift, and no {@code password} field — that absence is
+     * the entire point of the exchange.
+     */
+    private ObjectNode opaqueLoginStartBody(String usernameOrEmail, String ke1) {
+        ObjectNode body = opaqueWorkspaceBody();
+        body.put("username_or_email", usernameOrEmail);
+        body.put("ke1", ke1);
+        return body;
+    }
+
+    /**
+     * Builds the {@code register/start} body.
+     *
+     * <p>Names no account at all: enrolment binds to a credential identifier
+     * the server chooses, which is why a later rename cannot invalidate a
+     * credential.
+     */
+    private ObjectNode opaqueRegisterStartBody(String registrationRequest) {
+        ObjectNode body = opaqueWorkspaceBody();
+        body.put("registration_request", registrationRequest);
+        return body;
+    }
+
+    /** The tenant/org fields every OPAQUE request carries. */
+    private ObjectNode opaqueWorkspaceBody() {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("tenant_slug", tenantId);
         UUID orgId = session.configuredOrgId();
@@ -961,82 +1047,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         } else if (orgSlug != null) {
             body.put("org_slug", orgSlug);
         }
-        body.put("username_or_email", usernameOrEmail);
-        body.put("client_public", srpSession.clientPublic());
-
-        try (Response response = executeJsonPost(SRP_CHALLENGE_PATH, body)) {
-            if (response.code() == 404) {
-                // 404 is a property of the tenant ("SRP is off here"), not of
-                // the user, and not a credential failure — so a caller can fall
-                // back to login() without mistaking it for a bad password.
-                throw new NetworkError("SRP: this tenant does not offer Secure Remote Password "
-                        + "(srp_mode is disabled); use login() instead");
-            }
-            if (response.code() != 200) {
-                throw ErrorMapper.fromHttpStatus(response.code(), "SRP challenge failed", response);
-            }
-            return readJson(response);
-        }
-    }
-
-    /**
-     * Computes a verifier for {@code password}, to send with any request that
-     * sets one: {@code POST /api/v1/users},
-     * {@code /auth/password/change}, {@code /auth/reset/confirm} and
-     * {@code /admin/bootstrap} (&sect;23.3 rule 11).
-     *
-     * <p>The server cannot compute this — it never sees the plaintext — so it
-     * has to arrive with the request or not at all. The salt is 32 fresh bytes
-     * from the platform CSPRNG on every call.
-     *
-     * <p>This performs no I/O; it is a method on the client only so it sits
-     * beside {@link #loginSrp} in the API.
-     *
-     * @param identity the account's <strong>username</strong> — the canonical
-     *                 identity the challenge endpoint hands back. An email here
-     *                 produces a verifier no login can ever satisfy
-     * @param password the plaintext being enrolled
-     * @param group    the tenant's group, from {@code GET /api/v1/auth/me} or
-     *                 the reset context; {@code null} means AXIAM's default
-     * @param params   the tenant's KDF and costs; any zero cost is filled in
-     *                 with AXIAM's default for that KDF
-     * @return the {@code srp} object to attach to the request
-     * @throws NetworkError if {@code params.kdf()} is not one this SDK implements
-     */
-    public SrpEnrollment srpEnrollment(String identity, char[] password,
-                                       @Nullable SrpGroup group, SrpKdfParams params) {
-        SrpGroup resolvedGroup = group == null ? SRP_OPENING_GROUP : group;
-        SrpKdfParams resolved = params.withDefaults();
-        byte[] salt = Srp.generateSalt();
-        byte[] x = Srp.deriveX(identity, password, salt, resolved);
-        try {
-            return new SrpEnrollment(
-                    resolvedGroup.wireName(),
-                    resolved.kdf(),
-                    resolved.memoryKib(),
-                    resolved.iterations(),
-                    resolved.parallelism(),
-                    Srp.toHex(salt),
-                    Srp.computeVerifier(resolvedGroup, x));
-        } finally {
-            java.util.Arrays.fill(x, (byte) 0);
-        }
-    }
-
-    /**
-     * Whether this SDK build can perform SRP.
-     *
-     * <p>Always {@code true} on the JVM: {@code BigInteger} is in the standard
-     * library, PBKDF2-HMAC-SHA256 comes from {@code javax.crypto}, and Argon2id
-     * from the BouncyCastle provider this SDK depends on. It exists because
-     * &sect;23.1 puts it in the locked method vocabulary for every SDK, and in
-     * PHP — which needs {@code ext-gmp} or {@code ext-bcmath} and is guaranteed
-     * neither — it genuinely answers {@code false}.
-     *
-     * @return {@code true}
-     */
-    public boolean srpAvailable() {
-        return true;
+        return body;
     }
 
     private AxiamUser buildUser() {

@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- OPAQUE (RFC 9807) login and enrolment (CONTRACT §23): `loginOpaque`,
+  `loginOpaqueAsync`, `opaqueEnrollment` and `opaqueAvailable` on
+  `AxiamClient`, plus the new `io.axiam.sdk.opaque` package.
+- `examples/opaque-login`.
+- `net.java.dev.jna:jna` as an **optional** dependency. It binds
+  `libaxiam_opaque_ffi`; a consumer whose tenant does not use OPAQUE does not
+  receive it transitively and does not need it.
+
+### Removed
+
+- **BREAKING** — SRP-6a. `loginSrp`, `loginSrpAsync`, `srpEnrollment`,
+  `srpAvailable`, the whole `io.axiam.sdk.srp` package, `srp-test-vectors.json`
+  and `examples/srp-login` are all gone. AXIAM's server-side SRP endpoints are
+  removed in the same release, so keeping the client would leave methods that
+  only ever return 404.
+
+### Changed
+
+- **BREAKING** — the OPAQUE protocol is NOT implemented in this SDK. CONTRACT
+  §23.1 forbids it, so the client half is a JNA binding to
+  `libaxiam_opaque_ffi` — the same implementation the AXIAM server links,
+  published as a per-platform asset on the axiam release page rather than on
+  Maven Central. Put it on `java.library.path` or set
+  `-Daxiam.opaque.library=` / `AXIAM_OPAQUE_LIBRARY`.
+- **BREAKING** — `opaqueAvailable()` can genuinely return `false`, where
+  `srpAvailable()` was hard-coded `true` on the JVM. Both JNA and the shared
+  library are optional and independently absent-able. Code that ignored
+  `srpAvailable()` must not ignore this one.
+- `opaqueEnrollment` performs I/O, where `srpEnrollment` did not: OPAQUE's
+  envelope is sealed under the server's oblivious PRF, so there is no offline
+  computation that produces a valid record. It also drops the `identity`,
+  `group` and KDF arguments — a record binds to a credential identifier the
+  server chooses, and the key-stretching parameters are the server's.
+- Failure taxonomy for the OPAQUE path: a tenant with OPAQUE disabled, an
+  absent library, and a key-stretching function this build cannot perform are
+  all `NetworkError` (a caller can fall back, or an operator can act);
+  everything else is `AuthError` and must NOT be retried over `login()`
+  (§23.4 rule 7).
+
 ## [1.0.0-alpha31] - 2026-08-20
 
 ### Changed
