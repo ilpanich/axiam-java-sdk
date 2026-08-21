@@ -5,32 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [1.0.0-alpha33] - 2026-08-21
-
-### Changed
-
-- Maintenance release — no notable changes since v1.0.0-alpha31.
-
-## [Unreleased]
-
-### Fixed
-
-- OPAQUE: a refused key-stretching function no longer strands the exchange's
-  native state handle. `finish()` spent the handle before building the KSF, so
-  an unrecognised function or an out-of-band cost left it out of its one-shot
-  slot and unreachable by `close()` or the `Cleaner` — a leaked Rust allocation
-  once per login attempt against a misconfigured tenant. The KSF is now built
-  first, so a refusal leaves the exchange intact: it is released normally, and a
-  caller who fixes the parameters can retry.
-
-### Changed
-
-- Re-vendor `openapi.json` at **1.0.0-alpha32**, matching the server. The
-  content was already byte-identical in every path and schema; only
-  `info.version` differed, which is what the cross-repo artifact-drift gate
-  reports as `STALE`.
-
-## [Unreleased]
 
 ### Added
 
@@ -42,16 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `libaxiam_opaque_ffi`; a consumer whose tenant does not use OPAQUE does not
   receive it transitively and does not need it.
 
-### Removed
-
-- **BREAKING** — SRP-6a. `loginSrp`, `loginSrpAsync`, `srpEnrollment`,
-  `srpAvailable`, the whole `io.axiam.sdk.srp` package, `srp-test-vectors.json`
-  and `examples/srp-login` are all gone. AXIAM's server-side SRP endpoints are
-  removed in the same release, so keeping the client would leave methods that
-  only ever return 404.
-
 ### Changed
 
+- Maintenance release — no notable changes since v1.0.0-alpha31.
+- Re-vendor `openapi.json` at **1.0.0-alpha32**, matching the server. The
+  content was already byte-identical in every path and schema; only
+  `info.version` differed, which is what the cross-repo artifact-drift gate
+  reports as `STALE`.
 - **BREAKING** — the OPAQUE protocol is NOT implemented in this SDK. CONTRACT
   §23.1 forbids it, so the client half is a JNA binding to
   `libaxiam_opaque_ffi` — the same implementation the AXIAM server links,
@@ -72,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all `NetworkError` (a caller can fall back, or an operator can act);
   everything else is `AuthError` and must NOT be retried over `login()`
   (§23.4 rule 7).
+
+### Removed
+
+- **BREAKING** — SRP-6a. `loginSrp`, `loginSrpAsync`, `srpEnrollment`,
+  `srpAvailable`, the whole `io.axiam.sdk.srp` package, `srp-test-vectors.json`
+  and `examples/srp-login` are all gone. AXIAM's server-side SRP endpoints are
+  removed in the same release, so keeping the client would leave methods that
+  only ever return 404.
+
+### Fixed
+
+- OPAQUE: a refused key-stretching function no longer strands the exchange's
+  native state handle. `finish()` spent the handle before building the KSF, so
+  an unrecognised function or an out-of-band cost left it out of its one-shot
+  slot and unreachable by `close()` or the `Cleaner` — a leaked Rust allocation
+  once per login attempt against a misconfigured tenant. The KSF is now built
+  first, so a refusal leaves the exchange intact: it is released normally, and a
+  caller who fixes the parameters can retry.
 
 ## [1.0.0-alpha31] - 2026-08-20
 
@@ -104,17 +96,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ReactorConnections — enforce §8b instead of documenting it
 - §22.14 declarative reactor handler binding — ReactorHandlers
-
-### Changed
-
-- Re-vendor CONTRACT.md 1.23 (§8b rules 7 and 8)
-- Re-vendor openapi.json for the SCIM provisioning-token endpoints
-- Re-vendor CONTRACT.md 1.22 from the server repo
-
-## [Unreleased]
-
-### Added
-
 - **`ReactorConnections` — CONTRACT.md §8b enforced rather than described.**
   `ReactorServeOptions.builder(channel, …)` takes an already-open channel, and
   §8b's requirements travelled with it as a javadoc sentence: "its connection
@@ -147,9 +128,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-vendor CONTRACT.md 1.23 (§8b rules 7 and 8)
+- Re-vendor openapi.json for the SCIM provisioning-token endpoints
+- Re-vendor CONTRACT.md 1.22 from the server repo
 - Re-vendor `openapi.json` at 1.0.0-alpha27 — the copy was pinned at alpha26 and
   failing the cross-repo artifact-drift gate
-
 
 ## [1.0.0-alpha25] - 2026-08-16
 
@@ -165,24 +148,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report a clamped decision-memo TTL (contract 1.9, §19.2 rule 6)
 - §17 memo, §18 close(), §19 telemetry, §16.6 switch (D5)
 - Device grant, token exchange, logout helpers; re-vendor (D6)
-
-### Changed
-
-- Re-vendor CONTRACT.md 1.19, openapi.json and proto/ from main (R5.8) (#50)
-- R5.7: OIDC/SSO conformance follow-ups (F-12, F-13, F-15, F-17) (#49)
-- Contract 1.15 — §10.1 rule 9, sender-constrained access tokens (#47)
-- Add the §20.7 required timeout assertion
-- Retire the "measured residual" justification (contract 1.14)
-- Re-sync to contract 1.14 (#302 closed)
-
-### Fixed
-
-- Reattach oidcClockSkew's javadoc, orphaned by the D5 builder methods
-
-## [Unreleased]
-
-### Added
-
 - **CONTRACT.md §22 — the reactor runtime (`io.axiam.sdk.reactor`).** A reactor is
   an external process subscribed to named hook events on the AMQP bus, answering
   allow / deny / mutate inside a timeout the server declared.
@@ -276,60 +241,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CONTRACT.md §21** — the FAPI 2.0 posture as an SDK sees it. Only rule 9 is normative
   for this SDK.
-
-### Changed
-
-- **Re-sync vendored `CONTRACT.md` / `openapi.json` to contract 1.15.**
-
-
-### Changed
-
-- **Re-sync vendored `CONTRACT.md` to contract 1.14** — documentation only, no code change.
-  §20.2 rule 6 (a permission ticket MUST NOT be retried) cited a "measured residual
-  (ilpanich/axiam#302) … roughly 1 in 640" as its second reason. That residual is closed: the
-  server now decides the ticket race with a transaction its storage engine arbitrates plus a
-  redemption nonce read back after the commit. **The rule is unchanged, and this SDK's
-  behaviour is unchanged** — `uma_exchange_ticket` stays excluded from every automatic retry
-  path. What changed is the reasoning: the first reason (a spent ticket makes the retry
-  useless) always stood alone, and the second now rests on what an SDK can actually know —
-  it is talking to a server whose storage engine it cannot attest, and the guarantee is
-  conditional on that engine being persistent.
-- **BREAKING (contract 1.13): `tokenExchange`'s `subjectTokenType` is now required**, and the
-  seven-argument overload that defaulted it is **removed**.
-
-  It shipped as a `default` method delegating with a `null` type — which satisfied §15.7's
-  "never inspect the subject token" while leaving the rule it serves unenforced: an overload
-  that fills the argument in *is* a default the SDK applies whenever the caller says nothing.
-  §15.1 now makes it required, so the overload had to go rather than be deprecated: it was the
-  default, in method form.
-
-  The one-argument convenience `tokenExchange(Sensitive)` becomes
-  `tokenExchange(Sensitive, String)` for the same reason — it was the shortest path to the very
-  default being removed, since a caller reaching for the convenience form would have had the
-  type chosen for them.
-
-  Java cannot demand a non-null argument at compile time, so the demand lands at the call:
-  `null` or blank throws `AuthError` **client-side, with no wire call** — not even discovery —
-  naming the argument and both constants.
-
-  **Migration** — one argument, naming what you were previously getting by silence:
-
-  ```java
-  ExchangedToken exchanged = client.tokenExchange(
-          Sensitive.of(userToken),
-          OidcOperations.ACCESS_TOKEN_TYPE,   // <- add this
-          null, List.of("orders:read"), "orders-service", null, null, null);
-  ```
-
-  Implementors of `OidcOperations` other than `AxiamClient` lose an inherited method and must
-  implement the eight-argument form.
-
-  This closes a gap rather than opening one: `subject_token_type` has always been required *on
-  the wire*, and the SDK was covering for that with a constant which stopped being the only
-  legal value when X4 landed.
-
-### Added
-
 - **§15.7 external-IdP subject tokens (X4).** `tokenExchange` can now exchange a token minted by
   a trusted external IdP — a partner's Entra, Okta or Keycloak — for an AXIAM token scoped to
   what the resolved AXIAM user may actually do. No new operation: a new eight-argument
@@ -417,9 +328,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-vendor CONTRACT.md 1.19, openapi.json and proto/ from main (R5.8) (#50)
+- R5.7: OIDC/SSO conformance follow-ups (F-12, F-13, F-15, F-17) (#49)
+- Contract 1.15 — §10.1 rule 9, sender-constrained access tokens (#47)
+- Add the §20.7 required timeout assertion
+- Retire the "measured residual" justification (contract 1.14)
+- Re-sync to contract 1.14 (#302 closed)
+- **Re-sync vendored `CONTRACT.md` / `openapi.json` to contract 1.15.**
+- **Re-sync vendored `CONTRACT.md` to contract 1.14** — documentation only, no code change.
+  §20.2 rule 6 (a permission ticket MUST NOT be retried) cited a "measured residual
+  (ilpanich/axiam#302) … roughly 1 in 640" as its second reason. That residual is closed: the
+  server now decides the ticket race with a transaction its storage engine arbitrates plus a
+  redemption nonce read back after the commit. **The rule is unchanged, and this SDK's
+  behaviour is unchanged** — `uma_exchange_ticket` stays excluded from every automatic retry
+  path. What changed is the reasoning: the first reason (a spent ticket makes the retry
+  useless) always stood alone, and the second now rests on what an SDK can actually know —
+  it is talking to a server whose storage engine it cannot attest, and the guarantee is
+  conditional on that engine being persistent.
+- **BREAKING (contract 1.13): `tokenExchange`'s `subjectTokenType` is now required**, and the
+  seven-argument overload that defaulted it is **removed**.
+
+  It shipped as a `default` method delegating with a `null` type — which satisfied §15.7's
+  "never inspect the subject token" while leaving the rule it serves unenforced: an overload
+  that fills the argument in *is* a default the SDK applies whenever the caller says nothing.
+  §15.1 now makes it required, so the overload had to go rather than be deprecated: it was the
+  default, in method form.
+
+  The one-argument convenience `tokenExchange(Sensitive)` becomes
+  `tokenExchange(Sensitive, String)` for the same reason — it was the shortest path to the very
+  default being removed, since a caller reaching for the convenience form would have had the
+  type chosen for them.
+
+  Java cannot demand a non-null argument at compile time, so the demand lands at the call:
+  `null` or blank throws `AuthError` **client-side, with no wire call** — not even discovery —
+  naming the argument and both constants.
+
+  **Migration** — one argument, naming what you were previously getting by silence:
+
+  ```java
+  ExchangedToken exchanged = client.tokenExchange(
+          Sensitive.of(userToken),
+          OidcOperations.ACCESS_TOKEN_TYPE,   // <- add this
+          null, List.of("orders:read"), "orders-service", null, null, null);
+  ```
+
+  Implementors of `OidcOperations` other than `AxiamClient` lose an inherited method and must
+  implement the eight-argument form.
+
+  This closes a gap rather than opening one: `subject_token_type` has always been required *on
+  the wire*, and the SDK was covering for that with a constant which stopped being the only
+  legal value when X4 landed.
 - Re-vendored `CONTRACT.md` at **1.8.2**. `openapi.json` unchanged — docs-only contract revs.
 - `login`, `verifyMfa`, `refresh` and `logout` clear the decision memo (§17.1 rule 9) and
   reject after close (§18.1 rule 4).
+
+### Fixed
+
+- Reattach oidcClockSkew's javadoc, orphaned by the D5 builder methods
 
 ### Notes
 
@@ -433,6 +398,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Apply the full CONTRACT §10.1 local-verification set
 - Add HMAC-SHA256 webhook signature verifier (CONTRACT.md §13)
+- Add `io.axiam.sdk.webhook.AxiamWebhooks.verify` — HMAC-SHA256
+  webhook-signature verification with a two-sided freshness window
+  (CONTRACT.md §13, T-145)
+- `JwksVerifierLocalVerificationSetTest` and two new
+  `AxiamAuthenticationFilterTest` cases cover the complete §10.1 required
+  negative set (expired, no `exp`, non-numeric `exp`, future `nbf`, different
+  tenant, no `tenant_id`, `alg: none`, HS-signed token bearing an EdDSA kid)
+  plus issuer/audience mismatch cases, each with a non-vacuity positive. One
+  test pins nimbus's null-expiry-for-absent-`exp` behaviour so a future
+  library change surfaces loudly instead of leaving dead defensive code.
 
 ### Changed
 
@@ -441,26 +416,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump the minor-patch group with 5 updates
 - Bump actions/setup-java from 5.6.0 to 5.7.0
 - Bump coverallsapp/github-action from 2.3.7 to 2.3.8
-
-### Fixed
-
-- Clear the SecurityContext when a caller's token is rejected (#37)
-- Lower the clock-skew ceiling 300s -> 60s (§13.4 observation 5) (#34)
-
-## [Unreleased]
-
-### Changed — BREAKING (configuration)
-
-- **`JwksVerifier.MAX_CLOCK_SKEW_SECONDS` lowered 300 → 60 (§13.4 observation 5).**
-  The old ceiling satisfied CONTRACT.md §10.1 rule 7 — it was named and bounded —
-  but it was 5× the RECOMMENDED leeway and 5× what every sibling SDK fixes its
-  value at, so an operator could widen the acceptance window on an expired token
-  to five minutes and still be "conformant". The ceiling now equals the
-  recommendation.
-
-  A `LocalVerificationPolicy` constructed with a leeway above 60 now throws
-  `IllegalArgumentException` instead of being accepted. The default (60) is
-  unchanged, so this affects only deployments that explicitly widened it.
 
 ### Changed — BREAKING
 
@@ -524,18 +479,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults, so no `application.properties` change is required; only direct
   Java callers of the bean factory method are affected.
 
-### Added
+### Changed — BREAKING (configuration)
 
-- Add `io.axiam.sdk.webhook.AxiamWebhooks.verify` — HMAC-SHA256
-  webhook-signature verification with a two-sided freshness window
-  (CONTRACT.md §13, T-145)
-- `JwksVerifierLocalVerificationSetTest` and two new
-  `AxiamAuthenticationFilterTest` cases cover the complete §10.1 required
-  negative set (expired, no `exp`, non-numeric `exp`, future `nbf`, different
-  tenant, no `tenant_id`, `alg: none`, HS-signed token bearing an EdDSA kid)
-  plus issuer/audience mismatch cases, each with a non-vacuity positive. One
-  test pins nimbus's null-expiry-for-absent-`exp` behaviour so a future
-  library change surfaces loudly instead of leaving dead defensive code.
+- **`JwksVerifier.MAX_CLOCK_SKEW_SECONDS` lowered 300 → 60 (§13.4 observation 5).**
+  The old ceiling satisfied CONTRACT.md §10.1 rule 7 — it was named and bounded —
+  but it was 5× the RECOMMENDED leeway and 5× what every sibling SDK fixes its
+  value at, so an operator could widen the acceptance window on an expired token
+  to five minutes and still be "conformant". The ceiling now equals the
+  recommendation.
+
+  A `LocalVerificationPolicy` constructed with a leeway above 60 now throws
+  `IllegalArgumentException` instead of being accepted. The default (60) is
+  unchanged, so this affects only deployments that explicitly widened it.
+
+### Fixed
+
+- Clear the SecurityContext when a caller's token is rejected (#37)
+- Lower the clock-skew ceiling 300s -> 60s (§13.4 observation 5) (#34)
 
 ## [1.0.0-alpha23] - 2026-08-02
 
@@ -599,12 +559,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0-alpha10] - 2026-07-18
 
-### Changed
-
-- Maintenance release — no notable changes since v1.0.0-alpha9.
-
-## [Unreleased]
-
 ### Added
 
 - OIDC / SSO relying-party helpers (CONTRACT.md §12, adopting contract version
@@ -662,6 +616,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are required together (else `IllegalArgumentException` at `build()`), a
   malformed PEM fails at construction time, and the private key is held as
   secret material (never exposed via a getter, `toString()`, or logs).
+
+### Changed
+
+- Maintenance release — no notable changes since v1.0.0-alpha9.
 
 ### Fixed
 
