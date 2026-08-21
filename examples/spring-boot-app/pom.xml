@@ -36,7 +36,7 @@
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-sdk</artifactId>
-      <version>1.0.0-alpha34</version>
+      <version>1.0.0-alpha37</version>
     </dependency>
 
     <dependency>
