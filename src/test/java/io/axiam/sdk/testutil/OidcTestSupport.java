@@ -118,6 +118,7 @@ public final class OidcTestSupport {
                 + "\"urn:ietf:params:oauth:grant-type:device_code\","
                 + "\"urn:ietf:params:oauth:grant-type:token-exchange\"],"
                 + "\"device_authorization_endpoint\":\"" + trimmed + "/oauth2/device_authorization\","
+                + "\"pushed_authorization_request_endpoint\":\"" + trimmed + "/oauth2/par\","
                 + "\"end_session_endpoint\":\"" + trimmed + "/oauth2/end_session\","
                 + "\"backchannel_logout_supported\":true,"
                 + "\"backchannel_logout_session_supported\":true"

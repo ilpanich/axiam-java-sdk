@@ -28,6 +28,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CONTRACT.md §24 — WebAuthn / passkeys relying-party layer
+  (`io.axiam.sdk.webauthn`): the six wire operations, the two distinct
+  authentication ceremonies, and §24.6a's JSON bridge, which lets an Android
+  app pass Credential Manager's `requestJson`/`registrationResponseJson`
+  straight through without this artifact gaining an Android dependency.
+  §24.6b's linked-API helper is deliberately absent — the JVM has no
+  authenticator, and §24.6b rule 2 forbids emulating one in software.
+- CONTRACT.md §25 — account lifecycle and MFA enrolment
+  (`io.axiam.sdk.account`): voluntary and forced TOTP enrolment, email
+  verification, and the password-reset triple including the `reset/context`
+  call a tenant with §23 enabled requires before a new password can be built.
+- CONTRACT.md §26 — Pushed Authorization Requests, RFC 9126 (`oidcPar`,
+  `oidcParAsync`, `PushedAuthorizationRequest`). Required for a FAPI 2.0
+  client, which cannot authorize any other way (§21.1).
+- `examples/webauthn-passkeys`, `examples/account-lifecycle` and
+  `examples/par-login`.
+
+### Changed
+
+- `LoginResult` gained `mfaSetupRequired` and `setupToken` for §25.2 rule 1's
+  third login outcome. Additive: the three-argument constructor still compiles
+  and answers `false` for the new flag. Callers that branch only on
+  `mfaRequired()` should still add the new branch — a tenant that turns on
+  required MFA will start returning it, and ignoring it reports a successful
+  login that has no session.
+- `OidcConfiguration` gained `pushed_authorization_request_endpoint`. Positional
+  construction of the record changes arity; the parsed-from-discovery path does
+  not.
+- Re-vendored `CONTRACT.md` and `openapi.json` at contract 1.28.
+
 ## [1.0.0-alpha33] - 2026-08-21
 
 ### Added

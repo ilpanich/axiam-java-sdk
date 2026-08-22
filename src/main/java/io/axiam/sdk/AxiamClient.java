@@ -17,6 +17,10 @@ import io.axiam.sdk.internal.DecisionMemo;
 import io.axiam.sdk.internal.RefreshGuard;
 import io.axiam.sdk.internal.TelemetryDispatcher;
 import io.axiam.sdk.telemetry.TelemetryEvent;
+import io.axiam.sdk.webauthn.WebauthnChallenge;
+import io.axiam.sdk.webauthn.WebauthnCredential;
+import io.axiam.sdk.webauthn.WebauthnLoginResult;
+import io.axiam.sdk.webauthn.WebauthnWorkspace;
 import io.axiam.sdk.telemetry.TelemetryHook;
 import io.axiam.sdk.internal.Retry;
 import io.axiam.sdk.internal.SessionState;
@@ -34,9 +38,14 @@ import io.axiam.sdk.oidc.OidcConfiguration;
 import io.axiam.sdk.oidc.OidcOperations;
 import io.axiam.sdk.oidc.OidcPkce;
 import io.axiam.sdk.oidc.OidcTokenSet;
+import io.axiam.sdk.oidc.PushedAuthorizationRequest;
 import io.axiam.sdk.oidc.SsoCompleteResult;
 import io.axiam.sdk.oidc.SsoStartResult;
 import io.axiam.sdk.oidc.VerifiedLogoutToken;
+import io.axiam.sdk.account.MfaEnrollment;
+import io.axiam.sdk.account.PasswordResetConfirmation;
+import io.axiam.sdk.account.PasswordResetContext;
+import io.axiam.sdk.account.PasswordResetRequest;
 import io.axiam.sdk.opaque.KsfParams;
 import io.axiam.sdk.opaque.LoginExchange;
 import io.axiam.sdk.opaque.Opaque;
@@ -119,6 +128,30 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     private static final String LOGIN_PATH = "/api/v1/auth/login";
     private static final String MFA_VERIFY_PATH = "/api/v1/auth/mfa/verify";
+
+    // CONTRACT.md §24 — WebAuthn / passkeys.
+    /** Only the first few KB of a §24.4 rule 1 attestation-policy body are read. */
+    private static final long MAX_POLICY_MESSAGE_PEEK_BYTES = 8192;
+
+    private static final String WEBAUTHN_REGISTER_START_PATH = "/api/v1/auth/webauthn/register/start";
+    private static final String WEBAUTHN_REGISTER_FINISH_PATH = "/api/v1/auth/webauthn/register/finish";
+    private static final String WEBAUTHN_AUTH_START_PATH = "/api/v1/auth/webauthn/authenticate/start";
+    private static final String WEBAUTHN_AUTH_FINISH_PATH = "/api/v1/auth/webauthn/authenticate/finish";
+    private static final String WEBAUTHN_DISCOVERABLE_START_PATH =
+            "/api/v1/auth/webauthn/authenticate/discoverable/start";
+    private static final String WEBAUTHN_DISCOVERABLE_FINISH_PATH =
+            "/api/v1/auth/webauthn/authenticate/discoverable/finish";
+
+    // CONTRACT.md §25 — account lifecycle and MFA enrolment.
+    private static final String MFA_ENROLL_PATH = "/api/v1/auth/mfa/enroll";
+    private static final String MFA_CONFIRM_PATH = "/api/v1/auth/mfa/confirm";
+    private static final String MFA_SETUP_ENROLL_PATH = "/api/v1/auth/mfa/setup/enroll";
+    private static final String MFA_SETUP_CONFIRM_PATH = "/api/v1/auth/mfa/setup/confirm";
+    private static final String VERIFY_EMAIL_PATH = "/api/v1/auth/verify-email";
+    private static final String RESEND_VERIFICATION_PATH = "/api/v1/auth/resend-verification";
+    private static final String RESET_PATH = "/api/v1/auth/reset";
+    private static final String RESET_CONFIRM_PATH = "/api/v1/auth/reset/confirm";
+    private static final String RESET_CONTEXT_PATH = "/api/v1/auth/reset/context";
     private static final String OPAQUE_REGISTER_START_PATH = "/api/v1/auth/opaque/register/start";
     private static final String OPAQUE_LOGIN_START_PATH = "/api/v1/auth/opaque/login/start";
     private static final String OPAQUE_LOGIN_FINISH_PATH = "/api/v1/auth/opaque/login/finish";
@@ -714,8 +747,53 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 String challengeToken = wire.path("challenge_token").asText();
                 return new LoginResult(true, Sensitive.of(challengeToken), null);
             }
+            if (response.code() == 403) {
+                // CONTRACT.md §25.2 rule 1: a 403 carrying mfa_setup_required
+                // is an OUTCOME, not a refusal. The tenant requires MFA, this
+                // account has none, and the server handed back the token to
+                // finish.
+                //
+                // Matched on the body's own discriminant rather than the status
+                // alone: a genuine authorization refusal is also a 403, and
+                // only one of the two carries a setup_token.
+                //
+                // Read with peekBody, not readJson: a 403 that is NOT this
+                // outcome must reach ErrorMapper with its body still intact,
+                // both so the §2 authz mapping can lift action/resource_id out
+                // of it and so a non-JSON body stays an AuthzError rather than
+                // becoming a parse failure.
+                Sensitive setupToken = readSetupToken(response);
+                if (setupToken != null) {
+                    return LoginResult.mfaSetupRequired(setupToken);
+                }
+                throw ErrorMapper.fromHttpStatus(403, "login failed", response);
+            }
             throw ErrorMapper.fromHttpStatus(response.code(), "login failed", response);
         }
+    }
+
+    /**
+     * The {@code setup_token} from a &sect;25.2 rule 1 {@code 403}, or
+     * {@code null} when this 403 is an ordinary authorization refusal.
+     *
+     * <p>Non-destructive: the response body is left exactly as received, so
+     * the caller can still hand it to {@link ErrorMapper}.
+     */
+    private static @Nullable Sensitive readSetupToken(Response response) {
+        if (response.body() == null) {
+            return null;
+        }
+        try {
+            JsonNode wire = MAPPER.readTree(
+                    response.peekBody(MAX_POLICY_MESSAGE_PEEK_BYTES).string());
+            String token = wire.path("setup_token").asText("");
+            if (wire.path("mfa_setup_required").asBoolean(false) && !token.isEmpty()) {
+                return Sensitive.of(token);
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // A non-JSON 403 is simply not this outcome.
+        }
+        return null;
     }
 
     /** {@code CompletableFuture} async twin of {@link #login}.
@@ -1797,6 +1875,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 textList(wire, "grant_types_supported"),
                 wire.hasNonNull("device_authorization_endpoint")
                         ? wire.get("device_authorization_endpoint").asText() : null,
+                wire.hasNonNull("pushed_authorization_request_endpoint")
+                        ? wire.get("pushed_authorization_request_endpoint").asText() : null,
                 wire.hasNonNull("end_session_endpoint")
                         ? wire.get("end_session_endpoint").asText() : null,
                 wire.path("backchannel_logout_supported").asBoolean(false),
@@ -2527,6 +2607,799 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ResponseBody body = response.body();
         if (body != null) {
             body.close();
+        }
+    }
+
+
+
+    // ------------------------------------------------------------------
+    // §26 Pushed Authorization Requests (RFC 9126)
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code POST /oauth2/par} (CONTRACT.md &sect;26.1) — push the authorization
+     * request over the back channel and get an opaque handle to redirect with.
+     *
+     * <p>PAR moves the authorization request off the browser. Instead of
+     * putting {@code scope}, {@code redirect_uri}, {@code state} and the PKCE
+     * challenge into a URL the user agent carries, the client POSTs them
+     * straight to AXIAM over an authenticated channel and puts an opaque
+     * {@code request_uri} in the redirect. What travels through the browser is
+     * then a random string that cannot be edited into meaning something else.
+     *
+     * <p><strong>Required for a FAPI 2.0 client</strong>: {@code profile:
+     * "fapi2"} refuses a registration that does not set {@code require_par}, so
+     * such a client cannot authorize any other way (&sect;21.1).
+     *
+     * <p>Not retried on a {@code 5xx} or a transport failure — it is a POST
+     * that creates server state, so it falls outside &sect;16.2's read-only
+     * eligibility exactly as {@code oidcExchange} does. The safe recovery is a
+     * fresh push, which costs one round trip and cannot double-consume anything
+     * (&sect;26.2 rule 4).
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope; {@code openid} is added when absent
+     * @param tenantId      a tenant override for the {@code ?tenant_id=} query parameter
+     * @return the opaque handle and the URL to redirect the browser to
+     */
+    public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
+            AuthorizationRequest request, String redirectUri, @Nullable String scope,
+            @Nullable UUID tenantId) {
+        ensureOpen();
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        String endpoint = config.pushed_authorization_request_endpoint();
+        if (endpoint == null || endpoint.isEmpty()) {
+            throw new AuthError("the authorization server's discovery document advertises no "
+                    + "pushed_authorization_request_endpoint: this server does not support RFC 9126 "
+                    + "(CONTRACT.md §26.1)");
+        }
+
+        // §26.2 rule 1: everything below was computed by oidcBegin. There is no
+        // second generator here, and there must not be — two sources for state
+        // or the PKCE pair are two things that can disagree.
+        FormBody.Builder form = new FormBody.Builder()
+                .add("client_id", requireOidcClientId())
+                .add("response_type", "code")
+                .add("redirect_uri", redirectUri)
+                .add("scope", normalizeScope(scope))
+                .add("state", request.state())
+                .add("nonce", request.nonce())
+                .add("code_challenge", OidcPkce.computeCodeChallenge(request.codeVerifier().expose()))
+                .add("code_challenge_method", OidcPkce.CODE_CHALLENGE_METHOD_S256);
+        if (oidcClientSecret != null) {
+            form.add("client_secret", oidcClientSecret.expose());
+        }
+
+        String url = oauth2Url(endpoint, tenantId);
+        JsonNode wire;
+        // 201, not 200. RFC 9126 §2.2 specifies Created, and this is the one
+        // thing an implementation of this section gets wrong: a success
+        // predicate written == 200 treats every successful push as a failure
+        // while passing every other assertion.
+        try (Response response = executeFormPost(url, form.build())) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2Response(
+                        response.code(), response, "pushed authorization request failed");
+            }
+            wire = readJson(response);
+        }
+        String requestUri = wire.path("request_uri").asText();
+
+        // §26.2 rule 2: exactly two query parameters. The server REFUSES a
+        // request carrying both a request_uri and any inline authorization
+        // parameter rather than merging them: an attacker supplies the inline
+        // value they want and lets the pushed copy satisfy whichever check
+        // reads the other one. Re-adding them "for compatibility" restores the
+        // attack.
+        HttpUrl authorizationEndpoint = HttpUrl.parse(config.authorization_endpoint());
+        if (authorizationEndpoint == null) {
+            throw new NetworkError("discovery document authorization_endpoint is not a valid URL: "
+                    + config.authorization_endpoint());
+        }
+        String authorizationUrl = authorizationEndpoint.newBuilder()
+                .query(null)
+                .addQueryParameter("client_id", requireOidcClientId())
+                .addQueryParameter("request_uri", requestUri)
+                .build()
+                .toString();
+
+        return new PushedAuthorizationRequest(
+                authorizationUrl,
+                Sensitive.of(requestUri),
+                wire.path("expires_in").asLong(),
+                request.state(),
+                request.nonce(),
+                request.codeVerifier());
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #oidcPar}.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope
+     * @param tenantId      a tenant override for the query parameter
+     * @return a future resolving to the pushed request
+     */
+    public CompletableFuture<PushedAuthorizationRequest> oidcParAsync(
+            @Nullable OidcConfiguration configuration, AuthorizationRequest request,
+            String redirectUri, @Nullable String scope, @Nullable UUID tenantId) {
+        return CompletableFuture.supplyAsync(
+                () -> oidcPar(configuration, request, redirectUri, scope, tenantId));
+    }
+
+    // ------------------------------------------------------------------
+    // §24 WebAuthn / passkeys — the relying-party layer
+    //
+    // The JVM has no authenticator, so §24.6b's linked-API helper is
+    // deliberately absent: §24.6b rule 2 forbids emulating one in software,
+    // and a "credential" held in process memory is not a second factor. What
+    // is here is the half that talks to AXIAM, plus §24.6a's JSON bridge —
+    // which is what lets an Android app pass requestJson straight into
+    // CreatePublicKeyCredentialRequest and the response straight back.
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/register/start} (CONTRACT.md &sect;24.1).
+     *
+     * <p>Enrolling a passkey is something a signed-in user does to their own
+     * account, so this requires a session and fails <strong>client-side with no
+     * wire call</strong> when there is none.
+     *
+     * <p>A {@code 503} means the tenant's attestation policy requires
+     * attestation and the FIDO metadata service has no usable snapshot. That is
+     * a server configuration state, not a transient failure, so &sect;24.4
+     * rule 2 deliberately does not retry it.
+     *
+     * @return the server's challenge and the state token binding a response to it
+     */
+    public WebauthnChallenge webauthnRegisterStart() {
+        ensureOpen();
+        requireWebauthnSession("webauthnRegisterStart");
+        return webauthnStart(WEBAUTHN_REGISTER_START_PATH, MAPPER.createObjectNode());
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnRegisterStart}.
+     *
+     * @return a future resolving to the challenge
+     */
+    public CompletableFuture<WebauthnChallenge> webauthnRegisterStartAsync() {
+        return CompletableFuture.supplyAsync(this::webauthnRegisterStart);
+    }
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/register/finish} (CONTRACT.md &sect;24.1).
+     *
+     * <p>{@code response} is the authenticator's answer — pass the platform's
+     * own JSON string (&sect;24.6a rule 2): Android's
+     * {@code registrationResponseJson}, a browser's {@code credential.toJSON()}.
+     * It reaches the server unchanged, because it is the input to a signature
+     * check over bytes this SDK did not produce.
+     *
+     * <p>A {@code 403} is the tenant's attestation policy refusing
+     * <strong>this authenticator</strong> — an AAGUID that is not allow-listed,
+     * a missing FIDO certification, a revoked status — not a permission problem
+     * with the user. The server's message is surfaced verbatim (&sect;24.4
+     * rule 1), because it is the only way the person holding the key learns a
+     * different one would work.
+     *
+     * @param stateToken     the token from {@link #webauthnRegisterStart}
+     * @param credentialName the label to store the credential under
+     * @param response       the authenticator's response JSON, verbatim
+     * @return the credential just enrolled
+     */
+    public WebauthnCredential webauthnRegisterFinish(
+            Sensitive stateToken, String credentialName, String response) {
+        ensureOpen();
+        requireWebauthnSession("webauthnRegisterFinish");
+
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("state_token", stateToken.expose());
+        body.put("credential_name", credentialName);
+        body.set("response", parseAuthenticatorResponse(response, "webauthnRegisterFinish"));
+
+        try (Response http = executeJsonPost(WEBAUTHN_REGISTER_FINISH_PATH, body)) {
+            if (http.code() != 200 && http.code() != 201) {
+                throw registerFinishError(http);
+            }
+            JsonNode wire = readJson(http);
+            String lastUsed = wire.path("last_used_at").asText("");
+            return new WebauthnCredential(
+                    UUID.fromString(wire.path("id").asText()),
+                    wire.path("credential_id").asText(),
+                    wire.path("name").asText(),
+                    wire.path("credential_type").asText(),
+                    wire.path("created_at").asText(),
+                    lastUsed.isEmpty() ? null : lastUsed);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnRegisterFinish}.
+     *
+     * @param stateToken     the token from {@link #webauthnRegisterStart}
+     * @param credentialName the label to store the credential under
+     * @param response       the authenticator's response JSON, verbatim
+     * @return a future resolving to the enrolled credential
+     */
+    public CompletableFuture<WebauthnCredential> webauthnRegisterFinishAsync(
+            Sensitive stateToken, String credentialName, String response) {
+        return CompletableFuture.supplyAsync(
+                () -> webauthnRegisterFinish(stateToken, credentialName, response));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/authenticate/start} (CONTRACT.md &sect;24.1).
+     *
+     * <p>The <strong>second-factor</strong> ceremony: it continues a
+     * {@link #login} that answered {@code mfaRequired} with {@code "webauthn"}
+     * among its methods, and {@code challengeToken} is that result's token.
+     *
+     * <p>A different flow from {@link #webauthnDiscoverableStart}, not the same
+     * one with an optional argument — see &sect;24.2 for why they cannot be
+     * merged.
+     *
+     * @param challengeToken the MFA challenge token from {@link #login}
+     * @return the server's challenge and its state token
+     */
+    public WebauthnChallenge webauthnAuthenticateStart(Sensitive challengeToken) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("challenge_token", challengeToken.expose());
+        return webauthnStart(WEBAUTHN_AUTH_START_PATH, body);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnAuthenticateStart}.
+     *
+     * @param challengeToken the MFA challenge token from {@link #login}
+     * @return a future resolving to the challenge
+     */
+    public CompletableFuture<WebauthnChallenge> webauthnAuthenticateStartAsync(Sensitive challengeToken) {
+        return CompletableFuture.supplyAsync(() -> webauthnAuthenticateStart(challengeToken));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/authenticate/finish} (CONTRACT.md &sect;24.1).
+     *
+     * <p>Leaves this client authenticated (&sect;24.3 rule 1). That is not
+     * &sect;14.3's "MAY adopt" posture: {@code deviceLogin} mints tokens a
+     * caller may want to route elsewhere, and this is the SDK's own primary
+     * authentication — returning a token set without adopting it would make a
+     * passkey sign-in the one way to log in that does not log you in.
+     *
+     * @param stateToken the token from {@link #webauthnAuthenticateStart}
+     * @param response   the authenticator's response JSON, verbatim
+     * @return the token set, with the session already adopted
+     */
+    public WebauthnLoginResult webauthnAuthenticateFinish(Sensitive stateToken, String response) {
+        return webauthnFinish(WEBAUTHN_AUTH_FINISH_PATH, stateToken, response, "webauthnAuthenticateFinish");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnAuthenticateFinish}.
+     *
+     * @param stateToken the token from {@link #webauthnAuthenticateStart}
+     * @param response   the authenticator's response JSON, verbatim
+     * @return a future resolving to the token set
+     */
+    public CompletableFuture<WebauthnLoginResult> webauthnAuthenticateFinishAsync(
+            Sensitive stateToken, String response) {
+        return CompletableFuture.supplyAsync(() -> webauthnAuthenticateFinish(stateToken, response));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/authenticate/discoverable/start}
+     * (CONTRACT.md &sect;24.1).
+     *
+     * <p>The <strong>primary-factor</strong> ceremony: nothing precedes it, the
+     * server sends an empty {@code allowCredentials}, and the assertion itself
+     * identifies the user.
+     *
+     * <p>The workspace still has to be named — a discoverable credential is
+     * resolved inside one tenant's isolation boundary — but it comes from this
+     * client's own configuration unless overridden, and slugs are accepted.
+     *
+     * @param workspace an override, or {@code null} for the configured workspace
+     * @return the server's challenge and its state token
+     */
+    public WebauthnChallenge webauthnDiscoverableStart(@Nullable WebauthnWorkspace workspace) {
+        ensureOpen();
+        return webauthnStart(WEBAUTHN_DISCOVERABLE_START_PATH, webauthnWorkspaceBody(workspace));
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnDiscoverableStart}.
+     *
+     * @param workspace an override, or {@code null} for the configured workspace
+     * @return a future resolving to the challenge
+     */
+    public CompletableFuture<WebauthnChallenge> webauthnDiscoverableStartAsync(
+            @Nullable WebauthnWorkspace workspace) {
+        return CompletableFuture.supplyAsync(() -> webauthnDiscoverableStart(workspace));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/authenticate/discoverable/finish}
+     * (CONTRACT.md &sect;24.1).
+     *
+     * <p>Leaves this client authenticated (&sect;24.3). Unlike its
+     * username-bound twin, this fires the server's {@code login.post_auth}
+     * reactor hook (&sect;22.5): there was no password step for the event to
+     * have been fired at.
+     *
+     * @param stateToken the token from {@link #webauthnDiscoverableStart}
+     * @param response   the authenticator's response JSON, verbatim
+     * @return the token set, with the session already adopted
+     */
+    public WebauthnLoginResult webauthnDiscoverableFinish(Sensitive stateToken, String response) {
+        return webauthnFinish(
+                WEBAUTHN_DISCOVERABLE_FINISH_PATH, stateToken, response, "webauthnDiscoverableFinish");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnDiscoverableFinish}.
+     *
+     * @param stateToken the token from {@link #webauthnDiscoverableStart}
+     * @param response   the authenticator's response JSON, verbatim
+     * @return a future resolving to the token set
+     */
+    public CompletableFuture<WebauthnLoginResult> webauthnDiscoverableFinishAsync(
+            Sensitive stateToken, String response) {
+        return CompletableFuture.supplyAsync(() -> webauthnDiscoverableFinish(stateToken, response));
+    }
+
+    /**
+     * &sect;24.4 rule 1: the {@code 403} from {@code register/finish} is the
+     * one whose <em>body</em> matters.
+     *
+     * <p>The generic &sect;2 mapping would raise an {@link AuthzError} reading
+     * "webauthnRegisterFinish failed", which tells the person holding the key
+     * nothing they can act on. The tenant's attestation policy rejected
+     * <em>this</em> authenticator, and the server's message is the only place
+     * that says which one would be accepted, so it is lifted into the
+     * exception message.
+     *
+     * <p>Only the named {@code message} field is read — the rest of the body
+     * is still discarded, exactly as {@link ErrorMapper}'s
+     * {@code action}/{@code resource_id} peek does.
+     */
+    private static RuntimeException registerFinishError(Response http) {
+        String message = "webauthnRegisterFinish failed";
+        if (http.code() == 403) {
+            try {
+                JsonNode body = MAPPER.readTree(http.peekBody(MAX_POLICY_MESSAGE_PEEK_BYTES).string());
+                String policy = body.path("message").asText("");
+                if (!policy.isEmpty()) {
+                    message = message + ": " + policy;
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // A malformed body must not mask the 403 itself.
+            }
+        }
+        return ErrorMapper.fromHttpStatus(http.code(), message, http);
+    }
+
+    /** Run either {@code *_start} call and return the options untouched. */
+    private WebauthnChallenge webauthnStart(String path, ObjectNode body) {
+        try (Response http = executeJsonPost(path, body)) {
+            if (http.code() != 200) {
+                throw ErrorMapper.fromHttpStatus(http.code(), "webauthn start failed", http);
+            }
+            JsonNode wire = readJson(http);
+            return new WebauthnChallenge(
+                    wire.path("challenge"), Sensitive.of(wire.path("state_token").asText()));
+        }
+    }
+
+    /** The shared tail of both authentication ceremonies. */
+    private WebauthnLoginResult webauthnFinish(
+            String path, Sensitive stateToken, String response, String operation) {
+        ensureOpen();
+        // §17.1 rule 9 / §24.3 rule 4: memo entries are keyed by subject, and
+        // this call changes the subject.
+        onCredentialChange();
+
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("state_token", stateToken.expose());
+        body.set("response", parseAuthenticatorResponse(response, operation));
+
+        try (Response http = executeJsonPost(path, body)) {
+            if (http.code() != 200) {
+                throw ErrorMapper.fromHttpStatus(http.code(), operation + " failed", http);
+            }
+            JsonNode wire = readJson(http);
+            return new WebauthnLoginResult(
+                    Sensitive.of(wire.path("access_token").asText()),
+                    Sensitive.of(wire.path("refresh_token").asText()),
+                    UUID.fromString(wire.path("session_id").asText()),
+                    wire.path("expires_in").asLong());
+        }
+    }
+
+    /**
+     * &sect;24.1: {@code register/*} needs a session, and the refusal is raised
+     * client-side with <strong>no wire call</strong> — the shape &sect;1.1
+     * rule 3 requires of {@code getUserInfo}.
+     *
+     * <p>The signal is the cached access token rather than a separate flag:
+     * this SDK has never kept one, and a second source of truth for "am I
+     * signed in" is a second thing to get out of step with the jar.
+     */
+    private void requireWebauthnSession(String operation) {
+        if (session.cachedAccessToken() == null) {
+            throw new AuthError(operation
+                    + " requires an authenticated session: enrol a passkey while signed in "
+                    + "(CONTRACT.md §24.1)");
+        }
+    }
+
+    /**
+     * Accept the platform's own JSON string (&sect;24.6a rule 2).
+     *
+     * <p>Android's Credential Manager hands back
+     * {@code registrationResponseJson} / {@code authenticationResponseJson},
+     * and a browser hands back {@code credential.toJSON()}. Making a caller
+     * model one of those as a Java type this SDK immediately re-serializes is
+     * three chances to corrupt a signed buffer in service of nothing — so the
+     * string is parsed straight into the tree that goes on the wire.
+     */
+    private static JsonNode parseAuthenticatorResponse(String response, String operation) {
+        JsonNode parsed;
+        try {
+            parsed = MAPPER.readTree(response);
+        } catch (IOException e) {
+            throw new AuthError(operation
+                    + ": the authenticator response string is not valid JSON. Pass the platform's "
+                    + "response JSON verbatim (CONTRACT.md §24.6a)");
+        }
+        if (!parsed.isObject()) {
+            throw new AuthError(operation
+                    + ": the authenticator response must be a JSON object (CONTRACT.md §24.6a)");
+        }
+        return parsed;
+    }
+
+    /**
+     * Fill the discoverable ceremony's workspace from this client's own
+     * configuration when the caller passed none.
+     *
+     * <p>Only fields that actually have a value are emitted: the server takes
+     * either form at either level, and sending {@code null} for the ones it
+     * does not have is indistinguishable from asking it to resolve nothing.
+     */
+    private ObjectNode webauthnWorkspaceBody(@Nullable WebauthnWorkspace workspace) {
+        ObjectNode body = MAPPER.createObjectNode();
+
+        UUID orgId = workspace == null ? null : workspace.orgId();
+        String orgSlug = workspace == null ? null : workspace.orgSlug();
+        if (orgId == null && orgSlug == null) {
+            orgId = session.configuredOrgId();
+            orgSlug = session.configuredOrgSlug();
+        }
+        if (orgId != null) {
+            body.put("org_id", orgId.toString());
+        } else if (orgSlug != null) {
+            body.put("org_slug", orgSlug);
+        } else {
+            throw new AuthError("webauthnDiscoverableStart needs an organization: construct the "
+                    + "client with one, or pass it in the workspace argument (CONTRACT.md §24.1)");
+        }
+
+        UUID tenantUuid = workspace == null ? null : workspace.tenantId();
+        String tenantSlug = workspace == null ? null : workspace.tenantSlug();
+        if (tenantUuid != null) {
+            body.put("tenant_id", tenantUuid.toString());
+        } else {
+            body.put("tenant_slug", tenantSlug != null ? tenantSlug : tenantId);
+        }
+        return body;
+    }
+
+    // ------------------------------------------------------------------
+    // §25 Account lifecycle and MFA enrolment
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code POST /api/v1/auth/mfa/enroll} (CONTRACT.md &sect;25.1) — start
+     * voluntary TOTP enrolment for the signed-in user.
+     *
+     * <p>Changes nothing about the current session. In particular it does
+     * <strong>not</strong> clear the &sect;17 decision memo: the subject has
+     * not changed, and discarding a warm memo on an unrelated profile action
+     * costs a round trip on every check that follows (&sect;25.2 rule 3).
+     *
+     * @return the secret and its {@code otpauth://} URI
+     */
+    public MfaEnrollment mfaEnroll() {
+        ensureOpen();
+        try (Response http = executeJsonPost(MFA_ENROLL_PATH, MAPPER.createObjectNode())) {
+            return readMfaEnrollment(http, "mfaEnroll");
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #mfaEnroll}.
+     *
+     * @return a future resolving to the enrolment offer
+     */
+    public CompletableFuture<MfaEnrollment> mfaEnrollAsync() {
+        return CompletableFuture.supplyAsync(this::mfaEnroll);
+    }
+
+    /**
+     * {@code POST /api/v1/auth/mfa/confirm} (CONTRACT.md &sect;25.1) — activate
+     * the factor {@link #mfaEnroll} offered.
+     *
+     * @param totpCode a current code derived from the enrolment secret
+     * @return whether MFA is now enabled
+     */
+    public boolean mfaConfirm(String totpCode) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("totp_code", totpCode);
+        try (Response http = executeJsonPost(MFA_CONFIRM_PATH, body)) {
+            if (http.code() != 200) {
+                throw ErrorMapper.fromHttpStatus(http.code(), "mfaConfirm failed", http);
+            }
+            return readJson(http).path("mfa_enabled").asBoolean(false);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #mfaConfirm}.
+     *
+     * @param totpCode a current code derived from the enrolment secret
+     * @return a future resolving to whether MFA is now enabled
+     */
+    public CompletableFuture<Boolean> mfaConfirmAsync(String totpCode) {
+        return CompletableFuture.supplyAsync(() -> mfaConfirm(totpCode));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/mfa/setup/enroll} (CONTRACT.md &sect;25.1) —
+     * start the enrolment a {@link #login} demanded.
+     *
+     * <p>Reached when {@code login()} returns {@code mfaSetupRequired}: the
+     * tenant requires MFA and this account has none. There is no session yet —
+     * the setup token <em>is</em> the credential.
+     *
+     * @param setupToken the token from the {@code mfaSetupRequired} outcome
+     * @return the secret and its {@code otpauth://} URI
+     */
+    public MfaEnrollment mfaSetupEnroll(Sensitive setupToken) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("setup_token", setupToken.expose());
+        try (Response http = executeJsonPost(MFA_SETUP_ENROLL_PATH, body)) {
+            return readMfaEnrollment(http, "mfaSetupEnroll");
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #mfaSetupEnroll}.
+     *
+     * @param setupToken the token from the {@code mfaSetupRequired} outcome
+     * @return a future resolving to the enrolment offer
+     */
+    public CompletableFuture<MfaEnrollment> mfaSetupEnrollAsync(Sensitive setupToken) {
+        return CompletableFuture.supplyAsync(() -> mfaSetupEnroll(setupToken));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/mfa/setup/confirm} (CONTRACT.md &sect;25.1) —
+     * finish forced enrolment and, with it, the login that was interrupted.
+     *
+     * <p>Adopts credentials exactly as {@link #login} does, because it
+     * <em>is</em> the completion of a login (&sect;25.2 rule 2).
+     *
+     * @param setupToken the token from the {@code mfaSetupRequired} outcome
+     * @param totpCode   a current code derived from the enrolment secret
+     * @return the completed login
+     */
+    public LoginResult mfaSetupConfirm(Sensitive setupToken, String totpCode) {
+        ensureOpen();
+        onCredentialChange();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("setup_token", setupToken.expose());
+        body.put("totp_code", totpCode);
+
+        try (Response http = executeJsonPost(MFA_SETUP_CONFIRM_PATH, body)) {
+            if (http.code() != 200) {
+                throw ErrorMapper.fromHttpStatus(http.code(), "mfaSetupConfirm failed", http);
+            }
+            consumeBody(http);
+            return new LoginResult(false, null, buildUser());
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #mfaSetupConfirm}.
+     *
+     * @param setupToken the token from the {@code mfaSetupRequired} outcome
+     * @param totpCode   a current code derived from the enrolment secret
+     * @return a future resolving to the completed login
+     */
+    public CompletableFuture<LoginResult> mfaSetupConfirmAsync(Sensitive setupToken, String totpCode) {
+        return CompletableFuture.supplyAsync(() -> mfaSetupConfirm(setupToken, totpCode));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/verify-email} (CONTRACT.md &sect;25.1).
+     *
+     * <p>Unauthenticated: a user whose address is unverified may have no
+     * session at all. {@code tenantId} is a <strong>body</strong> field here —
+     * this is not an {@code /oauth2/*} endpoint, so &sect;12.1 rule 2's
+     * query-parameter convention does not reach it.
+     *
+     * @param token    the token from the verification mail
+     * @param tenantId the tenant the account belongs to
+     */
+    public void verifyEmail(Sensitive token, UUID tenantId) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("token", token.expose());
+        body.put("tenant_id", tenantId.toString());
+        postExpectingNoContent(VERIFY_EMAIL_PATH, body, "verifyEmail");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #verifyEmail}.
+     *
+     * @param token    the token from the verification mail
+     * @param tenantId the tenant the account belongs to
+     * @return a future that completes once the address is verified
+     */
+    public CompletableFuture<Void> verifyEmailAsync(Sensitive token, UUID tenantId) {
+        return CompletableFuture.runAsync(() -> verifyEmail(token, tenantId));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/resend-verification} (CONTRACT.md &sect;25.1).
+     *
+     * @param email    the address to resend to
+     * @param tenantId the tenant the account belongs to
+     */
+    public void resendVerification(String email, UUID tenantId) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("email", email);
+        body.put("tenant_id", tenantId.toString());
+        postExpectingNoContent(RESEND_VERIFICATION_PATH, body, "resendVerification");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #resendVerification}.
+     *
+     * @param email    the address to resend to
+     * @param tenantId the tenant the account belongs to
+     * @return a future that completes once the mail is enqueued
+     */
+    public CompletableFuture<Void> resendVerificationAsync(String email, UUID tenantId) {
+        return CompletableFuture.runAsync(() -> resendVerification(email, tenantId));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/reset} (CONTRACT.md &sect;25.1) — ask for a
+     * reset mail.
+     *
+     * <p><strong>Returns normally whether or not the address exists</strong>,
+     * and this SDK exposes no way to tell the two apart. That is not an
+     * omission to improve on: a client that surfaced a "no such user" state —
+     * even one inferred from timing — would turn the endpoint into the account
+     * enumeration oracle its uniform response exists to prevent (&sect;25.4).
+     *
+     * @param request the address, and optionally an explicit workspace
+     */
+    public void requestPasswordReset(PasswordResetRequest request) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("email", request.email());
+
+        String orgSlug = request.orgSlug() != null ? request.orgSlug() : session.configuredOrgSlug();
+        if (orgSlug != null) {
+            body.put("org_slug", orgSlug);
+        }
+        if (request.tenantId() != null) {
+            body.put("tenant_id", request.tenantId().toString());
+        } else {
+            body.put("tenant_slug", request.tenantSlug() != null ? request.tenantSlug() : tenantId);
+        }
+        postExpectingNoContent(RESET_PATH, body, "requestPasswordReset");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #requestPasswordReset}.
+     *
+     * @param request the address, and optionally an explicit workspace
+     * @return a future that completes once the request is accepted
+     */
+    public CompletableFuture<Void> requestPasswordResetAsync(PasswordResetRequest request) {
+        return CompletableFuture.runAsync(() -> requestPasswordReset(request));
+    }
+
+    /**
+     * {@code GET /api/v1/auth/reset/context} (CONTRACT.md &sect;25.1) — the
+     * OPAQUE policy for the account a reset token belongs to.
+     *
+     * <p>Call this before {@link #confirmPasswordReset} on any tenant that
+     * might have &sect;23 enabled: the client has to build a registration
+     * record, and building one needs parameters it cannot know before it has a
+     * token to ask with. Sending a plaintext password to a tenant in
+     * {@code opaque_mode: required} is refused, and refused late (&sect;25.4
+     * rule 1).
+     *
+     * <p>A {@code 404} means unknown, expired <strong>or</strong>
+     * already-consumed, deliberately without distinguishing them; this SDK does
+     * not distinguish them either (&sect;25.4 rule 3).
+     *
+     * @param token the token from the reset mail
+     * @return the tenant's OPAQUE policy, if it has one
+     */
+    public PasswordResetContext passwordResetContext(Sensitive token) {
+        ensureOpen();
+        HttpUrl url = Objects.requireNonNull(HttpUrl.parse(baseUrl + RESET_CONTEXT_PATH))
+                .newBuilder()
+                .addQueryParameter("token", token.expose())
+                .build();
+        Request request = new Request.Builder().url(url).get().build();
+
+        try (Response http = httpClient.newCall(request).execute()) {
+            if (http.code() != 200) {
+                throw ErrorMapper.fromHttpStatus(http.code(), "passwordResetContext failed", http);
+            }
+            JsonNode wire = readJson(http);
+            JsonNode opaque = wire.get("opaque");
+            return new PasswordResetContext(opaque == null || opaque.isNull() ? null : opaque);
+        } catch (IOException e) {
+            throw new NetworkError("passwordResetContext request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #passwordResetContext}.
+     *
+     * @param token the token from the reset mail
+     * @return a future resolving to the OPAQUE policy
+     */
+    public CompletableFuture<PasswordResetContext> passwordResetContextAsync(Sensitive token) {
+        return CompletableFuture.supplyAsync(() -> passwordResetContext(token));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/reset/confirm} (CONTRACT.md &sect;25.1) — set
+     * the new password.
+     *
+     * @param confirmation the token, the new password, the tenant, and any
+     *                     &sect;23 registration record
+     */
+    public void confirmPasswordReset(PasswordResetConfirmation confirmation) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("token", confirmation.token().expose());
+        body.put("new_password", confirmation.newPassword().expose());
+        body.put("tenant_id", confirmation.tenantId().toString());
+        if (confirmation.opaque() != null) {
+            body.set("opaque", confirmation.opaque());
+        }
+        postExpectingNoContent(RESET_CONFIRM_PATH, body, "confirmPasswordReset");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #confirmPasswordReset}.
+     *
+     * @param confirmation the token, the new password, the tenant, and any record
+     * @return a future that completes once the password is changed
+     */
+    public CompletableFuture<Void> confirmPasswordResetAsync(PasswordResetConfirmation confirmation) {
+        return CompletableFuture.runAsync(() -> confirmPasswordReset(confirmation));
+    }
+
+    private MfaEnrollment readMfaEnrollment(Response http, String operation) {
+        if (http.code() != 200) {
+            throw ErrorMapper.fromHttpStatus(http.code(), operation + " failed", http);
+        }
+        JsonNode wire = readJson(http);
+        return new MfaEnrollment(
+                Sensitive.of(wire.path("secret_base32").asText()),
+                Sensitive.of(wire.path("totp_uri").asText()));
+    }
+
+    private void postExpectingNoContent(String path, ObjectNode body, String operation) {
+        try (Response http = executeJsonPost(path, body)) {
+            int code = http.code();
+            if (code != 200 && code != 202 && code != 204) {
+                throw ErrorMapper.fromHttpStatus(code, operation + " failed", http);
+            }
+            consumeBody(http);
         }
     }
 
