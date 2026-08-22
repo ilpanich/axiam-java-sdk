@@ -36,6 +36,7 @@ import java.util.List;
  * @param claims_supported                         claims the server may include in an ID token
  * @param grant_types_supported                    grant types the token endpoint supports
  * @param device_authorization_endpoint            the RFC 8628 device authorization endpoint used by {@code deviceAuthorize} (CONTRACT.md &sect;14.1); {@code null} when the server does not implement the device grant — its absence is an error at call time, never a cue to build the URL by concatenation
+ * @param pushed_authorization_request_endpoint    the RFC 9126 pushed authorization request endpoint used by {@code oidcPar} (CONTRACT.md &sect;26.1); {@code null} when the server does not implement PAR — its absence is an error at call time, never a cue to build {@code <issuer>/oauth2/par} by concatenation
  * @param end_session_endpoint                     the OIDC RP-Initiated Logout 1.0 endpoint used by {@code logoutUrl} (CONTRACT.md &sect;12.7.2 rule 1); {@code null} when unsupported, and never synthesised from the issuer — code that concatenates works against AXIAM and breaks against every other OP the same application is pointed at
  * @param backchannel_logout_supported             whether the OP sends back-channel logout tokens
  * @param backchannel_logout_session_supported     whether those logout tokens carry {@code sid}; AXIAM always sends it
@@ -56,6 +57,7 @@ public record OidcConfiguration(
         List<String> claims_supported,
         List<String> grant_types_supported,
         @Nullable String device_authorization_endpoint,
+        @Nullable String pushed_authorization_request_endpoint,
         @Nullable String end_session_endpoint,
         boolean backchannel_logout_supported,
         boolean backchannel_logout_session_supported) {
@@ -79,6 +81,7 @@ public record OidcConfiguration(
      * @param claims_supported claims the server may include in an ID token
      * @param grant_types_supported supported grant types
      * @param device_authorization_endpoint the RFC 8628 device authorization endpoint, or {@code null}
+     * @param pushed_authorization_request_endpoint the RFC 9126 PAR endpoint, or {@code null}
      * @param end_session_endpoint the RP-initiated logout endpoint, or {@code null}
      * @param backchannel_logout_supported whether the OP sends logout tokens
      * @param backchannel_logout_session_supported whether those tokens carry {@code sid}

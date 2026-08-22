@@ -23,15 +23,24 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19, §22, §23 — including §6.1 mTLS
-(client-certificate authentication), the §1.1 gRPC-only `getUserInfo` operation,
-the §10.1 minimum local-verification set, the §12 OIDC/SSO relying-party helpers,
-the §13 webhook-signature verifier, the §22 reactor runtime, and the §23 OPAQUE (RFC 9807) login path.
+This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19, §22, §23,
+§24, §25, §26 — including §6.1 mTLS (client-certificate authentication), the §1.1
+gRPC-only `getUserInfo` operation, the §10.1 minimum local-verification set, the
+§12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifier, the §22
+reactor runtime, the §23 OPAQUE (RFC 9807) login path, the §24 WebAuthn
+relying-party layer with its §24.6a JSON bridge, the §25 account-lifecycle and
+MFA-enrolment operations, and §26 Pushed Authorization Requests (RFC 9126).
 
-§12.7, §14, §15, §22 and §23 are named rather than folded into the range because they landed
-after this SDK already claimed §1–§13: widening the range silently would turn a
-statement that was true when written into a different claim without anyone editing
-it.
+§12.7, §14, §15, §22, §23, §24, §25 and §26 are named rather than folded into the
+range because they landed after this SDK already claimed §1–§13: widening the
+range silently would turn a statement that was true when written into a different
+claim without anyone editing it.
+
+§24.6b — the linked-API ceremony helper — is **deliberately absent**. The JVM has
+no authenticator, and §24.6b rule 2 forbids emulating one in software: a
+"credential" held in process memory is not a second factor. See
+[WebAuthn / passkeys](#webauthn--passkeys-iaxiamsdkwebauthn-24) for what an
+Android app does instead.
 
 See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract.
 
@@ -149,9 +158,10 @@ try (AxiamClient client = AxiamClient.builder("https://axiam.example.com", "acme
 ```
 
 See [`examples/`](examples/) for runnable per-capability examples covering
-login+MFA, REST authorization, gRPC `CheckAccess`, the AMQP consumer, and a
-complete Spring Boot 3.x application wiring `AxiamAuthenticationFilter`
-explicitly in a `SecurityFilterChain` bean.
+login+MFA, REST authorization, gRPC `CheckAccess`, the AMQP consumer, passkeys,
+account lifecycle, pushed authorization requests, and a complete Spring Boot 3.x
+application wiring `AxiamAuthenticationFilter` explicitly in a
+`SecurityFilterChain` bean.
 
 ### mTLS / client certificates
 
@@ -998,6 +1008,211 @@ The password crosses the ABI as **UTF-8**, explicitly, never through JNA's
 otherwise. A password that encoded differently under a different default locale
 would derive a randomized password no AXIAM server agrees with, and would
 surface as a wrong password on that machine only.
+
+## WebAuthn / passkeys (`io.axiam.sdk.webauthn`, §24)
+
+Six wire operations, two ceremonies, and one thing this SDK deliberately does
+not do.
+
+```java
+// Enrolment — requires a session (§24.1), refused client-side without one.
+WebauthnChallenge challenge = client.webauthnRegisterStart();
+String response = /* the authenticator's JSON, verbatim */;
+WebauthnCredential credential =
+        client.webauthnRegisterFinish(challenge.stateToken(), "Pixel 9", response);
+
+// Sign-in with no username at all — the authenticator picks the account.
+WebauthnChallenge signIn = client.webauthnDiscoverableStart(null);
+WebauthnLoginResult result =
+        client.webauthnDiscoverableFinish(signIn.stateToken(), assertionJson);
+```
+
+**The server chooses every option and verifies every response; this SDK passes
+both through byte-for-byte** (§24.0). `WebauthnChallenge.challenge()` is a raw
+`JsonNode`, not a modelled type: no defaulting, no validation-that-rejects, no
+re-encoding. A client that "helpfully" filled in a missing field would be
+overriding a policy decision it cannot see, and one that re-serialized a
+response would risk corrupting a signed buffer to no purpose.
+
+### The two authentication ceremonies are different flows (§24.2)
+
+`webauthnAuthenticateStart`/`Finish` is a **second factor** — it continues a
+`login()` that answered `mfaRequired` with `"webauthn"` among its methods, and
+the challenge token names the user so the server can send an `allowCredentials`
+list. `webauthnDiscoverableStart`/`Finish` is a **primary factor**: nothing
+precedes it, `allowCredentials` is empty, and the assertion itself identifies
+the user. They are not one operation with an optional token — merging them
+reproduces a bug the server already fixed.
+
+One difference a reactor author will ask about: `discoverable/finish` fires the
+`login.post_auth` hook event (§22.5) and `authenticate/finish` does not. The
+latter continues a login that was already gated at its password step; the former
+has no such step to have been gated at.
+
+### Android, via the §24.6a JSON bridge
+
+Android's Credential Manager is a string-in / string-out API, which is exactly
+why this artifact stays a plain JVM library with **no AAR and no Android
+dependency**:
+
+```kotlin
+// build.gradle.kts
+implementation("io.github.ilpanich:axiam-sdk:<version>")
+implementation("androidx.credentials:credentials:1.3.0")
+implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+
+val challenge = client.webauthnRegisterStart()
+
+val response = CredentialManager.create(context).createCredential(
+    context,
+    CreatePublicKeyCredentialRequest(
+        requestJson = challenge.requestJson(),   // verbatim
+    ),
+) as CreatePublicKeyCredentialResponse
+
+client.webauthnRegisterFinish(
+    challenge.stateToken(),
+    "Pixel 9",
+    response.registrationResponseJson,                    // verbatim
+)
+```
+
+Sign-in mirrors it: `webauthnDiscoverableStart(null)`, then
+`GetPublicKeyCredentialOption(requestJson = challenge.requestJson())`,
+then `webauthnDiscoverableFinish(challenge.stateToken(),
+credential.authenticationResponseJson)`.
+
+`webauthnRegisterFinish` and both `*Finish` calls accept the platform's JSON as
+a `String` for precisely this reason. Passing something that is not JSON, or is
+not a JSON object, raises `AuthenticationError` client-side — the SDK will not
+POST a body it knows the server cannot verify.
+
+### Two error rows that are not the §2 defaults (§24.4)
+
+- A **403 from `register/finish`** is the tenant's *attestation policy*
+  rejecting this particular authenticator. The server's message is the only
+  place that says which one would be accepted, so it is lifted into the
+  `AuthorizationError`'s message rather than discarded. Show it.
+- A **503 from `register/start`** means the policy needs FIDO metadata the
+  server cannot reach. That is a configuration state, not a transient one, and
+  it is **not retried** — the second documented exception to §16 after §20's.
+
+Session cookies: as of contract 1.28 both `*/finish` authentication calls set
+the `axiam_access` / `axiam_refresh` / `axiam_csrf` triple alongside the token
+body, so a completed ceremony leaves the client signed in for every
+cookie-driven call that follows (§24.3).
+
+Worked end to end in [`examples/webauthn-passkeys`](examples/webauthn-passkeys).
+
+## Account lifecycle and MFA enrolment (`io.axiam.sdk.account`, §25)
+
+Nine operations covering the things a user does to their own account — none of
+which is administration, and all of which were previously reachable only by
+hand-rolling HTTP.
+
+```java
+LoginResult result = client.login("alice@example.com", password);
+
+if (result.mfaSetupRequired()) {
+    // The third outcome. The tenant requires MFA, this account has none, and
+    // the server handed back a setup token to finish with. There is no session
+    // yet — the token IS the credential.
+    Sensitive setupToken = result.setupToken();
+    MfaEnrollment enrollment = client.mfaSetupEnroll(setupToken);
+    renderQr(enrollment.totpUri().expose());
+    result = client.mfaSetupConfirm(setupToken, code);   // completes the LOGIN
+}
+```
+
+`LoginResult` gained two components rather than changing shape, so every
+pre-1.28 call site still compiles: the 3-argument constructor remains, and
+answers `false` for the new flag. **Handle the new outcome anyway.** A tenant
+that turns on required MFA will start returning it, and a client that only
+branches on `mfaRequired()` will report a successful login that has no session.
+
+`mfaSetupConfirm` adopts credentials exactly as `login()` does, because it *is*
+the completion of a login (§25.2 rule 2). `mfaEnroll`/`mfaConfirm` are the
+voluntary pair, from inside an existing session, and they do **not** clear the
+§17 decision memo — the subject has not changed, and discarding a warm memo on
+an unrelated profile action costs a round trip on every check that follows.
+
+Both halves of an `MfaEnrollment` are `Sensitive`, and the second one matters:
+the `otpauth://` URI *contains* the secret (§25.3). Wrapping the bare secret and
+then logging the URI leaks the same bytes.
+
+### Password reset, and the two things it will not tell you
+
+```java
+client.requestPasswordReset(new PasswordResetRequest("alice@example.com"));
+// returns void, whether or not that address has an account
+
+PasswordResetContext context = client.passwordResetContext(token);
+if (context.opaque() != null) {
+    // This tenant runs §23. Build a registration record from these parameters;
+    // a plaintext password would be refused, and refused late (§25.4 rule 1).
+}
+client.confirmPasswordReset(new PasswordResetConfirmation(token, newPassword, tenantId));
+```
+
+`requestPasswordReset` returns nothing and throws nothing on an unknown address,
+and this SDK exposes no way to tell the two cases apart. That is not an omission
+to improve on: a client that surfaced a "no such user" state — even one inferred
+from timing — would turn the endpoint into the account-enumeration oracle its
+uniform response exists to prevent. Likewise a `404` from
+`passwordResetContext` means unknown, expired **or** already-consumed, and the
+SDK does not distinguish them either (§25.4 rule 3).
+
+`verifyEmail` and `resendVerification` are unauthenticated — a user whose
+address is unverified may have no session at all — and carry the tenant as a
+**body** field, since §12.1 rule 2's `?tenant_id=` convention is scoped to
+`/oauth2/*`.
+
+Worked end to end in [`examples/account-lifecycle`](examples/account-lifecycle).
+
+## Pushed Authorization Requests (§26, RFC 9126)
+
+PAR moves the authorization request off the browser. Instead of putting `scope`,
+`redirect_uri`, `state` and the PKCE challenge into a URL the user agent
+carries, the client POSTs them straight to AXIAM over an authenticated back
+channel and puts an opaque `request_uri` in the redirect.
+
+```java
+OidcConfiguration config = client.oidcDiscover();
+if (config.pushed_authorization_request_endpoint() == null) {
+    // §26 is optional; fall back to the plain oidcBegin redirect.
+}
+
+AuthorizationRequest begun = client.oidcBegin(config, redirectUri, "openid profile", null);
+PushedAuthorizationRequest pushed =
+        client.oidcPar(config, begun, redirectUri, "openid profile", null);
+
+redirect(pushed.url());   // exactly ?client_id=…&request_uri=…
+```
+
+Three things worth knowing:
+
+- **The server answers `201`,** not `200` — RFC 9126 §2.2 specifies *Created*. A
+  success predicate written `== 200` treats every successful push as a failure.
+- **The redirect URL carries exactly two parameters.** The server refuses a
+  request that mixes a `request_uri` with inline authorization parameters rather
+  than merging them; merging is where parameter confusion lives (§26.2 rule 2).
+  Any query the discovered `authorization_endpoint` already carried is dropped.
+- **`oidcBegin` still owns `state`, `nonce` and the PKCE pair.** There is no
+  second generator (§26.2 rule 1), and `PushedAuthorizationRequest` carries all
+  three straight through to the exchange.
+
+The push is **not retried** on a 5xx or a transport failure: it is a POST that
+creates server state, so it falls outside §16.2's read-only eligibility exactly
+as `oidcExchange` does. The safe recovery is a fresh push, which costs one round
+trip and cannot double-consume anything. The `requestUri` is `Sensitive` because
+between the push and the redirect it is a bearer handle to a fully-formed
+authorization request (§26.5).
+
+A **FAPI 2.0 client has no alternative**: `profile: "fapi2"` refuses a
+registration that does not set `require_par`, so such a client cannot authorize
+any other way (§21.1).
+
+Worked end to end in [`examples/par-login`](examples/par-login).
 
 ## Building from source
 
