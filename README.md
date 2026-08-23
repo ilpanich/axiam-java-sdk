@@ -95,7 +95,7 @@ never call it.
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>1.0.0-alpha38</version>
+  <version>1.0.0-alpha39</version>
 </dependency>
 ```
 
@@ -109,7 +109,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>1.0.0-alpha38</version>
+      <version>1.0.0-alpha39</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -121,7 +121,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:1.0.0-alpha38")
+    implementation("io.github.ilpanich:axiam-sdk:1.0.0-alpha39")
 }
 ```
 
@@ -129,7 +129,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:1.0.0-alpha38"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.0.0-alpha39"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```
