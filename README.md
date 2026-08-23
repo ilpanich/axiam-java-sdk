@@ -23,16 +23,17 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19, §22, §23,
-§24, §25, §26 — including §6.1 mTLS (client-certificate authentication), the §1.1
-gRPC-only `getUserInfo` operation, the §10.1 minimum local-verification set, the
-§12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifier, the §22
-reactor runtime, the §23 OPAQUE (RFC 9807) login path, the §24 WebAuthn
-relying-party layer with its §24.6a JSON bridge, the §25 account-lifecycle and
-MFA-enrolment operations, and §26 Pushed Authorization Requests (RFC 9126).
+This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19, §20, §22,
+§23, §24, §25, §26 — including §6.1 mTLS (client-certificate authentication), the
+§1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum local-verification set,
+the §12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifier, the
+§20 UMA 2.0 Protection API and ticket grant, the §22 reactor runtime, the §23
+OPAQUE (RFC 9807) login path, the §24 WebAuthn relying-party layer with its
+§24.6a JSON bridge, the §25 account-lifecycle and MFA-enrolment operations, and
+§26 Pushed Authorization Requests (RFC 9126).
 
-§12.7, §14, §15, §22, §23, §24, §25 and §26 are named rather than folded into the
-range because they landed after this SDK already claimed §1–§13: widening the
+§12.7, §14, §15, §20, §22, §23, §24, §25 and §26 are named rather than folded into
+the range because they landed after this SDK already claimed §1–§13: widening the
 range silently would turn a statement that was true when written into a different
 claim without anyone editing it.
 
