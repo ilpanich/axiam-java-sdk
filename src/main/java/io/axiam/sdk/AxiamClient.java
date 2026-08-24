@@ -50,6 +50,7 @@ import io.axiam.sdk.opaque.KsfParams;
 import io.axiam.sdk.opaque.LoginExchange;
 import io.axiam.sdk.opaque.Opaque;
 import io.axiam.sdk.opaque.OpaqueEnrollment;
+import io.axiam.sdk.opaque.OpaqueMode;
 import io.axiam.sdk.opaque.RegistrationExchange;
 
 import okhttp3.java.net.cookiejar.JavaNetCookieJar;
@@ -941,11 +942,41 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * makes a stolen record expensive to attack even by someone holding the
      * OPRF seed.
      *
+     * <p><strong>What happens when the exchange fails.</strong> A {@code KE2}
+     * that does not open <em>is</em> the credential check, and nothing is sent
+     * to {@code login/finish} afterwards (&sect;23.4 rule 7). What follows
+     * depends on the {@code mode} the {@code login/start} response carried,
+     * and on nothing else:
+     *
+     * <ul>
+     *   <li>{@link OpaqueMode#OPTIONAL} — this call retries over
+     *       {@link #login} with the same credentials and returns that call's
+     *       outcome, success or failure. Under {@code optional} an account
+     *       with no registration record is the ordinary case: every account
+     *       has none the moment an operator enables OPAQUE, and acquires one
+     *       only as its password is next set. Treating the failed exchange as
+     *       final would lock out every user of a tenant mid-migration, which
+     *       is the state {@code optional} exists to serve.</li>
+     *   <li>{@link OpaqueMode#REQUIRED}, and <strong>any response with no
+     *       {@code mode} field</strong> (a server older than it) — an
+     *       {@link AuthError}, and the exchange is over. No retry: under
+     *       {@code required} the password endpoint answers {@code 403
+     *       opaque_required} for every principal anyway, so trying would put a
+     *       plaintext password on the wire for nothing.</li>
+     * </ul>
+     *
+     * <p>{@code mode} is <strong>not</strong> downgrade protection and this SDK
+     * does not present it as such: a hostile server that wanted the plaintext
+     * could answer {@code 404} and get a fallback whatever it puts there. What
+     * closes that is {@code required}, server-side.
+     *
      * @param usernameOrEmail the username or email to authenticate with
      * @param password        the account password, as a {@code char[]} so the
      *                        caller can clear it; this SDK clears every copy it
      *                        makes but cannot clear the caller's
-     * @return the login outcome, exactly as {@link #login} returns it
+     * @return the login outcome, exactly as {@link #login} returns it — and,
+     *         after an {@code optional}-mode fallback, literally that call's
+     *         own result
      * @throws NetworkError if the tenant has OPAQUE disabled (the endpoint
      *                      answers {@code 404} — a property of the tenant, not
      *                      of any user), if {@code libaxiam_opaque_ffi} is not
@@ -957,11 +988,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      *                      falling back to {@link #login}
      * @throws AuthError    for a wrong password, an account that does not
      *                      exist, and a server that does not hold the record —
-     *                      indistinguishable by design. <strong>Nothing is sent
-     *                      to {@code login/finish} in that case</strong>
-     *                      (&sect;23.4 rule 7), and a caller must not retry over
-     *                      {@link #login}: that hands the plaintext to an
-     *                      endpoint that just failed to prove itself
+     *                      indistinguishable by design — under {@code required}
+     *                      or a server that named no mode; under
+     *                      {@code optional}, whatever {@link #login} then
+     *                      raises
      */
     public LoginResult loginOpaque(String usernameOrEmail, char[] password) {
         ensureOpen();
@@ -975,28 +1005,73 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             if (ke2 == null || !ke2.isTextual()) {
                 throw new NetworkError("OPAQUE: login/start returned no `ke2`");
             }
-            String ke3 = exchange.finish(password, ke2.asText(), KsfParams.fromWire(started));
 
-            ObjectNode body = MAPPER.createObjectNode();
-            body.put("opaque_session", started.path("opaque_session").asText(""));
-            body.put("ke3", ke3);
+            // §23.4 rule 7. Read the mode BEFORE the exchange can fail: it is
+            // the only input to what happens next, and after a failure there is
+            // no second response to read it from.
+            OpaqueMode mode = OpaqueMode.fromWire(started);
 
-            try (Response response = executeJsonPost(OPAQUE_LOGIN_FINISH_PATH, body)) {
-                int code = response.code();
-                if (code != 200 && code != 202) {
-                    throw ErrorMapper.fromHttpStatus(code, "OPAQUE login/finish failed", response);
+            String ke3;
+            try {
+                ke3 = exchange.finish(password, ke2.asText(), KsfParams.fromWire(started));
+            } catch (AuthError credentialFailure) {
+                if (!mode.allowsPasswordLoginFallback()) {
+                    throw credentialFailure;
                 }
-                if (code == 202) {
-                    JsonNode wire = readJson(response);
-                    return new LoginResult(true,
-                            Sensitive.of(wire.path("challenge_token").asText()), null);
-                }
-                return new LoginResult(false, null, buildUser());
+                // Fall through to the password login, below and OUTSIDE this
+                // block -- the fallback must not run with the native exchange
+                // still open, and must not be reachable from a failure of
+                // login/finish itself, which is a different AuthError entirely.
+                ke3 = null;
             }
+
+            if (ke3 != null) {
+                return opaqueLoginFinish(started.path("opaque_session").asText(""), ke3);
+            }
+        }
+
+        // §23.4 rule 7, `optional`: an account with no registration record is
+        // the ordinary mid-migration case, so the plaintext path decides. Its
+        // outcome -- success or failure -- is this call's outcome; the OPAQUE
+        // attempt is not reported separately, because it is indistinguishable
+        // from a wrong password and saying otherwise would claim to know which
+        // occurred.
+        return login(usernameOrEmail, new String(password));
+    }
+
+    /**
+     * Sends {@code KE3} to {@code login/finish} and reads the &sect;3 login
+     * union back.
+     *
+     * <p>Split out so the &sect;23.4 rule 7 fallback cannot catch an
+     * {@link AuthError} raised <em>here</em> — a 401 from the server after a
+     * {@code KE2} that opened perfectly well is not a failed credential check
+     * and must never trigger a plaintext retry.
+     */
+    private LoginResult opaqueLoginFinish(String opaqueSession, String ke3) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("opaque_session", opaqueSession);
+        body.put("ke3", ke3);
+
+        try (Response response = executeJsonPost(OPAQUE_LOGIN_FINISH_PATH, body)) {
+            int code = response.code();
+            if (code != 200 && code != 202) {
+                throw ErrorMapper.fromHttpStatus(code, "OPAQUE login/finish failed", response);
+            }
+            if (code == 202) {
+                JsonNode wire = readJson(response);
+                return new LoginResult(true,
+                        Sensitive.of(wire.path("challenge_token").asText()), null);
+            }
+            return new LoginResult(false, null, buildUser());
         }
     }
 
     /** {@code CompletableFuture} async twin of {@link #loginOpaque}.
+     *
+     * <p>Identical in every respect, &sect;23.4 rule 7's {@code optional}
+     * fallback included: the retry over {@link #login} happens on the same
+     * worker thread, and its outcome is what the returned future carries.
      *
      * @param usernameOrEmail the username or email to authenticate with
      * @param password        the account password

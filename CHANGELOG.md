@@ -67,8 +67,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client, which cannot authorize any other way (§21.1).
 - `examples/webauthn-passkeys`, `examples/account-lifecycle` and
   `examples/par-login`.
+- `io.axiam.sdk.opaque.OpaqueMode` — the tenant `opaque_mode` a `login/start`
+  response reports, read from a field that is optional on the wire and whose
+  absence, per §23.4 rule 7, reads as `required`.
 
 ### Changed
+
+- **`loginOpaque` now honours the `mode` the `login/start` response carries
+  (contract 1.29, §23.4 rule 7).** A `KE2` that does not open still sends no
+  `KE3` — that part is unchanged — but what follows now depends on `mode`,
+  and on nothing else. Under `"optional"` the SDK retries over
+  `POST /api/v1/auth/login` with the same credentials and returns that call's
+  outcome; under `"required"`, and for any response carrying **no** `mode`
+  field (a server older than it), the failure stays an `AuthError` and no
+  plaintext retry is made. An unrecognised value reads as `required`, failing
+  closed.
+
+  This is a behaviour change for `optional` tenants, and the reason it is
+  needed is that `optional` is the mid-migration state: every account has no
+  registration record the moment an operator enables OPAQUE, and acquires one
+  only as its password is next set, so reporting the failed exchange as final
+  locked out every user of such a tenant. `mode` is **not** downgrade
+  protection and this SDK does not present it as such — a hostile server
+  wanting the plaintext could answer `404` and get a fallback whatever it puts
+  there; what closes that is `required`, server-side. `404` handling is
+  untouched: a tenant with OPAQUE disabled is still the distinguishable
+  `NetworkError`, never a credential failure.
+- Re-vendored `CONTRACT.md` at **contract 1.29** and `openapi.json` at
+  **1.0.0-alpha40**.
 
 - Re-vendor `CONTRACT.md`. Repairs §14.1's link to the `device_login` heading,
   which dropped a hyphen the em dash leaves behind and so rendered as a link

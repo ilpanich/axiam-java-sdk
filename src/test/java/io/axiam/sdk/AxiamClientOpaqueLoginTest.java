@@ -22,9 +22,11 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -82,19 +84,34 @@ class AxiamClientOpaqueLoginTest {
         OpaqueTestSupport.reset();
     }
 
-    /** A server that answers the three OPAQUE endpoints and records what it saw. */
+    /**
+     * A server that answers the three OPAQUE endpoints — plus
+     * {@code /auth/login}, the §23.4 rule 7 fallback target — and records what
+     * it saw.
+     */
     private static final class FakeOpaqueServer extends Dispatcher {
 
         final List<String> loginStartBodies = new ArrayList<>();
         final List<String> loginFinishBodies = new ArrayList<>();
         final List<String> registerStartBodies = new ArrayList<>();
+        /** Bodies seen at {@code POST /api/v1/auth/login} — the plaintext path. */
+        final List<String> passwordLoginBodies = new ArrayList<>();
 
         int loginStartStatus = 200;
         int loginFinishStatus = 200;
         int registerStartStatus = 200;
+        int passwordLoginStatus = 200;
         boolean mfaRequired;
         boolean omitKe2;
         String ksf = "argon2id";
+
+        /**
+         * The {@code mode} the {@code login/start} response carries
+         * (&sect;23.5). {@code null} means the field is <em>absent</em>, which
+         * is what a server older than contract 1.29 sends and which §23.4
+         * rule 7 reads as {@code required}.
+         */
+        String mode;
 
         @Override
         public MockResponse dispatch(RecordedRequest request) {
@@ -112,6 +129,10 @@ class AxiamClientOpaqueLoginTest {
                 registerStartBodies.add(body);
                 return registerStart();
             }
+            if (path.endsWith("/auth/login")) {
+                passwordLoginBodies.add(body);
+                return passwordLogin();
+            }
             return new MockResponse().setResponseCode(404);
         }
 
@@ -127,10 +148,26 @@ class AxiamClientOpaqueLoginTest {
                 return new MockResponse().setResponseCode(loginStartStatus);
             }
             String ke2 = omitKe2 ? "" : "\"ke2\":\"" + WIRE_KE2 + "\",";
+            String modeField = mode == null ? "" : "\"mode\":\"" + mode + "\",";
             return new MockResponse()
                     .setResponseCode(200)
                     .setHeader("Content-Type", "application/json")
-                    .setBody("{\"opaque_session\":\"handle-42\"," + ke2 + ksfFields() + "}");
+                    .setBody("{\"opaque_session\":\"handle-42\","
+                            + modeField + ke2 + ksfFields() + "}");
+        }
+
+        /** {@code POST /api/v1/auth/login} — the §23.4 rule 7 fallback target. */
+        private MockResponse passwordLogin() {
+            if (passwordLoginStatus != 200) {
+                return new MockResponse().setResponseCode(passwordLoginStatus);
+            }
+            return new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .addHeader("Set-Cookie", "axiam_access=" + fakeAccessToken() + "; Path=/")
+                    .addHeader("Set-Cookie", "axiam_refresh=refresh-tok; Path=/")
+                    .setBody("{\"session_id\":\"55555555-5555-5555-5555-555555555555\","
+                            + "\"expires_in\":900}");
         }
 
         private MockResponse loginFinish() {
@@ -360,6 +397,157 @@ class AxiamClientOpaqueLoginTest {
         withClient(fake, (server, client) -> {
             assertThrows(AuthError.class, () -> client.loginOpaque(USER, PASSWORD.clone()));
             assertTrue(fake.loginFinishBodies.isEmpty());
+        });
+    }
+
+    // -----------------------------------------------------------------
+    // §23.4 rule 7 -- what `mode` decides, and only `mode`
+    // -----------------------------------------------------------------
+
+    @Test
+    @DisplayName("optional: a failed KE2 falls back to /auth/login and returns its success")
+    void optionalModeFallsBackToPasswordLogin() throws Exception {
+        // Under `optional` an account with no registration record is the
+        // ORDINARY case -- every account has none the moment an operator
+        // enables OPAQUE. Treating the failed exchange as final would lock out
+        // every user of a tenant mid-migration, which is the state `optional`
+        // exists to serve.
+        lib.fail("login_finish");
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = "optional";
+        withClient(fake, (server, client) -> {
+            LoginResult result = client.loginOpaque(USER, PASSWORD.clone());
+            assertFalse(result.mfaRequired());
+            assertNotNull(result.user());
+            assertEquals("11111111-1111-1111-1111-111111111111", result.user().userId());
+
+            // The retry is the SDK's own plaintext path, with the same
+            // credentials -- not a second hand-rolled request.
+            assertEquals(1, fake.passwordLoginBodies.size());
+            JsonNode retry = parse(fake.passwordLoginBodies.get(0));
+            assertEquals(USER, retry.path("username_or_email").asText());
+            assertEquals(new String(PASSWORD), retry.path("password").asText());
+            assertEquals(TENANT_ID, retry.path("tenant_slug").asText());
+
+            // Rule 7's absolute: KE3 is never sent once KE2 fails to open.
+            assertTrue(fake.loginFinishBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("optional: when the fallback also fails, its error is the one reported")
+    void optionalModeReportsTheFallbackFailure() throws Exception {
+        // The OPAQUE attempt is not reported separately: a wrong password, an
+        // unknown identity and a missing record are indistinguishable, so
+        // saying which occurred would be a claim the SDK cannot make.
+        lib.fail("login_finish");
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = "optional";
+        fake.passwordLoginStatus = 401;
+        withClient(fake, (server, client) -> {
+            assertThrows(AuthError.class, () -> client.loginOpaque(USER, PASSWORD.clone()));
+            assertEquals(1, fake.passwordLoginBodies.size());
+            assertTrue(fake.loginFinishBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("required: a failed KE2 is final and never touches /auth/login")
+    void requiredModeDoesNotFallBack() throws Exception {
+        // `required` answers 403 opaque_required for EVERY principal, so a
+        // retry would put a plaintext password on the wire for nothing.
+        lib.fail("login_finish");
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = "required";
+        withClient(fake, (server, client) -> {
+            assertThrows(AuthError.class, () -> client.loginOpaque(USER, PASSWORD.clone()));
+            assertTrue(fake.passwordLoginBodies.isEmpty());
+            assertTrue(fake.loginFinishBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("no mode field at all reads as required")
+    void absentModeReadsAsRequired() throws Exception {
+        // A server older than contract 1.29 sends no `mode`. Absence must fail
+        // closed: the alternative sends a plaintext password to an endpoint
+        // nobody said would accept it.
+        lib.fail("login_finish");
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = null;
+        withClient(fake, (server, client) -> {
+            assertThrows(AuthError.class, () -> client.loginOpaque(USER, PASSWORD.clone()));
+            assertTrue(fake.passwordLoginBodies.isEmpty());
+            assertTrue(fake.loginFinishBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("an unrecognised mode reads as required")
+    void unknownModeReadsAsRequired() throws Exception {
+        lib.fail("login_finish");
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = "enforced-someday";
+        withClient(fake, (server, client) -> {
+            assertThrows(AuthError.class, () -> client.loginOpaque(USER, PASSWORD.clone()));
+            assertTrue(fake.passwordLoginBodies.isEmpty());
+            assertTrue(fake.loginFinishBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("optional does not fall back when the exchange succeeds")
+    void optionalModeDoesNotFallBackOnSuccess() throws Exception {
+        // The fallback is keyed to a failed KE2, not to the mode. A tenant on
+        // `optional` whose users ARE enrolled must never see a second request.
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = "optional";
+        withClient(fake, (server, client) -> {
+            LoginResult result = client.loginOpaque(USER, PASSWORD.clone());
+            assertFalse(result.mfaRequired());
+            assertEquals(1, fake.loginFinishBodies.size());
+            assertTrue(fake.passwordLoginBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("optional does not fall back when login/finish itself refuses")
+    void optionalModeDoesNotFallBackOnAFinishRefusal() throws Exception {
+        // A 401 AFTER a KE2 that opened perfectly well is not a failed
+        // credential check -- the client already authenticated the server --
+        // so it must not reach the plaintext path.
+        FakeOpaqueServer fake = new FakeOpaqueServer();
+        fake.mode = "optional";
+        fake.loginFinishStatus = 401;
+        withClient(fake, (server, client) -> {
+            assertThrows(AuthError.class, () -> client.loginOpaque(USER, PASSWORD.clone()));
+            assertTrue(fake.passwordLoginBodies.isEmpty());
+        });
+    }
+
+    @Test
+    @DisplayName("the async twin falls back under optional and does not under required")
+    void asyncTwinHonoursMode() throws Exception {
+        lib.fail("login_finish");
+
+        FakeOpaqueServer optional = new FakeOpaqueServer();
+        optional.mode = "optional";
+        withClient(optional, (server, client) -> {
+            LoginResult result = client.loginOpaqueAsync(USER, PASSWORD.clone()).join();
+            assertFalse(result.mfaRequired());
+            assertNotNull(result.user());
+            assertEquals(1, optional.passwordLoginBodies.size());
+            assertTrue(optional.loginFinishBodies.isEmpty());
+        });
+
+        FakeOpaqueServer required = new FakeOpaqueServer();
+        required.mode = "required";
+        withClient(required, (server, client) -> {
+            CompletionException raised = assertThrows(CompletionException.class,
+                    () -> client.loginOpaqueAsync(USER, PASSWORD.clone()).join());
+            assertInstanceOf(AuthError.class, raised.getCause());
+            assertTrue(required.passwordLoginBodies.isEmpty());
+            assertTrue(required.loginFinishBodies.isEmpty());
         });
     }
 
