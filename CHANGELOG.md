@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha43] - 2026-08-24
+
 ### Added
+
+- Run the suite on JDK 25 alongside the 21 floor (#70)
 
 - **JDK 25 is now a CI-run runtime.** `mvn test` runs on JDK 21 **and** JDK 25.
   `maven.compiler.release` stays 21 on both legs, so the 25 leg compiles to
@@ -33,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A "Supported Java versions" section in the README.**
 
 ### Changed
+
+- Bump the minor-patch group with 9 updates
+
+- Bump the minor-patch group
 
 - **The gating CI matrix is floor + newest (JDK 21, JDK 25)** rather than a
   single JDK. `maven.compiler.release` is **unchanged at 21**, so the published
