@@ -21,17 +21,32 @@ jobs:
         run: test -f LICENSE
 
   test:
-    name: Test (mvn test)
+    name: Test (JDK ${{ matrix.java }})
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The gating matrix is floor + newest. The floor is
+        # `maven.compiler.release` from pom.xml (21, an LTS); the newest is the
+        # current LTS (25, released 2025-09). 22, 23, 24 and 26 are six-month
+        # feature releases nobody deploys a client SDK against for long.
+        #
+        # `maven.compiler.release` stays 21 on BOTH legs, which is the point:
+        # the 25 leg compiles to Java 21 bytecode with JDK 25's compiler and
+        # then RUNS it on JDK 25. That is precisely the claim consumers care
+        # about — built against the floor, runs on the newest — and one JDK
+        # cannot make it alone. VersionPolicyTest fails if this list and
+        # pom.xml stop agreeing.
+        java: ['21', '25']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up JDK 21
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: ${{ matrix.java }}
           cache: 'maven'
 
       - name: mvn test (fast unit tier, no GPG signing)

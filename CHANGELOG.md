@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **JDK 25 is now a CI-run runtime.** `mvn test` runs on JDK 21 **and** JDK 25.
+  `maven.compiler.release` stays 21 on both legs, so the 25 leg compiles to
+  Java 21 bytecode with JDK 25's compiler and then executes it on a JDK 25
+  runtime — which is the situation every consumer is in when a jar built in CI
+  lands on whatever JDK the production base image ships, and which a single-JDK
+  build cannot exercise at all.
+
+- **`io.axiam.sdk.SupportedVersions`** — `MIN_JAVA_RELEASE` and
+  `NEWEST_TESTED_JAVA`. The bytecode level takes care of the lower bound by
+  itself (an older JVM fails with `UnsupportedClassVersionError`), but nothing
+  records the upper one: release-21 class files load on any later JVM whether
+  or not anybody ever ran them there.
+
+- **`VersionPolicyTest`** — a conformance test for the support policy, binding
+  `maven.compiler.release`, the CI matrix and both constants together. It also
+  asserts `SupportedVersions` is not instantiable, which keeps the new class at
+  100% coverage rather than costing the jacoco gate two uncovered lines.
+
+- **`examples/version-compatibility`** — a runnable preflight reporting the
+  running JVM against the declared range.
+
+- **A "Supported Java versions" section in the README.**
+
+### Changed
+
+- **The gating CI matrix is floor + newest (JDK 21, JDK 25)** rather than a
+  single JDK. `maven.compiler.release` is **unchanged at 21**, so the published
+  bytecode level is identical and no consumer loses a runtime they had before.
+  The other CI jobs (javadoc gate, signed verify, gRPC codegen, BOM validate,
+  Spring Boot example) stay on JDK 21 — they check artifacts and source, not
+  runtime behaviour.
+
 ## [1.0.0-alpha41] - 2026-08-24
 
 ### Added
