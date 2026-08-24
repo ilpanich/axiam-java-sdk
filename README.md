@@ -928,14 +928,45 @@ Which exception you get is most of what this SDK owns on this path:
 | shared library or JNA absent | `NetworkError` | a deployment fact, raised before any request is sent |
 | server named a KSF this build cannot perform | `NetworkError` | a configuration problem; substituting one would surface as a wrong password |
 | `*/start` response missing `ke2` | `NetworkError` | malformed response |
-| envelope did not open / `KE2` did not verify | `AuthError` | the **whole** of the credential check |
+| envelope did not open / `KE2` did not verify, `mode: required` or absent | `AuthError` | the **whole** of the credential check |
+| envelope did not open / `KE2` did not verify, `mode: optional` | whatever `login()` returns or raises | §23.4 rule 7's fallback — see below |
 | tenant refuses password login (`login`) | `AuthzError` | the credentials were never examined |
 
 That `AuthError` covers both halves of the mutual authentication: a wrong
 password, an account that does not exist, and a server that does not hold the
 record are indistinguishable by design. **Nothing is sent to `login/finish` in
-that case** (§23.4 rule 7), and you must not retry over `login()` — that hands
-the plaintext to an endpoint that just failed to prove it holds the record.
+that case** (§23.4 rule 7).
+
+### What a failed exchange does next, and what decides it (§23.4 rule 7)
+
+The `login/start` response carries a `mode` field — the tenant's `opaque_mode`,
+`"optional"` or `"required"`, never `"disabled"` (that answers `404`). When
+`KE2` fails to open, `mode` — and nothing else — decides what `loginOpaque`
+does:
+
+| `mode` | what `loginOpaque` does |
+|---|---|
+| `"optional"` | retries over `POST /api/v1/auth/login` with the same credentials, and returns **that** call's outcome: its `LoginResult` on success, its exception on failure |
+| `"required"` | `AuthError`, and the exchange is over — no plaintext retry |
+| absent (a server older than the field) | same as `"required"` |
+| anything else | same as `"required"` — unrecognised values fail closed |
+
+The `optional` fallback is not a convenience. `optional` is the state a tenant
+lives in for as long as its migration takes, and under it an account with no
+registration record is the *ordinary* case: every account has none the moment
+an operator enables OPAQUE, and acquires one only when its password is next
+set. An SDK that treated the failed exchange as final would lock out every user
+of the tenant, which would make enabling `optional` indistinguishable from
+enabling `required` with nobody enrolled.
+
+Under `required` there is nothing to retry: `/auth/login` answers `403
+opaque_required` for every principal in the tenant, so a retry would put a
+plaintext password on the wire for nothing.
+
+`mode` is **not** downgrade protection, and this SDK does not present it as
+such: a hostile server that wanted the plaintext could answer `404` and get a
+fallback whatever it put there. What closes that is `required` itself,
+server-side, by refusing `/auth/login` before examining any credential.
 
 `required` refuses **every** principal in the tenant, not only the enrolled
 ones. Splitting the response on whether an account has a record would turn

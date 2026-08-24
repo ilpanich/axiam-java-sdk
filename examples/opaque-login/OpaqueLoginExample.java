@@ -98,9 +98,15 @@ public final class OpaqueLoginExample {
                     // This covers BOTH halves of the mutual authentication: the
                     // envelope only opens under the right password, and KE2's
                     // MAC only verifies if the server actually holds the
-                    // record. Do NOT retry over login(), which would hand the
-                    // plaintext to an endpoint that just failed to prove it
-                    // holds the record (§23.4 rule 7).
+                    // record.
+                    //
+                    // Do NOT retry over login() here. Under `optional` the SDK
+                    // has ALREADY done that, inside loginOpaque, and this is
+                    // the password login's own failure; under `required` (and
+                    // against a server that names no mode) a retry would hand
+                    // the plaintext to an endpoint that just failed to prove it
+                    // holds the record, and would be refused anyway. Either
+                    // way the exchange is over (§23.4 rule 7).
                     System.err.println("login failed: " + e.getMessage());
                     System.err.println("Not retrying with a password.");
                     return;
