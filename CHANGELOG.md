@@ -85,19 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replace SRP-6a with OPAQUE (RFC 9807), CONTRACT §23
 
-### Changed
-
-- Link to the AXIAM platform documentation site
-- Re-vendor openapi.json at alpha32 (#61)
-
-### Fixed
-
-- Build the KSF before spending the exchange's state handle
-
-## [Unreleased]
-
-### Added
-
 - CONTRACT.md §24 — WebAuthn / passkeys relying-party layer
   (`io.axiam.sdk.webauthn`): the six wire operations, the two distinct
   authentication ceremonies, and §24.6a's JSON bridge, which lets an Android
@@ -105,20 +92,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   straight through without this artifact gaining an Android dependency.
   §24.6b's linked-API helper is deliberately absent — the JVM has no
   authenticator, and §24.6b rule 2 forbids emulating one in software.
+
 - CONTRACT.md §25 — account lifecycle and MFA enrolment
   (`io.axiam.sdk.account`): voluntary and forced TOTP enrolment, email
   verification, and the password-reset triple including the `reset/context`
   call a tenant with §23 enabled requires before a new password can be built.
+
 - CONTRACT.md §26 — Pushed Authorization Requests, RFC 9126 (`oidcPar`,
   `oidcParAsync`, `PushedAuthorizationRequest`). Required for a FAPI 2.0
   client, which cannot authorize any other way (§21.1).
+
 - `examples/webauthn-passkeys`, `examples/account-lifecycle` and
   `examples/par-login`.
+
 - `io.axiam.sdk.opaque.OpaqueMode` — the tenant `opaque_mode` a `login/start`
   response reports, read from a field that is optional on the wire and whose
   absence, per §23.4 rule 7, reads as `required`.
 
 ### Changed
+
+- Link to the AXIAM platform documentation site
+
+- Re-vendor openapi.json at alpha32 (#61)
 
 - **Re-vendor `openapi.json`** for AXIAM server PR #368, which adds a third CA
   key custodian, `vault_pki`, having HashiCorp Vault's PKI secrets engine
@@ -178,6 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there; what closes that is `required`, server-side. `404` handling is
   untouched: a tenant with OPAQUE disabled is still the distinguishable
   `NetworkError`, never a credential failure.
+
 - Re-vendored `CONTRACT.md` at **contract 1.29** and `openapi.json` at
   **1.0.0-alpha40**.
 
@@ -205,10 +201,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mfaRequired()` should still add the new branch — a tenant that turns on
   required MFA will start returning it, and ignoring it reports a successful
   login that has no session.
+
 - `OidcConfiguration` gained `pushed_authorization_request_endpoint`. Positional
   construction of the record changes arity; the parsed-from-discovery path does
   not.
+
 - Re-vendored `CONTRACT.md` and `openapi.json` at contract 1.28.
+
+### Fixed
+
+- Build the KSF before spending the exchange's state handle
 
 ## [1.0.0-alpha33] - 2026-08-21
 
