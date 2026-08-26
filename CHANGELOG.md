@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Corrected the §27.4 rule 7 error table in the README and in this file.**
+  Both said `ConflictError` extends `NetworkError`. It does not, and never did:
+  the code, the example and `conflictIsNotRetried` all have it under
+  `AuthzError`, which is what §27.4 rule 7 specifies — §2 already maps 409 to
+  `AuthzError` as "resource-level access denied", and the sub-type keeps that
+  mapping rather than re-deciding it. A reader who trusted the old sentence
+  would have written `catch (NetworkError e)` around a create and never caught
+  the 409. A new test pins the parent of all three sub-types so the prose
+  cannot drift from the hierarchy again.
+
 ### Added
 
 - **CONTRACT.md §27 Management API** — `client.management()`, 146 operations
@@ -55,10 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`AuthzError` and `NetworkError` are no longer `final`.** §27.4 rule 7
   classifies three statuses *inside* the existing §2 taxonomy rather than beside
-  it: `NotFoundError` (404) extends `AuthzError`; `ConflictError` (409) and
-  `ValidationError` (400/422) extend `NetworkError`. Every existing `catch` for
-  the base types keeps catching the new ones — which is the property the rule is
-  asking for — and code that wants the distinction can now ask for it.
+  it: `NotFoundError` (404) and `ConflictError` (409) extend `AuthzError`;
+  `ValidationError` (400/422) extends `NetworkError`. Each keeps the parent §2
+  already gave its status. Every existing `catch` for the base types keeps
+  catching the new ones — which is the property the rule is asking for — and
+  code that wants the distinction can now ask for it.
 
 - **JaCoCo bundle line-coverage floor raised from 0.93 to 0.95.** The new code
   brought the bundle to ~95.2%; the floor moves with it so the gate keeps
