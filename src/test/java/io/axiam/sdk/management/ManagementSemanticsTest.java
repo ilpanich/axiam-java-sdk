@@ -487,4 +487,38 @@ class ManagementSemanticsTest extends ManagementTestBase {
             assertTrue(anonymous.resolvedOrgId().isEmpty());
         }
     }
+
+    /**
+     * §27.4 rule 7's table, pinned whole.
+     *
+     * <p>Each sub-type keeps the parent §2 already gave its status — 404 and
+     * 409 under {@code AuthzError}, 400/422 under {@code NetworkError}. Which
+     * status maps to which TYPE is asserted by the three cases above; this pins
+     * the other half, the PARENT, which nothing else here would notice changing.
+     *
+     * <p>Asserted reflectively rather than with {@code instanceof} because the
+     * compiler rejects {@code instanceof} between unrelated class types — the
+     * very property under test — so the natural spelling will not build.
+     *
+     * <p>The rows are stated together because the risk is a later edit moving
+     * one to the parent that reads more naturally in isolation: 409 in
+     * particular looks like a transport concern and is not one. §2 maps it to
+     * {@code AuthzError} as "resource-level access denied", and §27.4 rule 7
+     * keeps it there rather than re-deciding it.
+     */
+    @Test
+    void everyClassificationKeepsTheParentSection2GaveIt() {
+        assertTrue(AuthzError.class.isAssignableFrom(NotFoundError.class),
+                "404: a multi-tenant server answers 404 for another tenant's object "
+                        + "precisely so it cannot be enumerated, so not-found IS an authz answer");
+        assertFalse(NetworkError.class.isAssignableFrom(NotFoundError.class));
+
+        assertTrue(AuthzError.class.isAssignableFrom(ConflictError.class),
+                "409: §2 already maps it to AuthzError, and rule 7 keeps that mapping");
+        assertFalse(NetworkError.class.isAssignableFrom(ConflictError.class));
+
+        assertTrue(NetworkError.class.isAssignableFrom(ValidationError.class),
+                "400/422: the parent is inherited from §2's 400 row, not chosen here");
+        assertFalse(AuthzError.class.isAssignableFrom(ValidationError.class));
+    }
 }

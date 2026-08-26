@@ -1327,11 +1327,16 @@ Six things worth knowing:
   (§27.4 rule 5). Replacement bodies have no builder: their canonical
   constructor takes every component, so forgetting one is a compile error.
 - **Three statuses are classified, and each stays what it was.**
-  `NotFoundError` (404) is an `AuthzError`; `ConflictError` (409) and
-  `ValidationError` (400/422) are `NetworkError`s. Existing `catch` blocks keep
-  working; code that wants the distinction can ask for it (§27.4 rule 7).
-  `ValidationError.fields()` carries the server's per-field detail when it sent
-  any.
+  `NotFoundError` (404) and `ConflictError` (409) are `AuthzError`s;
+  `ValidationError` (400/422) is a `NetworkError`. Each inherits the parent §2
+  already gave its status, so existing `catch` blocks keep working and code that
+  wants the distinction can ask for it (§27.4 rule 7). `ValidationError.fields()`
+  carries the server's per-field detail when it sent any.
+
+  404 sorts under `AuthzError` because on a multi-tenant surface "does not
+  exist" and "is not yours" are *deliberately* the same answer — a server that
+  distinguished them would let a probing caller enumerate another tenant's
+  objects.
 - **Only GETs are retried.** A create that times out is reported, never repeated
   — one retried `POST` is two roles (§27.4 rule 8).
 - **One-time secrets are `Sensitive`.** A generated private key, a fresh client

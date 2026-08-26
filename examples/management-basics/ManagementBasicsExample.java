@@ -96,6 +96,8 @@ public final class ManagementBasicsExample {
                 client.management().roles()
                         .create(new CreateRoleRequest("Edits documents", false, "Editor"));
             } catch (ConflictError e) {
+                // Also an AuthzError: §2 already mapped 409 there, and the
+                // sub-type keeps that mapping rather than moving the status.
                 System.out.println("409 -> ConflictError: " + e.getMessage());
             }
 
