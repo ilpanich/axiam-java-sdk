@@ -757,11 +757,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * across 24 namespaces, reached as
      * {@code client.management().users().list(...)}.
      *
-     * <p>Grouped behind one accessor rather than spread across twenty-four
-     * methods on this class, for the reason &sect;27.2 gives for namespacing in
-     * the first place: twenty namespaces have a {@code list} and fourteen a
-     * {@code get}, and hanging them all here would bury the eight &sect;1 methods
-     * most callers actually want.
+     * <p>This is &sect;27.2 rule 4's single accessor, which the section makes an
+     * addition to the per-namespace methods below rather than a replacement for
+     * them: {@code client.users()} and {@code client.management().users()} are
+     * the same handle. It exists for callers who prefer the management surface
+     * not to be mixed in with &sect;1's methods when reading a call site.
+     *
+     * <p>What &sect;27.2 actually argues against is spreading the 146
+     * <em>operations</em> across this class — twenty namespaces have a
+     * {@code list} and fourteen a {@code get}, so flattened they would need a
+     * disambiguating prefix each. Twenty-four namespace accessors are not that,
+     * and &sect;27.3's Java row asks for them by name.
      *
      * <p>Acquiring the surface, or any handle on it, performs no I/O
      * (&sect;27.2 rule 1).
@@ -772,6 +778,339 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return new io.axiam.sdk.management.ManagementApi(
                 new io.axiam.sdk.internal.ManagementTransport(
                         httpClient, baseUrl, session, telemetry, retryEnabled, this::ensureOpen));
+    }
+
+    // ---- CONTRACT.md §27.2/§27.3: the namespace handles, on the client ----
+    //
+    // `client.serviceAccounts().rotateSecret(id)` -- the form §27.3's Java row shows.
+    // `management()` above reaches the same handles behind one accessor, which §27.2
+    // rule 4 makes the ADDITIONAL one ("SHOULD additionally be reachable behind one
+    // accessor"); shipping only that had the two the wrong way round, with the optional
+    // form present and the one the naming map specifies absent.
+    //
+    // Each forwards to management(), so rule 4's "where an SDK offers both, the two MUST
+    // return equivalent handles" holds structurally rather than by two code paths
+    // agreeing to stay in step.
+
+    /**
+     * Organizations an SDK client may read and configure. Creation and deletion are outside the
+     * SDK boundary (§27.0).
+     *
+     *
+     * <p>The same handle as {@code management().organizations()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the organizations namespace handle
+     */
+    public io.axiam.sdk.management.OrganizationsApi organizations() {
+        return management().organizations();
+    }
+
+    /**
+     * Tenants within an organization -- the isolation boundary every other namespace is scoped to.
+     *
+     *
+     * <p>The same handle as {@code management().tenants()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the tenants namespace handle
+     */
+    public io.axiam.sdk.management.TenantsApi tenants() {
+        return management().tenants();
+    }
+
+    /**
+     * Users within the client's tenant, and the administrative side of their second factor and
+     * lockout state.
+     *
+     *
+     * <p>The same handle as {@code management().users()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the users namespace handle
+     */
+    public io.axiam.sdk.management.UsersApi users() {
+        return management().users();
+    }
+
+    /**
+     * Named collections of users. Roles assigned to a group are inherited by every member.
+     *
+     *
+     * <p>The same handle as {@code management().groups()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the groups namespace handle
+     */
+    public io.axiam.sdk.management.GroupsApi groups() {
+        return management().groups();
+    }
+
+    /**
+     * Roles, their permission sets, and their assignment to users and groups.
+     *
+     *
+     * <p>The same handle as {@code management().roles()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the roles namespace handle
+     */
+    public io.axiam.sdk.management.RolesApi roles() {
+        return management().roles();
+    }
+
+    /**
+     * Permissions -- an action on a resource, optionally narrowed by a scope.
+     *
+     *
+     * <p>The same handle as {@code management().permissions()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the permissions namespace handle
+     */
+    public io.axiam.sdk.management.PermissionsApi permissions() {
+        return management().permissions();
+    }
+
+    /**
+     * The resource hierarchy role assignments cascade down.
+     *
+     *
+     * <p>The same handle as {@code management().resources()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the resources namespace handle
+     */
+    public io.axiam.sdk.management.ResourcesApi resources() {
+        return management().resources();
+    }
+
+    /**
+     * Sub-resource granularity, always addressed under their resource.
+     *
+     *
+     * <p>The same handle as {@code management().scopes()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the scopes namespace handle
+     */
+    public io.axiam.sdk.management.ScopesApi scopes() {
+        return management().scopes();
+    }
+
+    /**
+     * Machine identities, their secrets, and the certificate a device-bound one authenticates
+     * with.
+     *
+     *
+     * <p>The same handle as {@code management().serviceAccounts()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the service_accounts namespace handle
+     */
+    public io.axiam.sdk.management.ServiceAccountsApi serviceAccounts() {
+        return management().serviceAccounts();
+    }
+
+    /**
+     * End-entity X.509 certificates -- the ones issued to users, services and IoT devices.
+     *
+     *
+     * <p>The same handle as {@code management().certificates()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the certificates namespace handle
+     */
+    public io.axiam.sdk.management.CertificatesApi certificates() {
+        return management().certificates();
+    }
+
+    /**
+     * Organization CAs and the per-tenant signing CAs chained beneath them.
+     *
+     *
+     * <p>The same handle as {@code management().caCertificates()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the ca_certificates namespace handle
+     */
+    public io.axiam.sdk.management.CaCertificatesApi caCertificates() {
+        return management().caCertificates();
+    }
+
+    /**
+     * OpenPGP keys used for audit signing and encrypted data export.
+     *
+     *
+     * <p>The same handle as {@code management().pgpKeys()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the pgp_keys namespace handle
+     */
+    public io.axiam.sdk.management.PgpKeysApi pgpKeys() {
+        return management().pgpKeys();
+    }
+
+    /**
+     * Outbound event notifications. Delivery signatures are verified with the §13 helper, which
+     * this namespace configures.
+     *
+     *
+     * <p>The same handle as {@code management().webhooks()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the webhooks namespace handle
+     */
+    public io.axiam.sdk.management.WebhooksApi webhooks() {
+        return management().webhooks();
+    }
+
+    /**
+     * Registered OAuth2/OIDC clients -- the registration half of what §12, §21 and §26 then speak
+     * to.
+     *
+     *
+     * <p>The same handle as {@code management().oauth2Clients()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the oauth2_clients namespace handle
+     */
+    public io.axiam.sdk.management.Oauth2ClientsApi oauth2Clients() {
+        return management().oauth2Clients();
+    }
+
+    /**
+     * Upstream IdP configuration and the per-user links it produces.
+     *
+     *
+     * <p>The same handle as {@code management().federation()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the federation namespace handle
+     */
+    public io.axiam.sdk.management.FederationApi federation() {
+        return management().federation();
+    }
+
+    /**
+     * Which events raise a notification, and to whom.
+     *
+     *
+     * <p>The same handle as {@code management().notificationRules()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the notification_rules namespace handle
+     */
+    public io.axiam.sdk.management.NotificationRulesApi notificationRules() {
+        return management().notificationRules();
+    }
+
+    /**
+     * Transactional-mail transport, configurable at organization level and overridable per tenant.
+     *
+     *
+     * <p>The same handle as {@code management().emailConfig()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the email_config namespace handle
+     */
+    public io.axiam.sdk.management.EmailConfigApi emailConfig() {
+        return management().emailConfig();
+    }
+
+    /**
+     * Effective settings, and the organization/tenant layers they resolve from.
+     *
+     *
+     * <p>The same handle as {@code management().settings()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the settings namespace handle
+     */
+    public io.axiam.sdk.management.SettingsApi settings() {
+        return management().settings();
+    }
+
+    /**
+     * Bearer tokens for the SCIM 2.0 provisioning endpoint.
+     *
+     *
+     * <p>The same handle as {@code management().scimTokens()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the scim_tokens namespace handle
+     */
+    public io.axiam.sdk.management.ScimTokensApi scimTokens() {
+        return management().scimTokens();
+    }
+
+    /**
+     * Registration of §22 AMQP extension actors -- the admin surface §22.9 describes, which no SDK
+     * could previously reach.
+     *
+     *
+     * <p>The same handle as {@code management().reactors()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the reactors namespace handle
+     */
+    public io.axiam.sdk.management.ReactorsApi reactors() {
+        return management().reactors();
+    }
+
+    /**
+     * Per-tenant attestation policy governing the §24 ceremonies, and the compliance report over
+     * it.
+     *
+     *
+     * <p>The same handle as {@code management().webauthnPolicy()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the webauthn_policy namespace handle
+     */
+    public io.axiam.sdk.management.WebauthnPolicyApi webauthnPolicy() {
+        return management().webauthnPolicy();
+    }
+
+    /**
+     * Append-only audit log, read-only by construction.
+     *
+     *
+     * <p>The same handle as {@code management().audit()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the audit namespace handle
+     */
+    public io.axiam.sdk.management.AuditApi audit() {
+        return management().audit();
+    }
+
+    /**
+     * GDPR self-service: the authenticated account's own export and erasure. Scoped to the caller,
+     * never to another user.
+     *
+     *
+     * <p>The same handle as {@code management().privacy()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the privacy namespace handle
+     */
+    public io.axiam.sdk.management.PrivacyApi privacy() {
+        return management().privacy();
+    }
+
+    /**
+     * Deployment-level probes and FIDO metadata state. Unauthenticated where the server leaves
+     * them so.
+     *
+     *
+     * <p>The same handle as {@code management().platform()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the platform namespace handle
+     */
+    public io.axiam.sdk.management.PlatformApi platform() {
+        return management().platform();
     }
 
     /**

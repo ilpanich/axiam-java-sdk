@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The §27 namespace handles now sit directly on the client** — `client.roles()`,
+  `client.serviceAccounts().rotateSecret(id)` — which is the form §27.3's Java row
+  specifies. `client.management()` still reaches the same 24 handles behind one accessor;
+  §27.2 rule 4 makes that the *additional* form ("SHOULD **additionally** be reachable
+  behind one accessor"), so shipping only it had the two the wrong way round: the optional
+  form present and the one the naming map specifies absent.
+
+  The javadoc on `management()` argued the opposite, citing §27.2. That reading was wrong
+  and is corrected: what §27.2 argues against is spreading the 146 *operations* across the
+  client — twenty namespaces have a `list` and fourteen a `get`, so flattened they would
+  each need a disambiguating prefix. Twenty-four namespace accessors are not that, and
+  §27.3's Java row asks for them by name.
+
+  Each direct method forwards to `management()`, so rule 4's "where an SDK offers both, the
+  two MUST return equivalent handles" holds structurally rather than by two code paths
+  agreeing to stay in step. `ManagementClientAccessorsTest` invokes **all twenty-four** and
+  compares the handle type each form returns — a forwarding one-liner is exactly where a
+  copy-paste sends one namespace to its neighbour, which compiles and which a sampled test
+  would miss — then asserts wire-level equivalence for a representative and for the
+  org-scoped case.
+
+
 ### Documentation
 
 - **Corrected the §27.4 rule 7 error table in the README and in this file.**
