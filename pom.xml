@@ -359,7 +359,7 @@
             <goals><goal>report</goal></goals>
           </execution>
           <!-- Regression gate: fail the build if bundle line coverage drops
-               below the floor (set below the current ~93% so it never
+               below the floor (set just below the current ~95.1% so it never
                false-fails; ratchet upward as coverage rises). Honors the
                axiam/v1/** exclusion configured above. -->
           <execution>
@@ -374,7 +374,7 @@
                     <limit>
                       <counter>LINE</counter>
                       <value>COVEREDRATIO</value>
-                      <minimum>0.93</minimum>
+                      <minimum>0.95</minimum>
                     </limit>
                   </limits>
                 </rule>

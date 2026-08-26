@@ -11,8 +11,16 @@ import org.jspecify.annotations.Nullable;
  * both may be {@code null} when the server did not report them.
  *
  * <p>Messages are English-only, no i18n (D-29).
+ *
+ * <p>Not {@code final}: CONTRACT.md &sect;27.4 rule 7 adds a <em>classification
+ * inside</em> this type rather than beside it, because a management surface
+ * produces refusals &sect;2 never had to describe — &sect;2 has no 404 row at all,
+ * since nothing before &sect;27 could return one. {@link NotFoundError} and
+ * {@link ConflictError} extend this class so that every
+ * {@code catch (AuthzError e)} written before &sect;27 keeps working, and a
+ * caller who needs the distinction catches the narrower type first.
  */
-public final class AuthzError extends RuntimeException {
+public class AuthzError extends RuntimeException {
 
     /** The denied action, or {@code null} if the server did not report one. */
     private final @Nullable String action;

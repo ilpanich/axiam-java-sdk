@@ -460,4 +460,56 @@ public final class SessionState {
     private static String stripTrailingSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
+
+    /**
+     * The organization UUID this session can address, or {@code null}.
+     *
+     * <p>The client's configured {@code orgId} first, then the live access
+     * token's {@code org_id} claim. A configured value outranks the claim so
+     * that naming an organization on the builder is a decision rather than a
+     * hint, and an unparseable claim reads as no claim: a malformed UUID cannot
+     * go into a path, and pretending otherwise turns a local refusal into a
+     * server-side 404.
+     *
+     * @return the resolved organization UUID, or {@code null} if none is available
+     */
+    public @Nullable UUID resolvedOrgId() {
+        UUID configured = configuredOrgId();
+        return configured != null ? configured : claim(true);
+    }
+
+    /**
+     * The tenant UUID this session can address, or {@code null}.
+     *
+     * <p>Read from the live access token's {@code tenant_id} claim. The
+     * client's configured tenant identifier is deliberately not consulted: it
+     * is a slug as often as a UUID (CONTRACT.md &sect;5), and resolving a slug
+     * would take a wire call the caller did not ask for.
+     *
+     * @return the resolved tenant UUID, or {@code null} if none is available
+     */
+    public @Nullable UUID resolvedTenantId() {
+        return claim(false);
+    }
+
+    /** Reads the org or tenant UUID out of the live access token's claims. */
+    private @Nullable UUID claim(boolean org) {
+        String token = cachedAccessToken();
+        if (token == null) {
+            return null;
+        }
+        Claims claims = decodeUnverifiedClaims(token);
+        if (claims == null) {
+            return null;
+        }
+        String raw = org ? claims.orgId() : claims.tenantId();
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
 }

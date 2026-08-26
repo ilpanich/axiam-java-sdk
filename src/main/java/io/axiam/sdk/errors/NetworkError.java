@@ -16,8 +16,16 @@ import org.jspecify.annotations.Nullable;
  * {@code okhttp3.Response} directly, by design: there is no overload for
  * it, which structurally prevents a raw, unredacted response from reaching
  * the exception chain.
+ *
+ * <p>Not {@code final}: CONTRACT.md &sect;27.4 rule 7 adds a <em>classification
+ * inside</em> this type. &sect;2 maps 400 to this class, described as an "SDK
+ * programming error" — a description written when nothing but the SDK itself
+ * could produce a 400. On the &sect;27 management surface a 400 is usually a
+ * <em>user's</em> invalid input, and an application needs to tell that from a
+ * broken socket without matching on message text, so {@link ValidationError}
+ * extends this class rather than sitting beside it.
  */
-public final class NetworkError extends RuntimeException {
+public class NetworkError extends RuntimeException {
 
     /**
      * Creates a {@code NetworkError} with no attached transport-error summary

@@ -25,18 +25,19 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 ## Contract conformance
 
 This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19, §20, §22,
-§23, §24, §25, §26 — including §6.1 mTLS (client-certificate authentication), the
-§1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum local-verification set,
-the §12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifier, the
-§20 UMA 2.0 Protection API and ticket grant, the §22 reactor runtime, the §23
+§23, §24, §25, §26, §27 — including §6.1 mTLS (client-certificate authentication),
+the §1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum local-verification
+set, the §12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifier,
+the §20 UMA 2.0 Protection API and ticket grant, the §22 reactor runtime, the §23
 OPAQUE (RFC 9807) login path, the §24 WebAuthn relying-party layer with its
-§24.6a JSON bridge, the §25 account-lifecycle and MFA-enrolment operations, and
-§26 Pushed Authorization Requests (RFC 9126).
+§24.6a JSON bridge, the §25 account-lifecycle and MFA-enrolment operations, §26
+Pushed Authorization Requests (RFC 9126), and the §27 Management API — all 146
+operations across 24 namespaces, with the §27.6 declarative layer.
 
-§12.7, §14, §15, §20, §22, §23, §24, §25 and §26 are named rather than folded into
-the range because they landed after this SDK already claimed §1–§13: widening the
-range silently would turn a statement that was true when written into a different
-claim without anyone editing it.
+§12.7, §14, §15, §20, §22, §23, §24, §25, §26 and §27 are named rather than folded
+into the range because they landed after this SDK already claimed §1–§13: widening
+the range silently would turn a statement that was true when written into a
+different claim without anyone editing it.
 
 §24.6b — the linked-API ceremony helper — is **deliberately absent**. The JVM has
 no authenticator, and §24.6b rule 2 forbids emulating one in software: a
@@ -193,8 +194,9 @@ try (AxiamClient client = AxiamClient.builder("https://axiam.example.com", "acme
 
 See [`examples/`](examples/) for runnable per-capability examples covering
 login+MFA, REST authorization, gRPC `CheckAccess`, the AMQP consumer, passkeys,
-account lifecycle, pushed authorization requests, and a complete Spring Boot 3.x
-application wiring `AxiamAuthenticationFilter` explicitly in a
+account lifecycle, pushed authorization requests, the management API and its
+declarative layer, end-to-end device mTLS provisioning, and a complete Spring
+Boot 3.x application wiring `AxiamAuthenticationFilter` explicitly in a
 `SecurityFilterChain` bean.
 
 ### mTLS / client certificates
@@ -1278,6 +1280,112 @@ registration that does not set `require_par`, so such a client cannot authorize
 any other way (§21.1).
 
 Worked end to end in [`examples/par-login`](examples/par-login).
+
+## Management API (§27)
+
+`client.management()` is the administrative surface: 146 operations across 24
+namespaces — users, groups, roles, permissions, resources, scopes, service
+accounts, certificates, CA certificates, PGP keys, webhooks, OAuth2 clients,
+federation, notification rules, e-mail config, settings, SCIM tokens, reactors,
+WebAuthn policy, audit, privacy, organizations, tenants and platform.
+
+It is **generated** from the vendored `management-registry.json` and
+`openapi.json` by `scripts/gen_management.py`, and the generated output is
+committed. A CI job re-runs the generator with `--check` on every pull request,
+so the committed surface and the vendored contract cannot drift apart.
+
+```java
+try (AxiamClient client = AxiamClient.builder(baseUrl, "acme").orgSlug("acme").build()) {
+    client.login(admin, password);
+
+    // A namespace handle is a view over this client's session, not a
+    // connection. Acquiring one performs no I/O (§27.2).
+    Page<UserResponse> page = client.management().users().list(PageRequest.of(25));
+
+    // page.total() is the size of the WHOLE set, not of this page (§27.4 rule 4).
+    System.out.println(page.items().size() + " of " + page.total());
+
+    // listAll walks to exhaustion, stopping on an empty page even if the
+    // server's total disagrees.
+    List<Role> all = client.management().roles().listAll(PageRequest.of(100));
+}
+```
+
+Six things worth knowing:
+
+- **The client's org and tenant are implicit.** A route with `{org_id}` or
+  `{tenant_id}` in it takes them from the client (§27.4 rule 3). The handles
+  that carry such routes — and only those — expose `.inOrg(id)` / `.forTenant(id)`
+  to name a different one for a single call; each returns a new handle and
+  leaves the original alone. Where `{tenant_id}` names the tenant being
+  *administered* rather than the calling context — `tenants`, and the signing
+  CAs under `caCertificates` — it is an ordinary argument instead, and
+  `client.resolvedTenantId()` is what you pass it.
+- **A sparse update sends only what you set.** Bodies whose components are all
+  optional have a builder, and a field the builder was not given is absent from
+  the JSON rather than sent as `null` — which the server reads as "clear this"
+  (§27.4 rule 5). Replacement bodies have no builder: their canonical
+  constructor takes every component, so forgetting one is a compile error.
+- **Three statuses are classified, and each stays what it was.**
+  `NotFoundError` (404) is an `AuthzError`; `ConflictError` (409) and
+  `ValidationError` (400/422) are `NetworkError`s. Existing `catch` blocks keep
+  working; code that wants the distinction can ask for it (§27.4 rule 7).
+  `ValidationError.fields()` carries the server's per-field detail when it sent
+  any.
+- **Only GETs are retried.** A create that times out is reported, never repeated
+  — one retried `POST` is two roles (§27.4 rule 8).
+- **One-time secrets are `Sensitive`.** A generated private key, a fresh client
+  secret, a SCIM provisioning token: returned by exactly one call and never
+  again, redacted from `toString()` and from every JSON rendering, and reachable
+  only through the explicit `expose()` (§27.5). Write it down before doing
+  anything else that could fail.
+- **A management call with no session never reaches the network.** It fails
+  locally with an `AuthError` naming the missing session (§27.4 rule 1).
+
+Worked end to end in
+[`examples/management-basics`](examples/management-basics).
+
+### Declarative manifests (§27.6)
+
+`client.management().manifest()` takes a description of the tenant you want and
+reconciles toward it.
+
+```java
+ManagementManifest manifest = ManagementManifest.builder()
+        .resource("docs", "documents", "collection")
+        .scope("docs", "draft", "draft", "Unpublished work")
+        .permission("read", "document:read", "Read a document")
+        .role("editor", "Editor", "Edits documents")
+        .grant("editor", "read", null, "draft")
+        .group("staff", "Staff", "Everyone", "editor")
+        .build();
+
+ManagementPlan plan = client.management().manifest().plan(manifest);   // reads only
+if (!plan.isConverged()) {
+    ApplyReport report = client.management().manifest().apply(manifest);
+}
+```
+
+- **`plan` writes nothing.** Every request it makes is a read, so it is safe to
+  run against production to find out what an `apply` would do.
+- **Ordering is derived, not declared.** Resources before their scopes,
+  permissions before the grants that name them, roles before the assignments;
+  the builder checks back-references as they are made, so a grant naming a role
+  that no `role(...)` call has declared is refused at `build()` — before any
+  request.
+- **Omission is never deletion.** A manifest states what should exist. A role it
+  does not mention is a role it has no opinion about (§27.6 rule 4).
+- **`apply` stops at the first failure and does not roll back** (§27.6 rule 7).
+  Everything before the failure stands; everything after it is reported as
+  `NOT_ATTEMPTED`. An automatic rollback would be a second unreviewed batch of
+  writes issued at exactly the moment the tenant is in an unknown state.
+- **Applying twice is applying once.** A converged tenant plans nothing and
+  takes no writes.
+
+Worked end to end in
+[`examples/management-manifest`](examples/management-manifest), and combined
+with §6.1 mTLS for a full device provisioning lifecycle in
+[`examples/device-mtls-provisioning`](examples/device-mtls-provisioning).
 
 ## Building from source
 
