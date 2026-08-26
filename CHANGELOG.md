@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CONTRACT.md §27 Management API** — `client.management()`, 146 operations
+  across 24 namespaces (users, groups, roles, permissions, resources, scopes,
+  service accounts, certificates, CA certificates, PGP keys, webhooks, OAuth2
+  clients, federation, notification rules, e-mail config, settings, SCIM tokens,
+  reactors, WebAuthn policy, audit, privacy, organizations, tenants, platform).
+
+  The models and namespace handles are **generated** by
+  `scripts/gen_management.py` from the vendored `management-registry.json` and
+  `openapi.json`, and the generated output is committed. A new CI job runs the
+  generator with `--check` on every pull request, so the committed surface and
+  the vendored contract cannot drift apart. §27.8 requires the generated layer
+  to sit on the SDK's existing request path, and it does: all 146 operations
+  funnel through one `ManagementTransport`, inheriting §3 CSRF, the §4 cookie
+  jar, the §5 `X-Tenant-Id` header, §6 TLS, §16 retry and §19 telemetry by
+  construction rather than by 146 opportunities to forget one.
+
+  §27 is the first surface to put a `Sensitive` inside a JSON **request** body,
+  which needed a writer that serializes one in the clear. That writer overrides
+  `Sensitive`'s own redacting serializer with a Jackson **mixin** rather than a
+  module-registered serializer: a class-level `@JsonSerialize` wins over
+  `SimpleModule.addSerializer`, so the module form would have sent every
+  password and private key to the server as the literal string
+  `"[SENSITIVE]"`. Everywhere else `Sensitive` still redacts.
+
+- **The §27.6 declarative layer** — `client.management().manifest()`, with
+  `plan` (reads only), `apply` (stops at the first failure, does not roll back),
+  derived ordering, and back-reference checking at `build()`.
+
+- **`AxiamClient.resolvedOrgId()` / `resolvedTenantId()`** — the organization and
+  tenant UUIDs §27.4 rule 3 interpolates into implicit paths. Public because §27
+  also has routes where `{org_id}` / `{tenant_id}` name the entity being
+  administered rather than the calling context (`tenants`, and the signing CAs
+  under `caCertificates`); those take the identifier as an ordinary argument, and
+  without these a caller had no way to pass the same one the implicit routes use.
+  Distinct from `tenantId()`, which is the identifier the client was built with
+  and is a slug as often as a UUID.
+
+- Three runnable examples: `examples/management-basics`,
+  `examples/management-manifest`, and `examples/device-mtls-provisioning` — the
+  last being a full operator/device split, minting a Device certificate from the
+  tenant's signing CA and then authenticating with it over §6.1 mutual TLS.
+
+### Changed
+
+- **`AuthzError` and `NetworkError` are no longer `final`.** §27.4 rule 7
+  classifies three statuses *inside* the existing §2 taxonomy rather than beside
+  it: `NotFoundError` (404) extends `AuthzError`; `ConflictError` (409) and
+  `ValidationError` (400/422) extend `NetworkError`. Every existing `catch` for
+  the base types keeps catching the new ones — which is the property the rule is
+  asking for — and code that wants the distinction can now ask for it.
+
+- **JaCoCo bundle line-coverage floor raised from 0.93 to 0.95.** The new code
+  brought the bundle to ~95.2%; the floor moves with it so the gate keeps
+  meaning something.
+
 ## [1.0.0-alpha44] - 2026-08-25
 
 ### Changed

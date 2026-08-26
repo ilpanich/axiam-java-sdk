@@ -671,6 +671,46 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return tenantId;
     }
 
+    /**
+     * The organization UUID this client can address, if one has resolved.
+     *
+     * <p>The value CONTRACT.md &sect;27.4 rule 3 interpolates into every
+     * {@code {org_id}} path: the {@code orgId(...)} the client was built with,
+     * else the {@code org_id} claim of the live access token. Empty until one
+     * of those exists — notably, before {@link #login} on a client built with
+     * an organization <em>slug</em>, since resolving a slug would cost a wire
+     * call the caller did not ask for.
+     *
+     * <p>Public because &sect;27 routes exist where {@code {org_id}} names the
+     * organization being administered rather than the calling context, and
+     * those take it as an ordinary argument. Without this, a caller would have
+     * no way to pass the same organization the implicit routes are using.
+     *
+     * @return the resolved organization UUID, or empty if none has resolved
+     */
+    public java.util.Optional<UUID> resolvedOrgId() {
+        return java.util.Optional.ofNullable(session.resolvedOrgId());
+    }
+
+    /**
+     * The tenant UUID this client can address, if one has resolved.
+     *
+     * <p>Read from the live access token's {@code tenant_id} claim, so it is
+     * empty until {@link #login} (or an OAuth2 flow) has established a session.
+     * Distinct from {@link #tenantId()}, which is the identifier the client was
+     * built with and is a slug as often as a UUID.
+     *
+     * <p>Public for the same reason as {@link #resolvedOrgId()}: on
+     * {@code tenants} and on the signing CAs under {@code caCertificates},
+     * {@code {tenant_id}} names the tenant being administered and is an
+     * argument rather than an implicit.
+     *
+     * @return the resolved tenant UUID, or empty if none has resolved
+     */
+    public java.util.Optional<UUID> resolvedTenantId() {
+        return java.util.Optional.ofNullable(session.resolvedTenantId());
+    }
+
     /** Returns this client's base URL.
      *
      * @return this client's configured, trailing-slash-stripped base URL */
@@ -711,6 +751,28 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     // ------------------------------------------------------------------
     // Auth methods (CONTRACT.md §1): login / verifyMfa / refresh / logout
     // ------------------------------------------------------------------
+
+    /**
+     * The CONTRACT.md &sect;27 management surface: 146 administrative operations
+     * across 24 namespaces, reached as
+     * {@code client.management().users().list(...)}.
+     *
+     * <p>Grouped behind one accessor rather than spread across twenty-four
+     * methods on this class, for the reason &sect;27.2 gives for namespacing in
+     * the first place: twenty namespaces have a {@code list} and fourteen a
+     * {@code get}, and hanging them all here would bury the eight &sect;1 methods
+     * most callers actually want.
+     *
+     * <p>Acquiring the surface, or any handle on it, performs no I/O
+     * (&sect;27.2 rule 1).
+     *
+     * @return the management surface for this client
+     */
+    public io.axiam.sdk.management.ManagementApi management() {
+        return new io.axiam.sdk.management.ManagementApi(
+                new io.axiam.sdk.internal.ManagementTransport(
+                        httpClient, baseUrl, session, telemetry, retryEnabled, this::ensureOpen));
+    }
 
     /**
      * {@code POST /api/v1/auth/login}. Returns a typed {@link LoginResult} —
