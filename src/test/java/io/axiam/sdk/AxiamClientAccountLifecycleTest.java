@@ -5,6 +5,7 @@ import io.axiam.sdk.account.PasswordResetConfirmation;
 import io.axiam.sdk.account.PasswordResetContext;
 import io.axiam.sdk.account.PasswordResetRequest;
 import io.axiam.sdk.errors.AuthError;
+import io.axiam.sdk.errors.AuthzError;
 import io.axiam.sdk.errors.NetworkError;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -277,6 +278,147 @@ class AxiamClientAccountLifecycleTest {
                 server.enqueue(json(400, "{\"message\":\"token expired\"}"));
                 assertThrows(NetworkError.class,
                         () -> client.verifyEmail(Sensitive.of("stale"), TENANT_ID));
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // §25.7 — the two resends are two operations
+    // -----------------------------------------------------------------------
+
+    /**
+     * The authenticated resend carries no address, and hits its own path.
+     *
+     * <p>The body assertion is the one that matters: a signature with no address
+     * parameter proves nothing about what the SDK serializes, and an address on
+     * this endpoint would let an authenticated session mail an arbitrary one.
+     */
+    @Test
+    void resendOwnVerificationSendsNoAddress() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(json(200, "{\"sent\":true}"));
+
+                client.resendOwnVerification();
+
+                RecordedRequest request = server.takeRequest();
+                assertEquals("/api/v1/users/me/resend-verification", request.getPath());
+                JsonNode body = MAPPER.readTree(request.getBody().readUtf8());
+                assertFalse(body.fieldNames().hasNext(),
+                        "caller-supplied data went out: " + body);
+            }
+        }
+    }
+
+    /**
+     * The two resends are distinct operations against distinct paths.
+     *
+     * <p>An SDK that aliased one to the other would reintroduce the exact defect
+     * §25.7 exists to describe, and every other test here would still pass — so
+     * this asserts on the path each one actually reached.
+     */
+    @Test
+    void theTwoResendsReachDifferentEndpoints() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(new MockResponse().setResponseCode(200));
+                server.enqueue(json(200, "{\"sent\":true}"));
+
+                client.resendVerification("alice@example.com", TENANT_ID);
+                client.resendOwnVerification();
+
+                assertEquals("/api/v1/auth/resend-verification", server.takeRequest().getPath());
+                assertEquals("/api/v1/users/me/resend-verification", server.takeRequest().getPath());
+            }
+        }
+    }
+
+    /**
+     * A {@code 409} surfaces, and is not retried through the public endpoint.
+     *
+     * <p>The bug this operation exists to fix was a success return on a request
+     * that achieved nothing, so "throws" is the assertion — and the request
+     * count is what rules out the §25.7 rule 2 fallback, which would turn both
+     * failures back into a normal return with an extra round-trip.
+     */
+    @Test
+    void resendOwnVerificationSurfacesA409WithoutFallingBack() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(new MockResponse().setResponseCode(409));
+
+                assertThrows(AuthzError.class, client::resendOwnVerification);
+
+                assertEquals(1, server.getRequestCount(),
+                        "a second request means a fallback to the enumeration-safe "
+                                + "endpoint, which rebuilds the bug");
+                assertEquals("/api/v1/users/me/resend-verification",
+                        server.takeRequest().getPath());
+            }
+        }
+    }
+
+    /** A {@code 429} surfaces too, as the §2 mapping of a rate limit. */
+    @Test
+    void resendOwnVerificationSurfacesTheDailyLimit() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(new MockResponse().setResponseCode(429));
+
+                assertThrows(NetworkError.class, client::resendOwnVerification);
+
+                assertEquals(1, server.getRequestCount(),
+                        "a second request means a fallback to the enumeration-safe endpoint");
+                assertEquals("/api/v1/users/me/resend-verification",
+                        server.takeRequest().getPath());
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // §5.2 — organization-level principals
+    // -----------------------------------------------------------------------
+
+    /**
+     * {@code organizationLevel} is carried through from the login response.
+     *
+     * <p>It is what an application checks <em>before</em> offering a tenant
+     * switch: such a principal changes the tenant it acts on with a header on
+     * the next request, and an ordinary one cannot, so offering the switch to
+     * both turns a distinction the server made into a 403 the user discovers.
+     *
+     * <p>The absent case is the one that matters: a server older than contract
+     * 1.31 omits the field, and {@code false} is the safe reading — the client
+     * then offers no cross-tenant action rather than one that would fail.
+     */
+    @Test
+    void loginReportsAnOrganizationLevelPrincipal() throws Exception {
+        record Case(String userJson, boolean expected) { }
+        Case[] cases = {
+            new Case("{\"id\":\"u1\",\"organization_level\":true}", true),
+            new Case("{\"id\":\"u1\",\"organization_level\":false}", false),
+            new Case("{\"id\":\"u1\"}", false),
+        };
+
+        for (Case each : cases) {
+            try (MockWebServer server = new MockWebServer()) {
+                server.start();
+                try (AxiamClient client = client(server.url("/").toString())) {
+                    server.enqueue(json(200,
+                            "{\"user\":" + each.userJson() + ",\"session_id\":\"s1\","
+                                    + "\"expires_in\":900}")
+                            .addHeader("Set-Cookie", "axiam_access=" + OidcTestTokens.unsignedAccessToken() + "; Path=/")
+                            .addHeader("Set-Cookie", "axiam_refresh=r; Path=/"));
+
+                    LoginResult result = client.login("alice@example.com", "correct horse");
+
+                    assertEquals(each.expected(), result.organizationLevel(),
+                            "organizationLevel for user " + each.userJson());
+                }
             }
         }
     }

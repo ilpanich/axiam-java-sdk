@@ -80,7 +80,24 @@ final class ManagementSupport {
         PageRequest request = page == null ? PageRequest.first() : page;
         query.put("offset", Integer.toString(request.offset()));
         query.put("limit", request.limit() == null ? null : Integer.toString(request.limit()));
+        query.put("search", normalizeSearch(request.search()));
         return query;
+    }
+
+    /**
+     * The trimmed term, or {@code null} when there is nothing to filter on.
+     *
+     * <p>Mirrors the server's own normalisation minus the length cap, which is
+     * the server's to apply. A {@code null} value here is dropped before the
+     * request is built, so an unfiltered read and a read whose search box was
+     * cleared are the same request on the wire (&sect;27.4 rule 4).
+     */
+    static @Nullable String normalizeSearch(@Nullable String term) {
+        if (term == null) {
+            return null;
+        }
+        String trimmed = term.strip();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /** Converts a response node into a model, or throws a {@link NetworkError}. */

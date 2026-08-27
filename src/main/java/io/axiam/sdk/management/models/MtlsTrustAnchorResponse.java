@@ -6,6 +6,7 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 import java.util.UUID;
 
@@ -15,8 +16,12 @@ import java.util.UUID;
  * @param caCertificateId The CA this is about.
  * @param message A sentence an operator can act on, rather than a bare boolean.
  * @param mtlsTrustAnchor The flag as now stored.
- * @param restartRequired Always {@code true}: rustls builds its client trust store once, when the
- *     listener is constructed, so this takes effect at the next start.
+ * @param restartRequired Whether the change still needs a restart to take effect. {@code false}
+ *     when the live listener accepted the new anchor set — the ordinary case on a TLS deployment.
+ *     {@code true} only when there was no listener to reload into (plaintext, or {@code client_auth =
+ *     off}), where the flag is stored and applies at the next start.
+ * @param trustedAnchors How many CAs the listener now trusts for client authentication, when it
+ *     was reloaded. {@code None} when nothing was reloaded.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -24,6 +29,7 @@ public record MtlsTrustAnchorResponse(
         @JsonProperty("ca_certificate_id") UUID caCertificateId,
         @JsonProperty("message") String message,
         @JsonProperty("mtls_trust_anchor") Boolean mtlsTrustAnchor,
-        @JsonProperty("restart_required") Boolean restartRequired
+        @JsonProperty("restart_required") Boolean restartRequired,
+        @JsonProperty("trusted_anchors") @Nullable Integer trustedAnchors
 ) {
 }

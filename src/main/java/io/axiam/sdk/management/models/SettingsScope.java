@@ -17,7 +17,23 @@ public enum SettingsScope {
     /** The server's 'Org' value. */
     ORG("Org"),
     /** The server's 'Tenant' value. */
-    TENANT("Tenant");
+    TENANT("Tenant"),
+    /**
+     * A value this SDK's copy of the spec does not list.
+     *
+     * <p>CONTRACT §27.11 rule 1: an unrecognised value MUST decode rather than failing the
+     * response it arrived in. A closed enum turns the next value the server adds into a parse
+     * error on the whole {@code list}, taking down every record on the page over one field of one
+     * of them -- including the records the caller was actually after.
+     *
+     * <p>A Java enum constant cannot carry the string it was decoded from, so this one does not
+     * pretend to. Its wire spelling is the empty string, which no server value is: fifteen of
+     * these enums appear in request bodies, and a read-modify-write that carried an unrecognised
+     * value back is refused by the server with a 400 rather than silently writing a spelling it
+     * never used. Do not send it deliberately -- read the field, and if it is {&#64;code UNKNOWN},
+     * leave it out of the update.
+     */
+    UNKNOWN("");
 
     /** The spelling this value has on the wire. */
     private final String wire;
@@ -29,7 +45,14 @@ public enum SettingsScope {
     /**
      * Returns the spelling this value has on the wire.
      *
-     * @return the server's own spelling of this value
+     * <p>{&#64;link #UNKNOWN} answers the empty string, which is not a value any server sends.
+     * That is deliberate: it is what makes carrying an unrecognised value back into an update a
+     * 400 from the server rather than a silent rewrite into a spelling it never used. This
+     * accessor cannot throw, because Jackson calls it on every constant while building its
+     * deserializer -- a throwing one would break decoding for the whole enum, which is the failure
+     * this type exists to avoid.
+     *
+     * @return the server's own spelling of this value, or the empty string for {@link #UNKNOWN}
      */
     @JsonValue
     public String wire() {
@@ -39,21 +62,21 @@ public enum SettingsScope {
     /**
      * Parses a wire value into a constant.
      *
-     * <p>An unrecognised value is a hard failure rather than a silent null: a newer server sending
-     * a value this SDK has never heard of is something a caller needs to know about, not something
-     * to swallow.
+     * <p>An unrecognised value yields {&#64;link #UNKNOWN} rather than throwing (CONTRACT §27.11
+     * rule 1). Failing here would fail the whole response, so one field of one record the caller
+     * did not ask about would take down the page. A caller that cares compares against {&#64;code
+     * UNKNOWN}; one that does not gets the rest of the record intact.
      *
      * @param value the server's spelling
-     * @return the matching SettingsScope
-     * @throws IllegalArgumentException if no constant carries that spelling
+     * @return the matching SettingsScope, or {@link #UNKNOWN}
      */
     @JsonCreator
     public static SettingsScope fromWire(String value) {
         for (SettingsScope candidate : values()) {
-            if (candidate.wire.equals(value)) {
+            if (candidate != UNKNOWN && candidate.wire.equals(value)) {
                 return candidate;
             }
         }
-        throw new IllegalArgumentException("unknown SettingsScope value: " + value);
+        return UNKNOWN;
     }
 }

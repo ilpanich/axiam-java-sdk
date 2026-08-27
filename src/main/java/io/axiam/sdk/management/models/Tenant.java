@@ -6,6 +6,7 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.OffsetDateTime;
@@ -20,6 +21,9 @@ import java.util.UUID;
  *
  * @param createdAt the server's created_at field
  * @param id the server's id field
+ * @param kind Whether this is an ordinary tenant or the organization's own scope. {@code
+ *     #[serde(default)]} so every row written before organization scope existed reads back as [{@code
+ *     TenantKind::Standard}], which is what it is.
  * @param metadata Arbitrary key-value metadata.
  * @param name Human-readable name.
  * @param organizationId The organization this tenant belongs to.
@@ -32,6 +36,7 @@ import java.util.UUID;
 public record Tenant(
         @JsonProperty("created_at") OffsetDateTime createdAt,
         @JsonProperty("id") UUID id,
+        @JsonProperty("kind") @Nullable TenantKind kind,
         @JsonProperty("metadata") JsonNode metadata,
         @JsonProperty("name") String name,
         @JsonProperty("organization_id") UUID organizationId,

@@ -448,6 +448,48 @@ def replacement_schemas() -> set[str]:
     return out
 
 
+def extra_query_params(op: dict[str, Any]) -> list[dict[str, Any]]:
+    """Query parameters that become method arguments, rather than ``PageRequest``.
+
+    ``offset`` and ``limit`` have always come from ``PageRequest``. ``search``
+    joins them on paginated operations (CONTRACT §27.4 rule 4): the term is part
+    of which page this is, and putting it on the page request rather than on each
+    of the twenty generated ``list`` methods is what makes ``collectPages`` carry
+    it across the whole walk instead of filtering only the first request.
+
+    The ``paginated`` guard matters. A *non*-paginated operation that grew a
+    ``search`` parameter would have no ``PageRequest`` to carry it, so it keeps
+    its own argument -- none exists in the registry today, and this is what keeps
+    that from silently dropping the parameter if one ever does.
+    """
+    owned = ("offset", "limit", "search") if op["paginated"] else ("offset", "limit")
+    return [q for q in op["query_params"] if q["name"] not in owned]
+
+
+def projection_map() -> dict[str, list[dict[str, Any]]]:
+    """Schema name -> the fields a list projection adds on top of it.
+
+    ``certificates.list`` answers ``Certificate`` plus ``bound_service_account_id``,
+    a graph edge the server resolves for the whole page in one query. CONTRACT
+    §27.11 rule 4 lets an SDK carry that as an optional component on the base
+    record, which is what this does: the field is ``null`` on ``get``, and the SDK
+    never synthesizes it there with a second request.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for nsdef in REGISTRY["namespaces"].values():
+        for op in nsdef["operations"].values():
+            adds = op["response"].get("projected_fields")
+            if not adds or not op["response"].get("schema"):
+                continue
+            base = op["response"]["schema"].removeprefix("[]")
+            out.setdefault(base, []).extend(adds)
+    return out
+
+
+PROJECTIONS: dict[str, list[dict[str, Any]]] = {}
+"""Filled in from :func:`projection_map` at start-up; see §27.11 rule 4."""
+
+
 def emit_enum(name: str, schema: Any) -> str:
     """A Java enum for a string-enum schema, with its wire spelling attached."""
     type_name = pascal(name)
@@ -462,10 +504,25 @@ def emit_enum(name: str, schema: Any) -> str:
           "first one that did not fit."))
     lines.append(f"public enum {type_name} {{")
     values = [v for v in schema["enum"] if isinstance(v, str)]
-    for i, value in enumerate(values):
-        tail = "," if i < len(values) - 1 else ";"
+    for value in values:
         lines.extend(inline_javadoc(f"The server's {value!r} value.", "    "))
-        lines.append(f'    {enum_constant(value)}("{value}"){tail}')
+        lines.append(f'    {enum_constant(value)}("{value}"),')
+    lines.extend(javadoc(
+        "A value this SDK's copy of the spec does not list.\n\n"
+        "CONTRACT §27.11 rule 1: an unrecognised value MUST decode rather than "
+        "failing the response it arrived in. A closed enum turns the next value "
+        "the server adds into a parse error on the whole `list`, taking down "
+        "every record on the page over one field of one of them -- including the "
+        "records the caller was actually after.\n\n"
+        "A Java enum constant cannot carry the string it was decoded from, so "
+        "this one does not pretend to. Its wire spelling is the empty string, "
+        "which no server value is: fifteen of these enums appear in request "
+        "bodies, and a read-modify-write that carried an unrecognised value back "
+        "is refused by the server with a 400 rather than silently writing a "
+        "spelling it never used. Do not send it deliberately -- read the field, "
+        "and if it is {@code UNKNOWN}, leave it out of the update.",
+        "    "))
+    lines.append('    UNKNOWN("");')
     lines.append("")
     lines.append("    /** The spelling this value has on the wire. */")
     lines.append("    private final String wire;")
@@ -475,30 +532,40 @@ def emit_enum(name: str, schema: Any) -> str:
     lines.append("    }")
     lines.append("")
     lines.extend(javadoc(
-        "Returns the spelling this value has on the wire.",
-        "    ", ["@return the server's own spelling of this value"]))
+        "Returns the spelling this value has on the wire.\n\n"
+        "{@link #UNKNOWN} answers the empty string, which is not a value any "
+        "server sends. That is deliberate: it is what makes carrying an "
+        "unrecognised value back into an update a 400 from the server rather "
+        "than a silent rewrite into a spelling it never used. This accessor "
+        "cannot throw, because Jackson calls it on every constant while building "
+        "its deserializer -- a throwing one would break decoding for the whole "
+        "enum, which is the failure this type exists to avoid.",
+        "    ",
+        ["@return the server's own spelling of this value, or the empty string "
+         "for {@link #UNKNOWN}"]))
     lines.append("    @JsonValue")
     lines.append("    public String wire() {")
     lines.append("        return wire;")
     lines.append("    }")
     lines.append("")
     lines.extend(javadoc(
-        "Parses a wire value into a constant.\n\nAn unrecognised value is a "
-        "hard failure rather than a silent null: a newer server sending a value "
-        "this SDK has never heard of is something a caller needs to know about, "
-        "not something to swallow.",
+        "Parses a wire value into a constant.\n\nAn unrecognised value yields "
+        "{@link #UNKNOWN} rather than throwing (CONTRACT §27.11 rule 1). Failing "
+        "here would fail the whole response, so one field of one record the "
+        "caller did not ask about would take down the page. A caller that cares "
+        "compares against {@code UNKNOWN}; one that does not gets the rest of "
+        "the record intact.",
         "    ",
         ["@param value the server's spelling",
-         f"@return the matching {type_name}",
-         "@throws IllegalArgumentException if no constant carries that spelling"]))
+         f"@return the matching {type_name}, or {{@link #UNKNOWN}}"]))
     lines.append("    @JsonCreator")
     lines.append(f"    public static {type_name} fromWire(String value) {{")
     lines.append(f"        for ({type_name} candidate : values()) {{")
-    lines.append("            if (candidate.wire.equals(value)) {")
+    lines.append("            if (candidate != UNKNOWN && candidate.wire.equals(value)) {")
     lines.append("                return candidate;")
     lines.append("            }")
     lines.append("        }")
-    lines.append(f'        throw new IllegalArgumentException("unknown {type_name} value: " + value);')
+    lines.append("        return UNKNOWN;")
     lines.append("    }")
     lines.append("}")
     return "\n".join(lines) + "\n"
@@ -516,6 +583,22 @@ def component_lines(fields: list[dict[str, Any]]) -> list[str]:
 def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]], set[str], str | None]:
     """The fields of a schema, in a stable order, with Java names and types."""
     props, required, description = flatten(schema_name)
+    props = dict(props)
+    for add in PROJECTIONS.get(schema_name, []):
+        if add["name"] in props:
+            continue
+        required.discard(add["name"])
+        props[add["name"]] = {
+            "type": add.get("type"),
+            "format": add.get("format"),
+            "description": (
+                "resolved by the list projection only. The server resolves this for a "
+                "whole page in one query, so it is populated by the list operation and "
+                "is null on get (CONTRACT §27.11 rule 4). Null there means \"this read "
+                "does not carry it\", not \"there is nothing bound\" — the SDK does not "
+                "issue a second request to fill it in"
+            ),
+        }
     fields = []
     for wire in sorted(props):
         fields.append({
@@ -751,7 +834,7 @@ def implicit_params(namespace: str, op: dict[str, Any]) -> set[str]:
 
 def split_query(op: dict[str, Any]) -> tuple[list[Any], list[Any]]:
     """This operation's non-paging query params, split required / optional."""
-    extra = [q for q in op["query_params"] if q["name"] not in ("offset", "limit")]
+    extra = extra_query_params(op)
     return [q for q in extra if q["required"]], [q for q in extra if not q["required"]]
 
 
@@ -1441,6 +1524,7 @@ def prune(files: dict[Path, str]) -> list[Path]:
 
 def main() -> int:
     """Write the generated surface, or verify it is current under ``--check``."""
+    PROJECTIONS.update(projection_map())
     files = build()
     stale_extra = prune(files)
 
