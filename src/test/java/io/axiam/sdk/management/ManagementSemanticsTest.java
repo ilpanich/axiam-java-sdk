@@ -21,6 +21,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -135,6 +136,9 @@ class ManagementSemanticsTest extends ManagementTestBase {
     /** The offsets the paged fixture saw, in order. */
     private final List<String> pagedOffsets = new java.util.ArrayList<>();
 
+    /** The search terms the paged fixture saw, in order — one per request. */
+    private final List<String> pagedSearchTerms = new java.util.ArrayList<>();
+
     private void mountPaged() {
         // MockWebServer's dispatcher is shared, so a varying reply is expressed
         // by mounting once and re-mounting from inside the assertion loop.
@@ -155,6 +159,13 @@ class ManagementSemanticsTest extends ManagementTestBase {
                     }
                 }
                 pagedOffsets.add(offset);
+                if (path.contains("search=")) {
+                    String term = path.substring(path.indexOf("search=") + 7);
+                    if (term.contains("&")) {
+                        term = term.substring(0, term.indexOf('&'));
+                    }
+                    pagedSearchTerms.add(term);
+                }
                 int start = Integer.parseInt(offset);
                 StringBuilder items = new StringBuilder();
                 for (int i = start; i < Math.min(start + 2, 5); i++) {
@@ -169,6 +180,192 @@ class ManagementSemanticsTest extends ManagementTestBase {
                                 + ",\"limit\":2}");
             }
         });
+    }
+
+    // ---------------------------------------------------------------------
+    // §27.4 rule 4 — search
+    // ---------------------------------------------------------------------
+
+    /**
+     * §27.4 rule 4: a term on the page request reaches the query string.
+     *
+     * <p>Asserted on the recorded query rather than on the arguments: a term the
+     * SDK accepts, stores and never sends is invisible from the call site, and
+     * it is the failure this test exists for.
+     */
+    @Test
+    void aSearchTermReachesTheQueryString() throws Exception {
+        Route route = mount("GET", "/api/v1/users", 200, pageOf(null));
+        client.management().users().list(PageRequest.matching(50, "ada"));
+        assertEquals("ada", route.last().query().get("search"));
+    }
+
+    /**
+     * §27.4 rule 4: no term, and a blank one, send no {@code search} key.
+     *
+     * <p>Asserted on the query key set. A UI that fires on every keystroke sends
+     * {@code ?search=} the moment the box is cleared, and "rows containing the
+     * empty string" is a different question — different enough that the server
+     * normalizes it away too.
+     */
+    @Test
+    void anAbsentOrBlankTermSendsNoSearchKey() throws Exception {
+        for (String term : new String[] {null, "", "   "}) {
+            Route route = mount("GET", "/api/v1/users", 200, pageOf(null));
+            client.management().users().list(PageRequest.matching(50, term));
+            assertFalse(route.last().query().containsKey("search"),
+                    "term " + (term == null ? "null" : "\"" + term + "\"") + " sent a search key");
+        }
+    }
+
+    /**
+     * §27.4 rule 4: the walk carries the term on every request, not only the first.
+     *
+     * <p>A listAll that filtered page one and not page two would concatenate the
+     * matches with the unfiltered remainder — which reads as a server bug from
+     * the caller's side, and which a test counting requests rather than
+     * inspecting them would pass.
+     */
+    @Test
+    void listAllCarriesTheSearchTermAcrossTheWholeWalk() throws Exception {
+        mountPaged();
+        client.management().users().listAll(PageRequest.matching(2, "ad"));
+        assertEquals(List.of("ad", "ad", "ad"), pagedSearchTerms,
+                "the tail of the walk went out unfiltered");
+    }
+
+    /**
+     * §27.4 rule 4: the term is trimmed, and a long one is not truncated.
+     *
+     * <p>The server's length cap is the server's. A client-side truncation the
+     * server would not have made is a silently different query — the caller
+     * asked one question and the wire carried another, with nothing to say so.
+     */
+    @Test
+    void aSearchTermIsTrimmedButNeverTruncated() throws Exception {
+        Route trimmed = mount("GET", "/api/v1/users", 200, pageOf(null));
+        client.management().users().list(PageRequest.matching(50, "  ada  "));
+        assertEquals("ada", trimmed.last().query().get("search"));
+
+        String long400 = "x".repeat(400);
+        Route whole = mount("GET", "/api/v1/users", 200, pageOf(null));
+        client.management().users().list(PageRequest.matching(50, long400));
+        assertEquals(long400, whole.last().query().get("search"));
+    }
+
+    // ---------------------------------------------------------------------
+    // §27.11 — model additions
+    // ---------------------------------------------------------------------
+
+    private String tenantBody(String slug, String kind) {
+        String kindField = kind == null ? "" : "\"kind\":\"" + kind + "\",";
+        return "{\"id\":\"" + EXAMPLE_ID + "\",\"organization_id\":\"" + ORG_ID
+                + "\",\"name\":\"" + slug + "\",\"slug\":\"" + slug + "\"," + kindField
+                + "\"status\":\"Active\",\"metadata\":{},"
+                + "\"created_at\":\"2026-08-27T00:00:00Z\","
+                + "\"updated_at\":\"2026-08-27T00:00:00Z\"}";
+    }
+
+    /**
+     * §27.11 rule 1: an unrecognised enum value decodes, rather than failing the page.
+     *
+     * <p>A closed enum turns the next {@code kind} the server adds into a parse
+     * error on the whole {@code list}, taking down every tenant on the page over
+     * one field of one of them — including the ones the caller was after. Java's
+     * rendering is an {@code UNKNOWN} constant, because an enum constant cannot
+     * carry the string it was decoded from.
+     */
+    @Test
+    void anUnknownTenantKindDecodesInsteadOfFailingThePage() throws Exception {
+        mount("GET", "/api/v1/organizations/" + ORG_ID + "/tenants", 200,
+                "{\"items\":[" + tenantBody("prod", "standard") + ","
+                        + tenantBody("future", "some-kind-from-a-newer-server")
+                        + "],\"total\":2,\"offset\":0,\"limit\":50}");
+
+        Page<io.axiam.sdk.management.models.Tenant> page =
+                client.management().tenants().list(PageRequest.of(50));
+
+        assertEquals(io.axiam.sdk.management.models.TenantKind.STANDARD, page.items().get(0).kind());
+        assertEquals(io.axiam.sdk.management.models.TenantKind.UNKNOWN, page.items().get(1).kind());
+    }
+
+    /**
+     * §27.11 rule 1: {@code UNKNOWN} does not round-trip as a real value.
+     *
+     * <p>Fifteen of these enums appear in request bodies, so what happens when
+     * an unrecognised value is carried back into an update matters. Its wire
+     * spelling is the empty string, which no server value is — so the server
+     * refuses it with a 400 instead of accepting a spelling it never used. The
+     * accessor deliberately does not throw: Jackson calls it on every constant
+     * while building the deserializer, and a throwing one would break decoding
+     * for the whole enum, which is the failure this type exists to avoid.
+     */
+    @Test
+    void anUnknownEnumValueHasNoRealWireSpelling() {
+        assertEquals("", io.axiam.sdk.management.models.TenantKind.UNKNOWN.wire());
+        for (var known : io.axiam.sdk.management.models.TenantKind.values()) {
+            if (known != io.axiam.sdk.management.models.TenantKind.UNKNOWN) {
+                assertFalse(known.wire().isEmpty(),
+                        known + " must have a spelling the server actually sends");
+            }
+        }
+    }
+
+    /** §27.11: a tenant written before organization scope existed has no kind. */
+    @Test
+    void aTenantWithoutAKindDecodesAsAbsent() throws Exception {
+        mount("GET", "/api/v1/organizations/" + ORG_ID + "/tenants/" + EXAMPLE_ID, 200,
+                tenantBody("prod", null));
+        assertNull(client.management().tenants().get(EXAMPLE_ID).kind());
+    }
+
+    /**
+     * §27.11 rule 3: {@code trustedAnchors} is null, and null is not zero.
+     *
+     * <p>"The listener trusts no CAs" and "there was no listener to ask" are
+     * different operational states, and only one of them is a problem.
+     */
+    @Test
+    void trustedAnchorsIsAbsentRatherThanZeroWhenNothingReloaded() throws Exception {
+        mount("PUT", "/api/v1/organizations/" + ORG_ID + "/ca-certificates/" + EXAMPLE_ID
+                        + "/mtls-trust-anchor", 200,
+                "{\"ca_certificate_id\":\"" + EXAMPLE_ID + "\",\"mtls_trust_anchor\":true,"
+                        + "\"restart_required\":true,\"message\":\"stored; applies at next start\"}");
+
+        var out = client.management().caCertificates()
+                .setMtlsTrustAnchor(EXAMPLE_ID, new SetMtlsTrustAnchor(true));
+
+        assertTrue(out.restartRequired());
+        assertNull(out.trustedAnchors(),
+                "null means no listener to ask, not that it trusts zero CAs");
+    }
+
+    /**
+     * §27.11 rule 4: the projection is on the list and absent from the get.
+     *
+     * <p>The get assertion is the load-bearing one: an SDK that filled the field
+     * in there would be issuing a second request nobody asked for.
+     */
+    @Test
+    void boundServiceAccountIdIsOnTheListProjectionOnly() throws Exception {
+        String base = "\"id\":\"" + EXAMPLE_ID + "\",\"tenant_id\":\"" + TENANT_ID
+                + "\",\"issuer_ca_id\":\"" + ORG_ID + "\",\"subject\":\"CN=device-1\","
+                + "\"public_cert_pem\":\"-----BEGIN CERTIFICATE-----\",\"fingerprint\":\"ab:cd\","
+                + "\"cert_type\":\"Device\",\"key_algorithm\":\"Ed25519\","
+                + "\"not_before\":\"2026-08-27T00:00:00Z\",\"not_after\":\"2027-08-27T00:00:00Z\","
+                + "\"status\":\"Active\",\"metadata\":{},\"created_at\":\"2026-08-27T00:00:00Z\"";
+
+        mount("GET", "/api/v1/certificates", 200,
+                "{\"items\":[{" + base + ",\"bound_service_account_id\":\"" + TENANT_ID
+                        + "\"}],\"total\":1,\"offset\":0,\"limit\":50}");
+        mount("GET", "/api/v1/certificates/" + EXAMPLE_ID, 200, "{" + base + "}");
+
+        var page = client.management().certificates().list(PageRequest.of(50));
+        assertEquals(TENANT_ID, page.items().get(0).boundServiceAccountId());
+
+        var one = client.management().certificates().get(EXAMPLE_ID);
+        assertNull(one.boundServiceAccountId(),
+                "get must not synthesize the projection with a second request");
     }
 
     /** §27.4 rule 4: a bare-array read is a list, not a page. */

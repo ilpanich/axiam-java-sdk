@@ -150,6 +150,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private static final String MFA_SETUP_CONFIRM_PATH = "/api/v1/auth/mfa/setup/confirm";
     private static final String VERIFY_EMAIL_PATH = "/api/v1/auth/verify-email";
     private static final String RESEND_VERIFICATION_PATH = "/api/v1/auth/resend-verification";
+    private static final String RESEND_OWN_VERIFICATION_PATH =
+            "/api/v1/users/me/resend-verification";
     private static final String RESET_PATH = "/api/v1/auth/reset";
     private static final String RESET_CONFIRM_PATH = "/api/v1/auth/reset/confirm";
     private static final String RESET_CONTEXT_PATH = "/api/v1/auth/reset/context";
@@ -1141,8 +1143,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         try (Response response = executeJsonPost(LOGIN_PATH, body)) {
             if (response.code() == 200) {
-                consumeBody(response);
-                return new LoginResult(false, null, buildUser());
+                return LoginResult.authenticated(buildUser(), organizationLevelOf(response));
             }
             if (response.code() == 202) {
                 JsonNode wire = readJson(response);
@@ -1229,8 +1230,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             if (response.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(response.code(), "MFA verification failed", response);
             }
-            consumeBody(response);
-            return new LoginResult(false, null, buildUser());
+            return LoginResult.authenticated(buildUser(), organizationLevelOf(response));
         }
     }
 
@@ -1464,7 +1464,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 return new LoginResult(true,
                         Sensitive.of(wire.path("challenge_token").asText()), null);
             }
-            return new LoginResult(false, null, buildUser());
+            return LoginResult.authenticated(buildUser(), organizationLevelOf(response));
         }
     }
 
@@ -3079,6 +3079,19 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
     }
 
+    /**
+     * Reads the &sect;5.2 {@code user.organization_level} flag off a completed
+     * login response, consuming the body.
+     *
+     * <p>Absent means {@code false}, which is what a server older than contract
+     * 1.31 answers and the safe direction in both cases: the client then offers
+     * no cross-tenant action rather than one that would {@code 403}. Derived
+     * server-side and response-only — this SDK never sends it.
+     */
+    private static boolean organizationLevelOf(Response response) {
+        return readJson(response).path("user").path("organization_level").asBoolean(false);
+    }
+
     private static void consumeBody(Response response) {
         ResponseBody body = response.body();
         if (body != null) {
@@ -3678,8 +3691,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             if (http.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(http.code(), "mfaSetupConfirm failed", http);
             }
-            consumeBody(http);
-            return new LoginResult(false, null, buildUser());
+            return LoginResult.authenticated(buildUser(), organizationLevelOf(http));
         }
     }
 
@@ -3723,7 +3735,18 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     /**
-     * {@code POST /api/v1/auth/resend-verification} (CONTRACT.md &sect;25.1).
+     * {@code POST /api/v1/auth/resend-verification} (CONTRACT.md &sect;25.1) —
+     * the <strong>unauthenticated</strong> resend, for a caller with no session.
+     *
+     * <p><strong>Returns normally whatever the outcome.</strong> The address may
+     * not exist, may already be verified, or may be over the daily limit, and
+     * this answers identically in all of them, because it takes an address from
+     * an anonymous caller and anything else is an oracle for which addresses
+     * have accounts (&sect;25.7).
+     *
+     * <p>A caller that <em>is</em> signed in wants
+     * {@link #resendOwnVerification()}, which says which of those happened. Do
+     * not reach for this one because it is the name you already knew.
      *
      * @param email    the address to resend to
      * @param tenantId the tenant the account belongs to
@@ -3744,6 +3767,50 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public CompletableFuture<Void> resendVerificationAsync(String email, UUID tenantId) {
         return CompletableFuture.runAsync(() -> resendVerification(email, tenantId));
+    }
+
+    /**
+     * {@code POST /api/v1/users/me/resend-verification} (CONTRACT.md
+     * &sect;25.1, &sect;25.7) — resends the <strong>signed-in caller's own</strong>
+     * verification mail, and says what happened.
+     *
+     * <p>Takes no address. The server reads it off the caller's own record, and
+     * this signature deliberately offers no way to name a different one: a
+     * parameter here would let an authenticated session mail an arbitrary
+     * address.
+     *
+     * <p>Unlike {@link #resendVerification} this reports the outcome, because
+     * the caller is signed in to the account it is asking about and none of the
+     * outcomes tells it anything it did not already know:
+     *
+     * <ul>
+     *   <li>returns — a token was minted and the mail <strong>enqueued</strong>.
+     *       Delivery is asynchronous and can still fail at the provider; a queue
+     *       that accepts everything in front of one that rejects it looks
+     *       exactly like this succeeding.</li>
+     *   <li>{@link io.axiam.sdk.errors.AuthzError} (from {@code 409}) — already
+     *       verified, or the account is in a state that must not be sent a live
+     *       token.</li>
+     *   <li>{@link NetworkError} (from {@code 429}) — the daily resend limit.</li>
+     * </ul>
+     *
+     * <p>&sect;25.7 rule 2 forbids falling back to the unauthenticated endpoint
+     * on either of those, and this SDK does not: the fallback would turn both
+     * failures back into a normal return and restore the bug this operation
+     * exists to fix, with an extra round-trip.
+     */
+    public void resendOwnVerification() {
+        ensureOpen();
+        postExpectingNoContent(
+                RESEND_OWN_VERIFICATION_PATH, MAPPER.createObjectNode(), "resendOwnVerification");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #resendOwnVerification}.
+     *
+     * @return a future that completes once the mail is enqueued
+     */
+    public CompletableFuture<Void> resendOwnVerificationAsync() {
+        return CompletableFuture.runAsync(this::resendOwnVerification);
     }
 
     /**

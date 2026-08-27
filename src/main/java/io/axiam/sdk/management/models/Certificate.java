@@ -6,6 +6,7 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.OffsetDateTime;
@@ -17,6 +18,10 @@ import java.util.UUID;
  * <p>Certificates are signed by the organization's CA. The private key is returned once on
  * generation and never stored by AXIAM.
  *
+ * @param boundServiceAccountId resolved by the list projection only. The server resolves this for
+ *     a whole page in one query, so it is populated by the list operation and is null on get (CONTRACT
+ *     §27.11 rule 4). Null there means "this read does not carry it", not "there is nothing bound" —
+ *     the SDK does not issue a second request to fill it in
  * @param certType the server's cert_type field
  * @param createdAt the server's created_at field
  * @param fingerprint SHA-256 fingerprint of the certificate.
@@ -34,6 +39,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record Certificate(
+        @JsonProperty("bound_service_account_id") @Nullable UUID boundServiceAccountId,
         @JsonProperty("cert_type") CertificateType certType,
         @JsonProperty("created_at") OffsetDateTime createdAt,
         @JsonProperty("fingerprint") String fingerprint,

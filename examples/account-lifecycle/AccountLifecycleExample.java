@@ -7,6 +7,8 @@ import io.axiam.sdk.account.MfaEnrollment;
 import io.axiam.sdk.account.PasswordResetConfirmation;
 import io.axiam.sdk.account.PasswordResetContext;
 import io.axiam.sdk.account.PasswordResetRequest;
+import io.axiam.sdk.errors.ConflictError;
+import io.axiam.sdk.errors.NetworkError;
 
 import java.util.UUID;
 
@@ -79,6 +81,14 @@ public final class AccountLifecycleExample {
         } else {
             System.out.println("  signed in as " + result.user());
         }
+
+        // §5.2: whether this principal lives in the organization's reserved
+        // tenant. Check it BEFORE offering a tenant switch — an ordinary tenant
+        // principal is a principal of exactly one tenant, and changing
+        // X-Tenant-ID for one of those is a 403 the user discovers.
+        if (result.organizationLevel()) {
+            System.out.println("  organization-level: can act on any tenant of its organization");
+        }
     }
 
     // ------------------------------------------------------------------
@@ -117,9 +127,45 @@ public final class AccountLifecycleExample {
             client.verifyEmail(Sensitive.of(tokenFromTheVerificationMail()), tenantId);
             System.out.println("  verified");
         } catch (RuntimeException e) {
+            // The UNAUTHENTICATED resend: this caller followed a link and has
+            // no session. It returns normally whatever happens — unknown
+            // address, already verified, over the daily limit — because it
+            // takes an address from an anonymous caller and a truthful answer
+            // there is an oracle for which addresses have accounts (§25.7).
             System.out.println("  that link has expired — sending another");
             client.resendVerification("alice@example.com", tenantId);
         }
+    }
+
+    /**
+     * The AUTHENTICATED resend — and the one a profile page wants (§25.7).
+     *
+     * <p>Wiring that button to {@code resendVerification} above is the defect
+     * §25.7 exists to separate: it reports success while doing nothing, because
+     * the address was already verified, or the account was locked, or the daily
+     * limit was reached, and the response looks identical in every case.
+     *
+     * <p>Here the caller is signed in to the account it is asking about, so this
+     * one is both available and truthful. It takes no address: the server reads
+     * it off the caller's own record, and a parameter would let a session mail
+     * an arbitrary one.
+     */
+    private static void resendMyVerificationMail(AxiamClient client) {
+        System.out.println("== resending my own verification mail ==");
+        try {
+            client.resendOwnVerification();
+            // "Sent" means ENQUEUED. Delivery is asynchronous and can still
+            // fail at the provider — a queue that accepts everything in front
+            // of one that rejects it looks exactly like this succeeding.
+            System.out.println("  verification mail enqueued");
+        } catch (ConflictError e) {
+            System.out.println("  already verified, or this account may not be sent one");
+        } catch (NetworkError e) {
+            System.out.println("  daily resend limit reached — try again tomorrow");
+        }
+        // Note what is NOT here: a fallback to resendVerification on either of
+        // those. It would turn both back into a normal return and rebuild the
+        // bug, with an extra round-trip (§25.7 rule 2).
     }
 
     // ------------------------------------------------------------------

@@ -9,6 +9,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CONTRACT 1.31 — the AXIAM server PR #383 surface.** `CONTRACT.md`,
+  `openapi.json` and `management-registry.json` re-vendored, and the six things
+  they describe implemented.
+
+  - **`search` on all twenty paginated management operations** (§27.4 rule 4).
+    A third component on `PageRequest`, not a third argument on twenty generated
+    `list` methods, reached through a new `PageRequest.matching(limit, term)`
+    factory beside `of(limit)`:
+
+    ```java
+    Page<UserResponse> page = client.users().list(PageRequest.matching(50, "ada"));
+    List<UserResponse> all  = client.users().listAll(PageRequest.matching(200, "ada"));
+    ```
+
+    Putting it on the page request is what makes `atOffset` — and so `listAll` —
+    carry the term across the whole walk. A walk that filtered its first request
+    and not the rest returns the matches followed by the unfiltered tail, which
+    from the caller's side looks like a server bug.
+
+    The server applies it **before** `offset`/`limit`, so `Page.total()` counts
+    matches rather than rows. A blank or whitespace-only term is treated as
+    unset and sends no `search` parameter, so a box that fires on every
+    keystroke does not ask a different question once it is cleared. The server's
+    length cap is deliberately **not** copied here: a client-side truncation the
+    server would not have made is a silently different query.
+
+    A two-component `PageRequest(offset, limit)` constructor is kept, so a call
+    site written against contract 1.30 still compiles.
+
+  - **`AxiamClient.resendOwnVerification()`** and its `…Async` twin (§25.1,
+    §25.7) — `POST /api/v1/users/me/resend-verification`, for a caller signed in
+    to the account it is asking about. It takes no address, and reports what
+    happened: returns for enqueued, `AuthzError` for
+    already-verified-or-ineligible, `NetworkError` for the daily limit.
+
+    `resendVerification` still exists and still returns normally whatever
+    happens, because it takes an address from an anonymous caller and a truthful
+    answer there is an enumeration oracle. Use the new one whenever there is a
+    session — a profile page wired to the old one reports success while doing
+    nothing, which is the defect the pair exists to separate. This SDK does not
+    fall back from one to the other in either direction (§25.7 rule 2).
+
+  - **`LoginResult.organizationLevel()`** (§5.2) — whether the account holds
+    grants that apply in every tenant of its organization. Check it before
+    offering a tenant switch: an ordinary tenant principal changing
+    `X-Tenant-ID` gets a `403`. `false` against a server older than contract
+    1.31, which is the safe reading of absent. A five-component `LoginResult`
+    constructor is kept alongside the six-component one, so a call site written
+    against contract 1.28 still compiles.
+
+  - **`Tenant.kind()` and `TenantKind`** (§27.11) — ordinary tenant or the
+    organization's own scope. `null` on a row written before that scope existed.
+    Read-only: it is not on `CreateTenantRequest` or `UpdateTenantRequest`.
+
+  - **`MtlsTrustAnchorResponse.trustedAnchors()`** (§27.11) — how many CAs the
+    live listener now trusts, when it was reloaded. `null` is **not** zero: it
+    means there was no listener to ask, which is the case
+    `restartRequired() == true` already reports.
+
+  - **`Certificate.boundServiceAccountId()`** (§27.11) — the service account a
+    certificate authenticates, resolved for a whole page in one query by
+    `certificates().list()` and `null` on `certificates().get()`. The SDK does
+    not issue a second request to fill it in there.
+
+### Changed
+
+- **Generated management enums gained an `UNKNOWN` constant, and no longer throw
+  on an unrecognised value** (§27.11 rule 1). A closed enum turns the next
+  `kind` or `status` the server adds into a parse error on the *whole* response,
+  taking down every record on the page over one field of one of them — including
+  the records the caller was after.
+
+  A Java enum constant cannot carry the string it was decoded from, so this one
+  does not pretend to: `UNKNOWN.wire()` is the empty string, which no server
+  value is. Fifteen of these enums appear in request bodies, and that is what
+  makes carrying an unrecognised value back into an update a `400` from the
+  server rather than a silent rewrite into a spelling it never used. The
+  accessor deliberately does not throw — Jackson calls it on every constant
+  while building the deserializer, and a throwing one would break decoding for
+  the whole enum, which is the failure this change exists to avoid.
+
+### Fixed
+
+- **`scripts/gen_management.py` no longer drops a projected list element.** The
+  server answers `GET /api/v1/certificates` with `Certificate` plus one resolved
+  graph edge, expressed as an `allOf` of the `$ref` and an anonymous object.
+  Read as a whole, that composition has no name, so the registry carried a page
+  with no element type and the added field reached no record. The generator now
+  takes the base name through the `allOf` and folds the projection's added
+  fields onto the base record as optional components. (The registry-side half of
+  this is AXIAM PR #386.)
+
+### Added
+
 - **The §27 namespace handles now sit directly on the client** — `client.roles()`,
   `client.serviceAccounts().rotateSecret(id)` — which is the form §27.3's Java row
   specifies. `client.management()` still reaches the same 24 handles behind one accessor;
