@@ -268,6 +268,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
          * @return this builder, for chaining
          */
         public Builder orgSlug(String slug) {
+            // §5.2.1 rule 2: an SDK MUST NOT send an empty-string slug. Nothing
+            // can carry one, so it resolves nothing and the server answers a
+            // generic refusal that says nothing about which half was wrong.
+            // Rejected here rather than at build() because this setter can
+            // throw, and the sooner the caller sees it the less it looks like a
+            // credential problem. `tenantId` gets the same treatment in
+            // builder(String, String).
+            if (slug != null && slug.isBlank()) {
+                throw new AuthError("orgSlug must not be blank — omit it entirely, "
+                        + "or name the organization (CONTRACT.md §5.1, §5.2.1)");
+            }
             this.orgSlug = slug;
             this.orgId = null;
             return this;
