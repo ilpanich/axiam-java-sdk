@@ -36,6 +36,32 @@ class AxiamClientBuilderTest {
         assertThrows(AuthError.class, () -> AxiamClient.builder("https://api.axiam.test", null));
     }
 
+    // CONTRACT.md §5.2.1 rule 2: an SDK MUST NOT send an empty-string slug.
+    //
+    // Nothing can carry a blank slug, so the server resolves nothing — and on
+    // /auth/opaque/login/start it fails on the workspace *before* the tenant's
+    // OPAQUE mode is read, so the 404 that means "OPAQUE is not offered here"
+    // never arrives, this SDK has no fallback to take, and sign-in fails even
+    // against a tenant with OPAQUE disabled. `tenantId` was already covered
+    // above; `orgSlug` was not.
+    @Test
+    void blankOrgSlugThrowsAuthError() {
+        assertThrows(AuthError.class,
+                () -> AxiamClient.builder("https://api.axiam.test", "acme").orgSlug(""));
+        assertThrows(AuthError.class,
+                () -> AxiamClient.builder("https://api.axiam.test", "acme").orgSlug("   "));
+    }
+
+    // §5.2.1: an organization-level principal signs in by naming the
+    // organization's reserved tenant, whose slug is fixed in every deployment.
+    // No new surface — the ordinary factory reaches it like any other tenant.
+    @Test
+    void theReservedOrganizationTenantIsNamedLikeAnyOther() {
+        assertNotNull(AxiamClient.builder("https://api.axiam.test", "organization")
+                .orgSlug("globex")
+                .build());
+    }
+
     @Test
     void noNoArgBuilderFactoryExists() {
         boolean hasNoArgBuilder = Arrays.stream(AxiamClient.class.getDeclaredMethods())
