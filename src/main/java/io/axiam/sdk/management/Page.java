@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * One page of a paginated management read (CONTRACT.md &sect;27.4 rule 4).
  *
- * <p>Twenty of the 146 operations take {@code offset}/{@code limit} and answer
+ * <p>Twenty of the 147 operations take {@code offset}/{@code limit} and answer
  * with the envelope {@code {items, total, offset, limit}}. The other thirteen
  * collection reads answer with a bare array and are <em>not</em> paginated —
  * &sect;27.4 rule 4 forbids modelling those as a page, because a {@code Page}

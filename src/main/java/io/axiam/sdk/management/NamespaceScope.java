@@ -8,7 +8,7 @@ import java.util.UUID;
  * Per-handle overrides for the two implicit path parameters
  * (CONTRACT.md &sect;27.4 rule 3).
  *
- * <p>Thirty of the 146 routes carry {@code {org_id}}, {@code {tenant_id}} or
+ * <p>Thirty-one of the 147 routes carry {@code {org_id}}, {@code {tenant_id}} or
  * both, and in almost every call they are the client's own. Making the caller
  * restate them every time is ceremony that gets wrapped in a helper anyway;
  * making them impossible to override is worse, because a platform-admin token

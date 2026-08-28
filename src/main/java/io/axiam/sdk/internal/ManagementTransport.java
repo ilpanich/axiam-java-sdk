@@ -35,10 +35,10 @@ import java.util.TreeMap;
  *
  * <p>&sect;27.8 is explicit that the generated layer MUST sit on the SDK's
  * existing request path and MUST NOT build its own. That is what this class is:
- * 146 generated operations all funnel into {@link #send}, so they inherit
+ * 147 generated operations all funnel into {@link #send}, so they inherit
  * &sect;3 (CSRF), &sect;4 (the cookie jar), &sect;5 ({@code X-Tenant-ID}),
  * &sect;6 (TLS), &sect;16 (retry) and &sect;19 (telemetry) by construction
- * rather than by 146 opportunities to forget one — the first four because every
+ * rather than by 147 opportunities to forget one — the first four because every
  * request goes through the same decorated {@link OkHttpClient}.
  *
  * <p>Internal plumbing. It is public only because the generated

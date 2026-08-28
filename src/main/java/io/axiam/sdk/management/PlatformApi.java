@@ -22,7 +22,7 @@ import java.util.UUID;
  *
  * <p>Every operation here is synchronous. The SDK's CompletableFuture twins exist only on the §1
  * core operations, so the async form of a management call is CompletableFuture.supplyAsync(()
- * -&gt; client.management().platform()...) — one line, rather than 146 more methods to keep in
+ * -&gt; client.management().platform()...) — one line, rather than 147 more methods to keep in
  * step.
  */
 public final class PlatformApi {

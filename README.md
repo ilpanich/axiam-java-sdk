@@ -31,7 +31,7 @@ set, the §12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifie
 the §20 UMA 2.0 Protection API and ticket grant, the §22 reactor runtime, the §23
 OPAQUE (RFC 9807) login path, the §24 WebAuthn relying-party layer with its
 §24.6a JSON bridge, the §25 account-lifecycle and MFA-enrolment operations, §26
-Pushed Authorization Requests (RFC 9126), and the §27 Management API — all 146
+Pushed Authorization Requests (RFC 9126), and the §27 Management API — all 147
 operations across 24 namespaces, with the §27.6 declarative layer.
 
 §12.7, §14, §15, §20, §22, §23, §24, §25, §26 and §27 are named rather than folded
@@ -1366,7 +1366,7 @@ Worked end to end in [`examples/par-login`](examples/par-login).
 
 ## Management API (§27)
 
-The administrative surface: 146 operations across 24 namespaces — users, groups,
+The administrative surface: 147 operations across 24 namespaces — users, groups,
 roles, permissions, resources, scopes, service accounts, certificates, CA
 certificates, PGP keys, webhooks, OAuth2 clients, federation, notification rules,
 e-mail config, settings, SCIM tokens, reactors, WebAuthn policy, audit, privacy,

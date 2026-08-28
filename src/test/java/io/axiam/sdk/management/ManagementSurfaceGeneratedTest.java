@@ -75,6 +75,13 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().tenants().delete(EXAMPLE_ID);
     }
 
+    /** Exercises tenants.export_audit. */
+    @Test
+    void tenantsExportAudit() throws Exception {
+        mount("POST", "/api/v1/organizations/" + ORG_ID + "/tenants/" + EXAMPLE_ID + "/audit-export", 200, "");
+        client.management().tenants().exportAudit(EXAMPLE_ID);
+    }
+
     /** Exercises users.list. */
     @Test
     void usersList() throws Exception {
@@ -1060,7 +1067,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     }
 
     /**
-     * §27.9: a partial regeneration must fail here, not ship 140 of 146.
+     * §27.9: a partial regeneration must fail here, not ship 140 of 147.
      *
      * <p>Asserting the whole set rather than the count catches a regeneration that dropped one
      * operation and gained another.
@@ -1195,6 +1202,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "settings.set_tenant_override",
                 "tenants.create",
                 "tenants.delete",
+                "tenants.export_audit",
                 "tenants.get",
                 "tenants.list",
                 "tenants.update",
@@ -1216,7 +1224,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(146, exercised.size(),
+        assertEquals(147, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

@@ -766,7 +766,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     // ------------------------------------------------------------------
 
     /**
-     * The CONTRACT.md &sect;27 management surface: 146 administrative operations
+     * The CONTRACT.md &sect;27 management surface: 147 administrative operations
      * across 24 namespaces, reached as
      * {@code client.management().users().list(...)}.
      *
@@ -776,7 +776,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * the same handle. It exists for callers who prefer the management surface
      * not to be mixed in with &sect;1's methods when reading a call site.
      *
-     * <p>What &sect;27.2 actually argues against is spreading the 146
+     * <p>What &sect;27.2 actually argues against is spreading the 147
      * <em>operations</em> across this class — twenty namespaces have a
      * {@code list} and fourteen a {@code get}, so flattened they would need a
      * disambiguating prefix each. Twenty-four namespace accessors are not that,
