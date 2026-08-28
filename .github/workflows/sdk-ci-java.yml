@@ -263,6 +263,19 @@ jobs:
     environment: maven-central
     permissions:
       contents: read
+      # Maven Central has no trusted-publishing equivalent, so this job holds a
+      # stored Portal token (claude_dev/maven-central-publishing-decision.md in
+      # the server repo has the research). These two permissions buy back some
+      # of what that costs: every jar carries a GitHub build-provenance
+      # attestation the token cannot forge.
+      #
+      # OWNER ACTION, not expressible here: `CENTRAL_TOKEN_*`, `GPG_PRIVATE_KEY`
+      # and `GPG_PASSPHRASE` must be ENVIRONMENT secrets of `maven-central`
+      # (not repository secrets), with required reviewers and a `v*` deployment
+      # tag rule on the environment. That is what turns a repository-write
+      # compromise into a request for a publish rather than a publish.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Set up JDK 21
@@ -297,3 +310,22 @@ jobs:
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
         run: mvn -B -f bom/pom.xml deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}"
+
+      # T-148 / H-1: build provenance over the jars this job just published, so
+      # an integrator can tie a jar pulled from Central back to the workflow
+      # that produced it:
+      #
+      #   gh attestation verify axiam-sdk-<version>.jar --repo ilpanich/axiam-java-sdk
+      #
+      # After the deploy rather than before, deliberately: `mvn deploy` runs the
+      # whole lifecycle in one pass, so the jars do not exist until it has run,
+      # and attesting first would mean building the project twice. The
+      # attestation covers the same bytes either way — the jars in `target/` ARE
+      # what was uploaded — and a failure here is a red release job, which is
+      # the signal.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: |
+            target/*.jar
+            bom/pom.xml

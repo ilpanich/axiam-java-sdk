@@ -21,7 +21,7 @@ import java.util.UUID;
  *
  * <p>Every operation here is synchronous. The SDK's CompletableFuture twins exist only on the §1
  * core operations, so the async form of a management call is CompletableFuture.supplyAsync(()
- * -&gt; client.management().tenants()...) — one line, rather than 146 more methods to keep in
+ * -&gt; client.management().tenants()...) — one line, rather than 147 more methods to keep in
  * step.
  */
 public final class TenantsApi {
@@ -172,6 +172,28 @@ public final class TenantsApi {
         Map<String, @Nullable String> query = new LinkedHashMap<>();
         transport.send(operation, "DELETE",
                 "/api/v1/organizations/{org_id}/tenants/{tenant_id}", "/api/v1/organizations/" + orgId + "/tenants/" + tenantId + "", query, null);
+    }
+
+    /**
+     * Issues POST /api/v1/organizations/{org_id}/tenants/{tenant_id}/audit-export.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param tenantId the tenant_id path parameter
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void exportAudit(java.util.UUID tenantId) {
+        final String operation = "tenants.export_audit";
+        UUID orgId = ManagementSupport.resolveOrg(transport, scope, operation);
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        transport.send(operation, "POST",
+                "/api/v1/organizations/{org_id}/tenants/{tenant_id}/audit-export", "/api/v1/organizations/" + orgId + "/tenants/" + tenantId + "/audit-export", query, null);
     }
 
 }

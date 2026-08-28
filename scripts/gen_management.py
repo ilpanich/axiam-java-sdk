@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the CONTRACT §27 management surface for the Java SDK.
 
-Reads ``management-registry.json`` (the 146 operations across 24 namespaces,
+Reads ``management-registry.json`` (the 147 operations across 24 namespaces,
 maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
 schemas those operations carry, and writes:
 
@@ -12,7 +12,7 @@ schemas those operations carry, and writes:
 - ``src/main/java/io/axiam/sdk/management/ManagementApi.java`` — the accessors;
 - ``src/test/java/io/axiam/sdk/management/ManagementSurfaceGeneratedTest.java``
 - ``src/test/java/io/axiam/sdk/management/ManagementSparseBodiesGeneratedTest.java``
-  — one conformance case per operation, plus the §27.9 assertion that all 146
+  — one conformance case per operation, plus the §27.9 assertion that all 147
   are reached.
 
 Run with ``--check`` to verify the committed output is current; that is what CI
@@ -923,7 +923,7 @@ def emit_namespace(namespace: str, nsdef: dict[str, Any]) -> str:
         f"CompletableFuture twins exist only on the §1 core operations, so the "
         f"async form of a management call is "
         f"CompletableFuture.supplyAsync(() -> client.management().{camel(namespace)}()...) "
-        f"— one line, rather than 146 more methods to keep in step."))
+        f"— one line, rather than 147 more methods to keep in step."))
     lines.append(f"public final class {handle} {{")
     lines.append("")
     lines.append("    private final ManagementTransport transport;")
@@ -1056,9 +1056,9 @@ def emit_api() -> str:
     lines = [BANNER.rstrip("\n"), f"package {API_PACKAGE};", "",
              "import io.axiam.sdk.internal.ManagementTransport;", ""]
     lines.extend(javadoc(
-        "The CONTRACT §27 management surface: 146 operations across 24 namespaces.\n\n"
+        "The CONTRACT §27 management surface: 147 operations across 24 namespaces.\n\n"
         "§27.2 makes this namespacing normative rather than stylistic: twenty namespaces "
-        "have a list and fourteen a get, so flattening 146 operations onto the client "
+        "have a list and fourteen a get, so flattening 147 operations onto the client "
         "would need a disambiguating prefix invented once per operation — and would bury "
         "the eight §1 methods most callers actually want under five times as many they do "
         "not. Grouping them behind one accessor is the same argument taken one step "
@@ -1308,7 +1308,7 @@ def emit_test() -> str:
             lines.append("")
 
     lines.extend(javadoc(
-        "§27.9: a partial regeneration must fail here, not ship 140 of 146.\n\nAsserting "
+        "§27.9: a partial regeneration must fail here, not ship 140 of 147.\n\nAsserting "
         "the whole set rather than the count catches a regeneration that dropped one "
         "operation and gained another.",
         "    ", ["@throws Exception if the vendored registry cannot be read"]))
