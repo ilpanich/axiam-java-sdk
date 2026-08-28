@@ -43,6 +43,14 @@
          PR-gate CI job (ephemeral key) and the tag-triggered publish job
          (real CI-secret key) — see 20-09. -->
     <gpg.skip>true</gpg.skip>
+    <!-- H-1 (second half): Sigstore keyless signing is OFF by default for the
+         same reason gpg.skip is — the signature is only meaningful when the
+         identity behind it is the release workflow's OIDC claim, and a local
+         `mvn verify` has no such identity (sigstore-java falls back to a
+         browser flow, and refuses outright when CI=true). Flipped to false in
+         exactly two places: the `verify-sigstore` PR gate and the
+         tag-triggered publish job. -->
+    <sigstore.skip>true</sigstore.skip>
     <!-- Aligned against grpc-protobuf 1.82.0's actual transitive protobuf-java
          version, confirmed via `mvn dependency:tree` (com.google.protobuf:protobuf-java:3.25.8). -->
     <protobuf.version>3.25.8</protobuf.version>
@@ -328,6 +336,49 @@
                 <arg>--pinentry-mode</arg>
                 <arg>loopback</arg>
               </gpgArguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- H-1 (second half): Sigstore signature bundles alongside the PGP
+           signatures. For every file the deploy uploads — the jar, the sources
+           jar, the javadoc jar and the POM — this attaches a `.sigstore.json`
+           Sigstore bundle, which the Central Publisher Portal has validated
+           since 2025-01-28.
+
+           What it buys: the bundle's certificate is issued by Fulcio against
+           the *workflow's* OIDC identity (repository, workflow file, ref), and
+           the signing event is recorded in Rekor. A stolen Portal token can
+           upload a jar; it cannot make Fulcio say the jar was built by
+           ilpanich/axiam-java-sdk's release workflow. That is the same claim
+           the GitHub attestation makes, made a second time inside the artifact
+           set Central itself serves — so it survives a consumer who never
+           leaves Maven Central.
+
+           Keyless: no key material to store, rotate or leak, which is
+           precisely why it is worth having next to a credential that cannot be
+           scoped. It costs nothing — Fulcio and Rekor are the Sigstore public
+           good instance.
+
+           Declared AFTER maven-gpg-plugin so gpg signs first within `verify`.
+           Neither plugin signs the other's output: both use gpg's
+           FilesCollector, whose default excludes cover `**/*.asc` and
+           `**/*.sigstore.json` (this is what maven-gpg-plugin >= 3.2.5 is
+           required for). The `.sigstore.json` files are attached as project
+           artifacts, so central-publishing-maven-plugin carries them into the
+           deployment bundle without further configuration. -->
+      <plugin>
+        <groupId>dev.sigstore</groupId>
+        <artifactId>sigstore-maven-plugin</artifactId>
+        <version>2.2.0</version>
+        <executions>
+          <execution>
+            <id>sigstore-sign-artifacts</id>
+            <phase>verify</phase>
+            <goals><goal>sign</goal></goals>
+            <configuration>
+              <skip>${sigstore.skip}</skip>
             </configuration>
           </execution>
         </executions>

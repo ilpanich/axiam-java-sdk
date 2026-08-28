@@ -131,6 +131,101 @@ jobs:
       - name: mvn dependency:tree re-verification
         run: mvn -B dependency:tree
 
+  # H-1 (second half). The reason Sigstore bundles did NOT ship with the rest of
+  # the H-1 pass was that both plugins configure on the *release* path, so a
+  # misconfiguration is invisible until the next tag and then breaks it — and no
+  # throwaway-version validation run was available. This job is the answer to
+  # that, and a better one than a one-off run: it performs a REAL keyless
+  # signing of the real artifact set on every pull request, proving the whole
+  # chain (Actions OIDC -> Fulcio certificate -> Rekor entry -> attached
+  # `.sigstore.json`) before a tag ever depends on it. Nothing is published:
+  # `verify` stops short of `deploy`, and the bundles are discarded with the
+  # runner.
+  #
+  # Same-repository pull requests only. A fork's `pull_request` token cannot
+  # mint an OIDC token whatever `permissions:` says, so on a fork this job would
+  # fail for a reason that has nothing to do with the contributor's change.
+  # Skipping it there is honest; the tag-triggered publish job always runs it
+  # for real.
+  verify-sigstore:
+    name: Sigstore bundle gate (H-1)
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Fulcio issues a signing certificate against the OIDC identity of this
+      # job. Without this permission ACTIONS_ID_TOKEN_REQUEST_URL is absent,
+      # sigstore-java finds no ambient provider, and (because CI=true disables
+      # its browser fallback) fails fast rather than hanging.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up JDK 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      # GPG runs alongside Sigstore here for the same reason the publish job
+      # runs both: the interaction is the part worth testing. maven-gpg-plugin
+      # 3.2.8 must not sign the `.sigstore.json` files and sigstore-maven-plugin
+      # must not sign the `.asc` files — both rely on the same FilesCollector
+      # default excludes, and the assertion below fails if either stops holding.
+      # The key is ephemeral and CI-only (Pitfall 4); the real one is never
+      # exposed to a PR-triggered job.
+      - name: Generate an ephemeral GPG signing key
+        run: |
+          gpg --batch --pinentry-mode loopback --passphrase "" \
+              --quick-generate-key "AXIAM CI (ephemeral, do not trust)" ed25519 sign 1d
+
+      - name: mvn verify -Dsigstore.skip=false (real keyless signing, nothing published)
+        run: mvn -B verify -Dgpg.skip=false -Dgpg.passphrase="" -Dsigstore.skip=false
+
+      - name: mvn verify -Dsigstore.skip=false (axiam-bom)
+        run: mvn -B -f bom/pom.xml verify -Dgpg.skip=false -Dgpg.passphrase="" -Dsigstore.skip=false
+
+      # A green signing step is not the claim; the claim is that the deployment
+      # will carry a bundle for every file. Assert the set explicitly rather
+      # than trusting the plugin's log line.
+      - name: Assert a .sigstore.json exists for every publishable file
+        run: |
+          set -euo pipefail
+          version="$(mvn -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          missing=0
+          for f in \
+            "target/axiam-sdk-${version}.jar" \
+            "target/axiam-sdk-${version}-sources.jar" \
+            "target/axiam-sdk-${version}-javadoc.jar" \
+            "target/axiam-sdk-${version}.pom" \
+            "bom/target/axiam-bom-${version}.pom" ; do
+            if [ ! -f "${f}.sigstore.json" ]; then
+              echo "::error::missing Sigstore bundle for ${f}"
+              missing=1
+            fi
+            if [ ! -f "${f}.asc" ]; then
+              echo "::error::missing PGP signature for ${f}"
+              missing=1
+            fi
+          done
+          # Neither signature may be signed by the other: a `.sigstore.json.asc`
+          # or a `.asc.sigstore.json` means an exclude stopped working, and
+          # Central rejects deployments carrying signatures of signatures.
+          # Captured rather than piped into `grep -q`: under `pipefail` an
+          # early-exiting grep SIGPIPEs find, and the pipeline then reports 141
+          # whether or not anything matched.
+          stray="$(find target bom/target \
+            \( -name '*.sigstore.json.asc' -o -name '*.asc.sigstore.json' \) -print)"
+          if [ -n "${stray}" ]; then
+            echo "::error::a signature was signed by the other signer — check the FilesCollector excludes"
+            echo "${stray}"
+            missing=1
+          fi
+          [ "${missing}" -eq 0 ] || exit 1
+          echo "OK: every publishable file has both a .asc and a .sigstore.json."
+
   grpc-codegen-check:
     name: gRPC codegen check (D-21)
     if: github.event_name == 'pull_request'
@@ -300,7 +395,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
-        run: mvn -B deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}"
+        run: mvn -B deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dsigstore.skip=false
 
       # The BOM is an independent reactor (bom/pom.xml is not a module of the
       # jar-packaged root POM), so it needs its own deploy invocation.
@@ -309,7 +404,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
-        run: mvn -B -f bom/pom.xml deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}"
+        run: mvn -B -f bom/pom.xml deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dsigstore.skip=false
 
       # T-148 / H-1: build provenance over the jars this job just published, so
       # an integrator can tie a jar pulled from Central back to the workflow

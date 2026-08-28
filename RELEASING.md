@@ -55,20 +55,76 @@ instead.
 
 ## Verifying a published artifact
 
-Every jar this workflow publishes carries a GitHub build-provenance
-attestation — a statement the Portal token cannot forge, because it is signed
-with the workflow's OIDC identity rather than with the credential that
-performed the upload:
+Two independent statements of origin ship with every release, and neither can
+be produced by the Portal token that performed the upload. Both are signed with
+the release workflow's OIDC identity.
+
+**1. The GitHub build-provenance attestation**, held by GitHub:
 
 ```sh
 gh attestation verify axiam-sdk-<version>.jar --repo ilpanich/axiam-java-sdk
 ```
 
-## Still open
+**2. The Sigstore bundle**, served by Maven Central itself. Every published
+file — the jar, the sources jar, the javadoc jar, both POMs — has a
+`.sigstore.json` next to its `.asc`:
 
-Sigstore signature bundles (`.sigstore.json`) alongside the PGP signatures are
-the closest thing Central offers to trusted publishing, and are **not yet
-configured here**. They need a build-file change on the release path
-(Maven (`mvn deploy`)), which is exactly the kind of change that should
-not ship without a validation run against a throwaway version. Tracked as the
-remaining half of H-1 in the server repository's beta03 hardening plan.
+```sh
+curl -sO https://repo1.maven.org/maven2/io/github/ilpanich/axiam-sdk/<version>/axiam-sdk-<version>.jar
+curl -sO https://repo1.maven.org/maven2/io/github/ilpanich/axiam-sdk/<version>/axiam-sdk-<version>.jar.sigstore.json
+
+cosign verify-blob \
+  --bundle axiam-sdk-<version>.jar.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/ilpanich/axiam-java-sdk/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  axiam-sdk-<version>.jar
+```
+
+The two differ in where they live, which is the point of having both: the
+attestation is a GitHub API call away and disappears if you only ever talk to
+Maven Central; the bundle travels with the artifact in the repository a
+consumer already fetches from.
+
+### What the Sigstore bundle costs, and what it needs
+
+Nothing, and nothing. Fulcio (the certificate authority) and Rekor (the
+transparency log) are the Sigstore **public good instance**, free to use and
+requiring no account, no registration and no stored key: the signing
+certificate is issued against the workflow's GitHub OIDC claim and expires ten
+minutes later. There is no third credential to rotate — the rotation table
+above stays at two rows.
+
+The only thing it needs from the repository is `id-token: write` on the jobs
+that sign, which the publish job already had for the attestation.
+
+### How it is wired
+
+- `pom.xml` and `bom/pom.xml`: `dev.sigstore:sigstore-maven-plugin`, bound to
+  `verify`, skipped unless `-Dsigstore.skip=false` — the same shape as
+  `gpg.skip`, and for the same reason. A keyless signature means nothing
+  without a workflow identity behind it, so a laptop build never attempts one.
+- `.mvn/maven.config` suppresses `.md5`/`.sha1` files for `.asc` and
+  `.sigstore.json`, which Central does not want in a deployment bundle. Maven
+  3.9.2+ already behaves this way; the file makes it true on any Maven.
+- The publish job passes `-Dsigstore.skip=false` to both `deploy`
+  invocations. The `.sigstore.json` files are attached project artifacts, so
+  `central-publishing-maven-plugin` carries them into the bundle with no
+  further configuration.
+
+### The gate that replaced the throwaway-version run
+
+This change lands on the release path, where a mistake is invisible until the
+next tag and then breaks it. The `verify-sigstore` PR job is what makes that
+acceptable: on every same-repository pull request it performs a **real** keyless
+signing of the real artifact set — Actions OIDC, a Fulcio certificate, a Rekor
+entry, a `.sigstore.json` attached to each file — and then asserts that every
+publishable file has both a `.asc` and a `.sigstore.json`, and that neither
+signer signed the other's output. Nothing is published: `verify` stops short of
+`deploy`.
+
+It is skipped on pull requests from forks, whose token cannot mint an OIDC
+token whatever the job's `permissions:` say.
+
+If the Portal ever starts *rejecting* rather than warning on an invalid
+Sigstore signature — Sonatype has said it intends to — this gate is what
+catches it a pull request early rather than at a tag.

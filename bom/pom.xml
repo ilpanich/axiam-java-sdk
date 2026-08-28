@@ -49,6 +49,12 @@
          therefore built and deployed as an independent reactor
          (`mvn -f bom/pom.xml ...`), which is exactly how CI drives it. -->
     <gpg.skip>true</gpg.skip>
+    <!-- H-1 (second half): Sigstore keyless signing, OFF by default for the
+         same reason gpg.skip is — see the SDK pom.xml for the full rationale.
+         Flipped to false only by the `verify-sigstore` PR gate and the
+         tag-triggered publish job, both of which drive this reactor
+         separately. -->
+    <sigstore.skip>true</sigstore.skip>
   </properties>
 
   <!-- Pins io.github.ilpanich:axiam-sdk for consumers who import this BOM (D-23). -->
@@ -84,6 +90,28 @@
                 <arg>--pinentry-mode</arg>
                 <arg>loopback</arg>
               </gpgArguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- H-1 (second half): Sigstore signature bundles — same plugin and same
+           reasoning as the SDK's pom.xml. A `pom`-packaged module has no jar,
+           but the POM itself is a published file and gets a
+           `axiam-bom-<version>.pom.sigstore.json` bundle next to its `.asc`,
+           so the BOM coordinate is not the one artifact of this release that
+           carries no statement of where it was built. -->
+      <plugin>
+        <groupId>dev.sigstore</groupId>
+        <artifactId>sigstore-maven-plugin</artifactId>
+        <version>2.2.0</version>
+        <executions>
+          <execution>
+            <id>sigstore-sign-artifacts</id>
+            <phase>verify</phase>
+            <goals><goal>sign</goal></goals>
+            <configuration>
+              <skip>${sigstore.skip}</skip>
             </configuration>
           </execution>
         </executions>
