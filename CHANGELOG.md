@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta02] - 2026-08-28
+
 ### Added
+
+- Contract 1.31 — list search, the truthful resend, organization scope
 
 - **CONTRACT 1.31 — the AXIAM server PR #383 surface.** `CONTRACT.md`,
   `openapi.json` and `management-registry.json` re-vendored, and the six things
@@ -73,36 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `certificates().list()` and `null` on `certificates().get()`. The SDK does
     not issue a second request to fill it in there.
 
-### Changed
-
-- **Generated management enums gained an `UNKNOWN` constant, and no longer throw
-  on an unrecognised value** (§27.11 rule 1). A closed enum turns the next
-  `kind` or `status` the server adds into a parse error on the *whole* response,
-  taking down every record on the page over one field of one of them — including
-  the records the caller was after.
-
-  A Java enum constant cannot carry the string it was decoded from, so this one
-  does not pretend to: `UNKNOWN.wire()` is the empty string, which no server
-  value is. Fifteen of these enums appear in request bodies, and that is what
-  makes carrying an unrecognised value back into an update a `400` from the
-  server rather than a silent rewrite into a spelling it never used. The
-  accessor deliberately does not throw — Jackson calls it on every constant
-  while building the deserializer, and a throwing one would break decoding for
-  the whole enum, which is the failure this change exists to avoid.
-
-### Fixed
-
-- **`scripts/gen_management.py` no longer drops a projected list element.** The
-  server answers `GET /api/v1/certificates` with `Certificate` plus one resolved
-  graph edge, expressed as an `allOf` of the `$ref` and an anonymous object.
-  Read as a whole, that composition has no name, so the registry carried a page
-  with no element type and the added field reached no record. The generator now
-  takes the base name through the `allOf` and folds the projection's added
-  fields onto the base record as optional components. (The registry-side half of
-  this is AXIAM PR #386.)
-
-### Added
-
 - **The §27 namespace handles now sit directly on the client** — `client.roles()`,
   `client.serviceAccounts().rotateSecret(id)` — which is the form §27.3's Java row
   specifies. `client.management()` still reaches the same 24 handles behind one accessor;
@@ -123,21 +97,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy-paste sends one namespace to its neighbour, which compiles and which a sampled test
   would miss — then asserts wire-level equivalence for a representative and for the
   org-scoped case.
-
-
-### Documentation
-
-- **Corrected the §27.4 rule 7 error table in the README and in this file.**
-  Both said `ConflictError` extends `NetworkError`. It does not, and never did:
-  the code, the example and `conflictIsNotRetried` all have it under
-  `AuthzError`, which is what §27.4 rule 7 specifies — §2 already maps 409 to
-  `AuthzError` as "resource-level access denied", and the sub-type keeps that
-  mapping rather than re-deciding it. A reader who trusted the old sentence
-  would have written `catch (NetworkError e)` around a create and never caught
-  the 409. A new test pins the parent of all three sub-types so the prose
-  cannot drift from the hierarchy again.
-
-### Added
 
 - **CONTRACT.md §27 Management API** — `client.management()`, 146 operations
   across 24 namespaces (users, groups, roles, permissions, resources, scopes,
@@ -183,6 +142,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-vendor openapi.json and management-registry.json from axiam main (#78)
+
+- Re-vendor the contract artifacts: spec digest + §27.10 posture (#76)
+
+- Put the §27 namespace handles directly on the client, per §27.2/§27.3
+
+- Correct the §27.4 rule 7 error table in the docs
+
+- Implement CONTRACT.md §27 Management API
+
+- Re-vendor CONTRACT.md, openapi.json and the §27 registry
+
+- **Generated management enums gained an `UNKNOWN` constant, and no longer throw
+  on an unrecognised value** (§27.11 rule 1). A closed enum turns the next
+  `kind` or `status` the server adds into a parse error on the *whole* response,
+  taking down every record on the page over one field of one of them — including
+  the records the caller was after.
+
+  A Java enum constant cannot carry the string it was decoded from, so this one
+  does not pretend to: `UNKNOWN.wire()` is the empty string, which no server
+  value is. Fifteen of these enums appear in request bodies, and that is what
+  makes carrying an unrecognised value back into an update a `400` from the
+  server rather than a silent rewrite into a spelling it never used. The
+  accessor deliberately does not throw — Jackson calls it on every constant
+  while building the deserializer, and a throwing one would break decoding for
+  the whole enum, which is the failure this change exists to avoid.
+
 - **`AuthzError` and `NetworkError` are no longer `final`.** §27.4 rule 7
   classifies three statuses *inside* the existing §2 taxonomy rather than beside
   it: `NotFoundError` (404) and `ConflictError` (409) extend `AuthzError`;
@@ -194,6 +180,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JaCoCo bundle line-coverage floor raised from 0.93 to 0.95.** The new code
   brought the bundle to ~95.2%; the floor moves with it so the gate keeps
   meaning something.
+
+### Fixed
+
+- **`scripts/gen_management.py` no longer drops a projected list element.** The
+  server answers `GET /api/v1/certificates` with `Certificate` plus one resolved
+  graph edge, expressed as an `allOf` of the `$ref` and an anonymous object.
+  Read as a whole, that composition has no name, so the registry carried a page
+  with no element type and the added field reached no record. The generator now
+  takes the base name through the `allOf` and folds the projection's added
+  fields onto the base record as optional components. (The registry-side half of
+  this is AXIAM PR #386.)
+
+### Documentation
+
+- **Corrected the §27.4 rule 7 error table in the README and in this file.**
+  Both said `ConflictError` extends `NetworkError`. It does not, and never did:
+  the code, the example and `conflictIsNotRetried` all have it under
+  `AuthzError`, which is what §27.4 rule 7 specifies — §2 already maps 409 to
+  `AuthzError` as "resource-level access denied", and the sub-type keeps that
+  mapping rather than re-deciding it. A reader who trusted the old sentence
+  would have written `catch (NetworkError e)` around a create and never caught
+  the 409. A new test pins the parent of all three sub-types so the prose
+  cannot drift from the hierarchy again.
 
 ## [1.0.0-alpha44] - 2026-08-25
 
