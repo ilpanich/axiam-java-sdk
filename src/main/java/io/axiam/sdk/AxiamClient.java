@@ -186,6 +186,22 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private final JwksVerifier jwksVerifier;
     private final SessionState session;
 
+    /**
+     * CONTRACT.md &sect;5.2.2 — the tenant the signed-in principal's record
+     * <em>lives</em> in, as reported by the login response.
+     *
+     * <p>Distinct from {@link #tenantId}, which is the tenant being acted on:
+     * the two diverge for an organization-level principal that has selected
+     * another one. Read by {@link #opaqueEnrollmentForSelf(char[])}, which must
+     * seal a &sect;23 record against the account's own tenant rather than
+     * whichever one this client is currently pointed at.
+     *
+     * <p>{@code volatile} for the same reason the rest of the session state is
+     * thread-safe: a client is shared, and a login on one thread must be
+     * visible to an enrolment on another. {@code null} until a login completes.
+     */
+    private volatile @Nullable UUID principalTenantId;
+
     // CONTRACT.md §12 OIDC/SSO relying-party state — see the Builder's
     // oidcClientId/oidcClientSecret/oidcDiscoveryTtl/oidcClockSkew.
     private final @Nullable String oidcClientId;
@@ -1154,7 +1170,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         try (Response response = executeJsonPost(LOGIN_PATH, body)) {
             if (response.code() == 200) {
-                return LoginResult.authenticated(buildUser(), organizationLevelOf(response));
+                return authenticatedFrom(response);
             }
             if (response.code() == 202) {
                 JsonNode wire = readJson(response);
@@ -1241,7 +1257,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             if (response.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(response.code(), "MFA verification failed", response);
             }
-            return LoginResult.authenticated(buildUser(), organizationLevelOf(response));
+            return authenticatedFrom(response);
         }
     }
 
@@ -1475,7 +1491,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 return new LoginResult(true,
                         Sensitive.of(wire.path("challenge_token").asText()), null);
             }
-            return LoginResult.authenticated(buildUser(), organizationLevelOf(response));
+            return authenticatedFrom(response);
         }
     }
 
@@ -1522,11 +1538,54 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      *                      cannot ask for
      */
     public OpaqueEnrollment opaqueEnrollment(char[] password) {
+        return enroll(password, null);
+    }
+
+    /**
+     * Builds a registration record for the <strong>caller's own</strong> new
+     * password, sealed against the tenant the caller's account lives in.
+     *
+     * <p>CONTRACT.md &sect;5.2.2 rule 2. {@code POST /auth/password/change} and
+     * the record that accompanies it are about the account, not about whatever
+     * tenant the client is currently pointed at, and a record sealed against
+     * the acting tenant is refused with <em>"the OPAQUE session was issued for
+     * a different tenant"</em>.
+     *
+     * <p>The distinction only bites for an organization-level principal that
+     * has selected another tenant to act on; for everyone else the two tenants
+     * are the same value and this behaves identically to
+     * {@link #opaqueEnrollment(char[])}. It is still the method to call for a
+     * self-service password change, because which principal is signed in is not
+     * something the call site usually knows.
+     *
+     * @param password the new password
+     * @return the enrolment to send with the password change
+     * @throws NetworkError when no login has completed on this client yet —
+     *     the principal tenant is reported by the login response, so there is
+     *     nothing to seal against before then — and on the same terms as
+     *     {@link #opaqueEnrollment(char[])} otherwise
+     */
+    public OpaqueEnrollment opaqueEnrollmentForSelf(char[] password) {
+        UUID principalTenantId = this.principalTenantId;
+        if (principalTenantId == null) {
+            throw new NetworkError(
+                    "OPAQUE: no principal tenant is known yet — sign in before building a "
+                            + "registration record for your own password");
+        }
+        return enroll(password, principalTenantId);
+    }
+
+    /**
+     * The shared body of the two enrolment methods; they differ only in the
+     * tenant the record is sealed against.
+     */
+    private OpaqueEnrollment enroll(char[] password, @Nullable UUID principalTenantId) {
         ensureOpen();
 
         try (RegistrationExchange exchange = Opaque.startRegistration(password)) {
             JsonNode started = opaqueStart(OPAQUE_REGISTER_START_PATH,
-                    opaqueRegisterStartBody(exchange.request()), "register/start");
+                    opaqueRegisterStartBody(exchange.request(), principalTenantId),
+                    "register/start");
             String record = exchange.finish(password,
                     started.path("registration_response").asText(""),
                     KsfParams.fromWire(started));
@@ -1595,8 +1654,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * the server chooses, which is why a later rename cannot invalidate a
      * credential.
      */
-    private ObjectNode opaqueRegisterStartBody(String registrationRequest) {
+    private ObjectNode opaqueRegisterStartBody(
+            String registrationRequest, @Nullable UUID principalTenantId) {
         ObjectNode body = opaqueWorkspaceBody();
+        if (principalTenantId != null) {
+            // CONTRACT.md §5.2.2 rule 2. Name the principal tenant by id and
+            // drop the slug: a slug naming the acting tenant would out-vote the
+            // id server-side, which is the exact confusion this override exists
+            // to avoid.
+            body.remove("tenant_slug");
+            body.put("tenant_id", principalTenantId.toString());
+        }
         body.put("registration_request", registrationRequest);
         return body;
     }
@@ -3103,6 +3171,80 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return readJson(response).path("user").path("organization_level").asBoolean(false);
     }
 
+    /**
+     * Builds the completed-login result from a {@code 200} response, reading the
+     * body exactly once.
+     *
+     * <p>{@link #readJson(Response)} consumes the stream, so the &sect;5.2 flag
+     * and the &sect;5.2.2 scope cannot be read by two separate passes — which is
+     * why this exists rather than a second {@code ...Of(response)} helper
+     * alongside {@link #organizationLevelOf(Response)}.
+     *
+     * <p>Also caches the principal tenant, so a later
+     * {@link #opaqueEnrollmentForSelf(char[])} seals against the account's own
+     * tenant without a second round trip.
+     */
+    private LoginResult authenticatedFrom(Response response) {
+        JsonNode json = readJson(response);
+        boolean organizationLevel =
+                json.path("user").path("organization_level").asBoolean(false);
+        PrincipalScope scope = principalScopeOf(json);
+        if (scope != null && scope.principalTenantId() != null) {
+            this.principalTenantId = scope.principalTenantId();
+        }
+        return LoginResult.authenticated(buildUser(), organizationLevel, scope);
+    }
+
+    /**
+     * Reads the &sect;5.2.2/&sect;5.2.3 scope off a login response.
+     *
+     * <p>Returns {@code null} when the server reports none of it, which is what
+     * a server older than contract 1.34 does — {@link PrincipalScope} itself
+     * handles the "absent means equal" fallback for the fields it does get.
+     */
+    private static @Nullable PrincipalScope principalScopeOf(JsonNode json) {
+        JsonNode user = json.path("user");
+        UUID actingTenantId = uuidOrNull(user.path("tenant_id"));
+        UUID principalTenantId = uuidOrNull(user.path("principal_tenant_id"));
+        UUID orgId = uuidOrNull(user.path("org_id"));
+        String principalTenantSlug =
+                user.path("principal_tenant_slug").isTextual()
+                        ? user.path("principal_tenant_slug").asText()
+                        : null;
+        List<UUID> reachable = null;
+        JsonNode reachableNode = user.path("reachable_tenant_ids");
+        if (reachableNode.isArray()) {
+            reachable = new ArrayList<>();
+            for (JsonNode entry : reachableNode) {
+                UUID parsed = uuidOrNull(entry);
+                if (parsed != null) {
+                    reachable.add(parsed);
+                }
+            }
+        }
+        if (actingTenantId == null
+                && principalTenantId == null
+                && orgId == null
+                && principalTenantSlug == null
+                && reachable == null) {
+            return null;
+        }
+        return new PrincipalScope(
+                actingTenantId, principalTenantId, principalTenantSlug, orgId, reachable);
+    }
+
+    /** A UUID from a JSON node, or {@code null} when it is absent or unparseable. */
+    private static @Nullable UUID uuidOrNull(JsonNode node) {
+        if (!node.isTextual()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(node.asText());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     private static void consumeBody(Response response) {
         ResponseBody body = response.body();
         if (body != null) {
@@ -3702,7 +3844,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             if (http.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(http.code(), "mfaSetupConfirm failed", http);
             }
-            return LoginResult.authenticated(buildUser(), organizationLevelOf(http));
+            return authenticatedFrom(http);
         }
     }
 

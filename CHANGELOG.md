@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Contract 1.35, which carries contract 1.34 with it.** Nothing had been
+  fanned out since 1.33, so this re-vendors `CONTRACT.md`, `openapi.json` and
+  `management-registry.json` across both revisions. The registry still holds
+  155 operations across 24 namespaces — 1.35 changed only its `spec_digest` —
+  so the eight §27 operations below arrived with 1.34 and are new here
+  regardless.
+
+- **§27: service accounts as RBAC principals** (contract 1.34) — eight
+  generated operations across `RolesApi`, `GroupsApi` and
+  `ServiceAccountsApi`. `unassignFromServiceAccount` takes the same optional
+  `resourceId` query parameter as the user and group unassign calls: omitting
+  it removes the *global* grant specifically, not every grant of that role.
+
+- **§5.2.2/§5.2.3: `PrincipalScope`, reached from `LoginResult.scope()`.**
+  Where the signed-in principal lives (`principalTenantId`,
+  `principalTenantSlug`, `orgId`) and how far its roles reach
+  (`reachableTenantIds`), alongside the tenant being acted on
+  (`actingTenantId`).
+
+  Grouped into one record rather than five more `LoginResult` components: that
+  record's canonical constructor already gained an arity once, and a type that
+  grows a component per contract revision breaks every caller each time. The
+  pre-1.34 six-argument constructor is kept as an overload.
+
+  Absent means equal, not unknown — `PrincipalScope`'s compact constructor
+  falls `principalTenantId` back to `actingTenantId`, which is exactly right
+  against a server that cannot switch the acting tenant. An empty
+  `reachableTenantIds` normalises to `null` for the same reason in reverse: an
+  empty list would read as "reaches nothing", the opposite of what an omitted
+  field means.
+
+### Fixed
+
+- **A registration record for your own password was sealed against the wrong
+  tenant.** CONTRACT.md §5.2.2 rule 2: the caller's credentials live in the
+  tenant the *account* lives in, not whichever tenant the client is currently
+  pointed at, and a record sealed against the acting tenant is refused with
+  "the OPAQUE session was issued for a different tenant".
+
+  `opaqueEnrollment` had one behaviour for a method documented for three
+  callers — user creation, change-password and reset completion — and only the
+  first of those wants the acting tenant. It keeps that behaviour; the new
+  `opaqueEnrollmentForSelf` seals against the principal tenant and is what a
+  self-service password change must call.
+
+  The two collapse to the same request for every ordinary principal, so this
+  only bit an organization-level account that had switched tenant.
+
+- **An empty `tenantScope` is no longer put on the wire.** The server refuses
+  `[]` with `400`: an assignment reaching no tenant is a grant that does not
+  exist rather than a restriction. `@JsonInclude(NON_NULL)` did not prevent it,
+  because `List.of()` is the natural thing to pass for "no tenants named" and
+  is not null. The generated records now normalise it to `null` in a compact
+  constructor, via a one-field allowlist — elsewhere `[]` means "clear this
+  list", and normalising it away would make "remove every entry" inexpressible.
+
+### Changed
+
+- **The four completed-login paths share one response reader.** `readJson`
+  consumes the body stream, so the §5.2 flag and the §5.2.2 scope cannot be
+  read by two passes; `authenticatedFrom` reads it once and also caches the
+  principal tenant for `opaqueEnrollmentForSelf`.
+
+### Note on `X-Tenant-ID` vs `X-Axiam-Tenant`
+
+CONTRACT.md §5.2.2 and §5.2.3 name the acting-tenant header `X-Tenant-ID`, but
+the AXIAM server reads **`X-Axiam-Tenant`** (`ACTIVE_TENANT_HEADER` in
+`crates/axiam-api-rest/src/extractors/auth.rs`), as do its own tests, the admin
+UI, and the `openapi.json` vendored alongside that contract. The server never
+reads `X-Tenant-ID` at all.
+
+Documentation updated here names `X-Axiam-Tenant`, because a tenant switch sent
+under the other name is not refused — it is ignored, and the request quietly
+acts on the principal's own tenant instead. The discrepancy has been reported
+upstream; this SDK's existing `X-Tenant-ID` sends are left as they are, being
+out of scope for a contract re-vendor.
+
 ## [1.0.0-beta04] - 2026-08-28
 
 ### Added

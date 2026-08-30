@@ -8,6 +8,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -15,11 +16,27 @@ import java.util.UUID;
  *
  * @param resourceId {@code None} means the role was assigned globally (no resource scope).
  * @param role the server's role field
+ * @param tenantScope The tenants this assignment reaches. See [{@code TenantScope}].
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RoleAssignment(
         @JsonProperty("resource_id") @Nullable UUID resourceId,
-        @JsonProperty("role") Role role
+        @JsonProperty("role") Role role,
+        @JsonProperty("tenant_scope") @Nullable List<UUID> tenantScope
 ) {
+
+    /**
+     * CONTRACT.md §5.2.3 rule 1: {@code tenant_scope: []} is refused with 400.
+     *
+     * <p>An assignment that reaches no tenant contributes nothing anywhere, so it is a
+     * grant that does not exist rather than a restriction, and the server declines to
+     * guess which was meant. Normalising to {@code null} here means both spellings of
+     * absent travel the same way — by not appearing, via {@code JsonInclude.NON_NULL}.
+     */
+    public RoleAssignment {
+        if (tenantScope != null && tenantScope.isEmpty()) {
+            tenantScope = null;
+        }
+    }
 }

@@ -38,14 +38,22 @@ import org.jspecify.annotations.Nullable;
  *                         organization's reserved tenant, so its global grants
  *                         apply in every tenant of that organization, and which
  *                         can act on a different one by sending a different
- *                         {@code X-Tenant-ID} on the next request. An ordinary
+ *                         {@code X-Axiam-Tenant} on the next request. An ordinary
  *                         tenant principal is a principal of exactly one tenant
  *                         and gets a {@code 403} for the same header change, so
  *                         check this <em>before</em> offering a tenant switch
  *                         rather than discovering the answer from a failed
  *                         request. {@code false} against a server older than
  *                         contract 1.31, and {@code false} on the two pending
- *                         outcomes, where no principal has been established yet
+ *                         outcomes, where no principal has been established yet.
+ *                         Since contract 1.35 that reach can be narrowed per
+ *                         assignment, so this flag alone no longer decides what
+ *                         to offer: consult
+ *                         {@link PrincipalScope#reachableTenantIds()} as well
+ * @param scope            where this principal lives and how far its roles
+ *                         reach (&sect;5.2.2, &sect;5.2.3); {@code null} on the
+ *                         two pending outcomes and against a server older than
+ *                         contract 1.34
  */
 public record LoginResult(
         boolean mfaRequired,
@@ -53,7 +61,8 @@ public record LoginResult(
         @Nullable AxiamUser user,
         boolean mfaSetupRequired,
         @Nullable Sensitive setupToken,
-        boolean organizationLevel) {
+        boolean organizationLevel,
+        @Nullable PrincipalScope scope) {
 
     /**
      * The pre-1.28 shape: neither setup component set.
@@ -85,7 +94,30 @@ public record LoginResult(
             @Nullable AxiamUser user,
             boolean mfaSetupRequired,
             @Nullable Sensitive setupToken) {
-        this(mfaRequired, challengeToken, user, mfaSetupRequired, setupToken, false);
+        this(mfaRequired, challengeToken, user, mfaSetupRequired, setupToken, false, null);
+    }
+
+    /**
+     * The pre-1.34 shape: a &sect;5.2 scope flag but no &sect;5.2.2 detail.
+     *
+     * <p>Kept so the arity that existed before contract 1.34 still compiles.
+     *
+     * @param mfaRequired       whether an MFA challenge was issued
+     * @param challengeToken    the challenge token, when one was
+     * @param user              the authenticated user, when the login completed
+     * @param mfaSetupRequired  whether forced enrolment is required
+     * @param setupToken        the forced-enrolment token, when required
+     * @param organizationLevel whether the principal is organization-level
+     */
+    public LoginResult(
+            boolean mfaRequired,
+            @Nullable Sensitive challengeToken,
+            @Nullable AxiamUser user,
+            boolean mfaSetupRequired,
+            @Nullable Sensitive setupToken,
+            boolean organizationLevel) {
+        this(mfaRequired, challengeToken, user, mfaSetupRequired, setupToken, organizationLevel,
+                null);
     }
 
     /**
@@ -97,7 +129,22 @@ public record LoginResult(
      * @return a completed result
      */
     public static LoginResult authenticated(AxiamUser user, boolean organizationLevel) {
-        return new LoginResult(false, null, user, false, null, organizationLevel);
+        return new LoginResult(false, null, user, false, null, organizationLevel, null);
+    }
+
+    /**
+     * A completed login, carrying the &sect;5.2 scope flag and the
+     * &sect;5.2.2/&sect;5.2.3 detail behind it.
+     *
+     * @param user              the authenticated user
+     * @param organizationLevel whether the principal operates across the
+     *                          organization's tenants
+     * @param scope             where the principal lives and how far it reaches
+     * @return a completed result
+     */
+    public static LoginResult authenticated(
+            AxiamUser user, boolean organizationLevel, @Nullable PrincipalScope scope) {
+        return new LoginResult(false, null, user, false, null, organizationLevel, scope);
     }
 
     /**
@@ -108,6 +155,6 @@ public record LoginResult(
      * @return a result carrying only the setup branch
      */
     public static LoginResult mfaSetupRequired(Sensitive setupToken) {
-        return new LoginResult(false, null, null, true, setupToken, false);
+        return new LoginResult(false, null, null, true, setupToken, false, null);
     }
 }

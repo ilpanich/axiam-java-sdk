@@ -478,9 +478,13 @@ public final class ManifestApi {
                 api.groups().update(res.groups.get(s.key()),
                         UpdateGroup.builder().description(spec.description()).build());
             }
+            // CONTRACT.md §5.2.3: a manifest has no syntax for naming tenants on
+            // an assignment, so every one it applies is unrestricted — which is
+            // exactly what the manifests written before the field existed
+            // already meant, and keeps `apply` idempotent against them.
             case ASSIGN_ROLE_TO_GROUP -> api.roles().assignToGroup(
                     res.roles.get((String) s.spec()),
-                    new AssignRoleToGroupRequest(res.groups.get(s.related()), null));
+                    new AssignRoleToGroupRequest(res.groups.get(s.related()), null, null));
             case CREATE_USER -> {
                 ManagementManifest.UserSpec spec = (ManagementManifest.UserSpec) s.spec();
                 UserResponse created = api.users().create(new CreateUserRequest(
@@ -492,9 +496,10 @@ public final class ManifestApi {
                 api.users().update(res.users.get(s.key()),
                         UpdateUserRequest.builder().email(spec.email()).build());
             }
+            // §5.2.3 — see ASSIGN_ROLE_TO_GROUP above.
             case ASSIGN_ROLE_TO_USER -> api.roles().assignToUser(
                     res.roles.get((String) s.spec()),
-                    new AssignRoleToUserRequest(null, res.users.get(s.related())));
+                    new AssignRoleToUserRequest(null, null, res.users.get(s.related())));
             case ADD_GROUP_MEMBER -> api.groups().addMember(
                     res.groups.get((String) s.spec()),
                     new AddMemberRequest(res.users.get(s.related())));

@@ -351,4 +351,70 @@ public final class RolesApi {
                 "/api/v1/roles/{role_id}/permissions/{permission_id}", "/api/v1/roles/" + roleId + "/permissions/" + permissionId + "", query, null);
     }
 
+    /**
+     * Issues GET /api/v1/roles/{role_id}/service-accounts.
+     *
+     * @param roleId the role_id path parameter
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public java.util.List<io.axiam.sdk.management.models.RoleServiceAccountAssignment> listServiceAccounts(java.util.UUID roleId) {
+        final String operation = "roles.list_service_accounts";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/roles/{role_id}/service-accounts", "/api/v1/roles/" + roleId + "/service-accounts", query, null);
+        return ManagementSupport.convertList(node, io.axiam.sdk.management.models.RoleServiceAccountAssignment.class, operation);
+    }
+
+    /**
+     * Issues POST /api/v1/roles/{role_id}/service-accounts.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param roleId the role_id path parameter
+     * @param body the request body
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void assignToServiceAccount(java.util.UUID roleId, io.axiam.sdk.management.models.AssignRoleToServiceAccountRequest body) {
+        final String operation = "roles.assign_to_service_account";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        transport.send(operation, "POST",
+                "/api/v1/roles/{role_id}/service-accounts", "/api/v1/roles/" + roleId + "/service-accounts", query, body);
+    }
+
+    /**
+     * Issues DELETE /api/v1/roles/{role_id}/service-accounts/{service_account_id}.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param roleId the role_id path parameter
+     * @param serviceAccountId the service_account_id path parameter
+     * @param resourceId the optional resource_id query filter, or null to omit it
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void unassignFromServiceAccount(java.util.UUID roleId, java.util.UUID serviceAccountId, @Nullable String resourceId) {
+        final String operation = "roles.unassign_from_service_account";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        query.put("resource_id", resourceId);
+        transport.send(operation, "DELETE",
+                "/api/v1/roles/{role_id}/service-accounts/{service_account_id}", "/api/v1/roles/" + roleId + "/service-accounts/" + serviceAccountId + "", query, null);
+    }
+
 }

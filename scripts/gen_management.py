@@ -612,6 +612,44 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
     return fields, required, description
 
 
+# Fields the server refuses when present-but-empty, so the record normalises
+# them to null — which `@JsonInclude(NON_NULL)` then drops.
+#
+# Deliberately a name list rather than a rule over every list component: for
+# most of them an empty list is meaningful (a replacement body clearing a
+# list), and normalising it away would make "remove every entry"
+# inexpressible. Only CONTRACT.md §5.2.3's `tenant_scope` has a server that
+# reads `[]` as a contradiction and answers 400.
+OMIT_WHEN_EMPTY = {"tenantScope"}
+
+
+def emit_omit_when_empty(type_name: str, fields: list[dict]) -> list[str]:
+    """A compact constructor normalising an empty OMIT_WHEN_EMPTY list to null.
+
+    `@JsonInclude(NON_NULL)` already drops the absent case. `List.of()` is the
+    one that needs help: it is the natural thing to pass for "no tenants
+    named", and it would put the refused shape on the wire.
+    """
+    targets = [f for f in fields if f["name"] in OMIT_WHEN_EMPTY]
+    if not targets:
+        return []
+    out = ["", "    /**",
+           "     * CONTRACT.md §5.2.3 rule 1: {@code tenant_scope: []} is refused with 400.",
+           "     *",
+           "     * <p>An assignment that reaches no tenant contributes nothing anywhere, so it is a",
+           "     * grant that does not exist rather than a restriction, and the server declines to",
+           "     * guess which was meant. Normalising to {@code null} here means both spellings of",
+           "     * absent travel the same way — by not appearing, via {@code JsonInclude.NON_NULL}.",
+           "     */"]
+    out.append(f"    public {type_name} {{")
+    for f in targets:
+        out.append(f"        if ({f['name']} != null && {f['name']}.isEmpty()) {{")
+        out.append(f"            {f['name']} = null;")
+        out.append("        }")
+    out.append("    }")
+    return out
+
+
 def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
     """A Java record for an object schema, plus a builder when it is sparse."""
     type_name = pascal(name)
@@ -652,6 +690,7 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
                 f["type"] = f"@Nullable {f['type']}"
         body.extend(component_lines(fields))
         body.append(") {")
+        body.extend(emit_omit_when_empty(type_name, fields))
         if all_optional:
             body.extend(emit_builder(type_name, fields))
         body.append("}")
