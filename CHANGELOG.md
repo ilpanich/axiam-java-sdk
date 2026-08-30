@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta05] - 2026-08-30
+
 ### Added
+
+- Contract 1.35, carrying 1.34 — service-account RBAC, principal tenant, tenant scope
 
 - **Contract 1.35, which carries contract 1.34 with it.** Nothing had been
   fanned out since 1.33, so this re-vendors `CONTRACT.md`, `openapi.json` and
@@ -40,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty list would read as "reaches nothing", the opposite of what an omitted
   field means.
 
+### Changed
+
+- **The four completed-login paths share one response reader.** `readJson`
+  consumes the body stream, so the §5.2 flag and the §5.2.2 scope cannot be
+  read by two passes; `authenticatedFrom` reads it once and also caches the
+  principal tenant for `opaqueEnrollmentForSelf`.
+
 ### Fixed
 
 - **A registration record for your own password was sealed against the wrong
@@ -64,13 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not null. The generated records now normalise it to `null` in a compact
   constructor, via a one-field allowlist — elsewhere `[]` means "clear this
   list", and normalising it away would make "remove every entry" inexpressible.
-
-### Changed
-
-- **The four completed-login paths share one response reader.** `readJson`
-  consumes the body stream, so the §5.2 flag and the §5.2.2 scope cannot be
-  read by two passes; `authenticatedFrom` reads it once and also caches the
-  principal tenant for `opaqueEnrollmentForSelf`.
 
 ### Note on `X-Tenant-ID` vs `X-Axiam-Tenant`
 
