@@ -255,4 +255,84 @@ public final class GroupsApi {
         return ManagementSupport.convertList(node, io.axiam.sdk.management.models.RoleAssignment.class, operation);
     }
 
+    /**
+     * Issues GET /api/v1/groups/{group_id}/service-accounts.
+     *
+     * @param groupId the group_id path parameter
+     * @param page where the page starts and how big it is, or null for the server's default
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public Page<io.axiam.sdk.management.models.ServiceAccountResponse> listServiceAccounts(java.util.UUID groupId, @Nullable PageRequest page) {
+        final String operation = "groups.list_service_accounts";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        ManagementSupport.pageQuery(query, page);
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/groups/{group_id}/service-accounts", "/api/v1/groups/" + groupId + "/service-accounts", query, null);
+        return ManagementSupport.convertPage(node, io.axiam.sdk.management.models.ServiceAccountResponse.class, operation);
+    }
+
+    /**
+     * Walks groups.list_service_accounts to exhaustion, concatenating every page.
+     *
+     * <p>The auto-paging form §27.4 rule 4 requires. It stops on an empty page even if the total
+     * disagrees, so a misreporting server costs one wasted request rather than an unbounded loop.
+     *
+     * @param groupId the group_id path parameter
+     * @param start where the walk begins, or null to start at the top
+     * @return every item in the set, across as many requests as it takes
+     */
+    public java.util.List<io.axiam.sdk.management.models.ServiceAccountResponse> listServiceAccountsAll(java.util.UUID groupId, @Nullable PageRequest start) {
+        return ManagementSupport.collectPages(start, p -> listServiceAccounts(groupId, p));
+    }
+
+    /**
+     * Issues POST /api/v1/groups/{group_id}/service-accounts.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param groupId the group_id path parameter
+     * @param body the request body
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void addServiceAccount(java.util.UUID groupId, io.axiam.sdk.management.models.AddServiceAccountMemberRequest body) {
+        final String operation = "groups.add_service_account";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        transport.send(operation, "POST",
+                "/api/v1/groups/{group_id}/service-accounts", "/api/v1/groups/" + groupId + "/service-accounts", query, body);
+    }
+
+    /**
+     * Issues DELETE /api/v1/groups/{group_id}/service-accounts/{service_account_id}.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param groupId the group_id path parameter
+     * @param serviceAccountId the service_account_id path parameter
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void removeServiceAccount(java.util.UUID groupId, java.util.UUID serviceAccountId) {
+        final String operation = "groups.remove_service_account";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        transport.send(operation, "DELETE",
+                "/api/v1/groups/{group_id}/service-accounts/{service_account_id}", "/api/v1/groups/" + groupId + "/service-accounts/" + serviceAccountId + "", query, null);
+    }
+
 }

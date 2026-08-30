@@ -209,4 +209,44 @@ public final class ServiceAccountsApi {
                 "/api/v1/service-accounts/{sa_id}/bind-certificate", "/api/v1/service-accounts/" + saId + "/bind-certificate", query, body);
     }
 
+    /**
+     * Issues GET /api/v1/service-accounts/{service_account_id}/roles.
+     *
+     * @param serviceAccountId the service_account_id path parameter
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public java.util.List<io.axiam.sdk.management.models.RoleAssignment> listRoles(java.util.UUID serviceAccountId) {
+        final String operation = "service_accounts.list_roles";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/service-accounts/{service_account_id}/roles", "/api/v1/service-accounts/" + serviceAccountId + "/roles", query, null);
+        return ManagementSupport.convertList(node, io.axiam.sdk.management.models.RoleAssignment.class, operation);
+    }
+
+    /**
+     * Issues GET /api/v1/service-accounts/{service_account_id}/groups.
+     *
+     * @param serviceAccountId the service_account_id path parameter
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public java.util.List<io.axiam.sdk.management.models.Group> listGroups(java.util.UUID serviceAccountId) {
+        final String operation = "service_accounts.list_groups";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/service-accounts/{service_account_id}/groups", "/api/v1/service-accounts/" + serviceAccountId + "/groups", query, null);
+        return ManagementSupport.convertList(node, io.axiam.sdk.management.models.Group.class, operation);
+    }
+
 }

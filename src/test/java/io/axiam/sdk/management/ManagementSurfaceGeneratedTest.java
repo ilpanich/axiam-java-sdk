@@ -218,6 +218,28 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().groups().listRoles(EXAMPLE_ID);
     }
 
+    /** Exercises groups.list_service_accounts. */
+    @Test
+    void groupsListServiceAccounts() throws Exception {
+        mount("GET", "/api/v1/groups/" + EXAMPLE_ID + "/service-accounts", 200, "{\"items\": [{\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"status\": \"Active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        client.management().groups().listServiceAccounts(EXAMPLE_ID, PageRequest.of(50));
+        client.management().groups().listServiceAccountsAll(EXAMPLE_ID, PageRequest.of(50));
+    }
+
+    /** Exercises groups.add_service_account. */
+    @Test
+    void groupsAddServiceAccount() throws Exception {
+        mount("POST", "/api/v1/groups/" + EXAMPLE_ID + "/service-accounts", 204, "");
+        client.management().groups().addServiceAccount(EXAMPLE_ID, new io.axiam.sdk.management.models.AddServiceAccountMemberRequest(EXAMPLE_ID));
+    }
+
+    /** Exercises groups.remove_service_account. */
+    @Test
+    void groupsRemoveServiceAccount() throws Exception {
+        mount("DELETE", "/api/v1/groups/" + EXAMPLE_ID + "/service-accounts/" + EXAMPLE_ID + "", 204, "");
+        client.management().groups().removeServiceAccount(EXAMPLE_ID, EXAMPLE_ID);
+    }
+
     /** Exercises roles.list. */
     @Test
     void rolesList() throws Exception {
@@ -265,7 +287,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void rolesAssignToUser() throws Exception {
         mount("POST", "/api/v1/roles/" + EXAMPLE_ID + "/users", 204, "");
-        client.management().roles().assignToUser(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToUserRequest(null, EXAMPLE_ID));
+        client.management().roles().assignToUser(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToUserRequest(null, null, EXAMPLE_ID));
     }
 
     /** Exercises roles.unassign_from_user. */
@@ -286,7 +308,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void rolesAssignToGroup() throws Exception {
         mount("POST", "/api/v1/roles/" + EXAMPLE_ID + "/groups", 204, "");
-        client.management().roles().assignToGroup(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToGroupRequest(EXAMPLE_ID, null));
+        client.management().roles().assignToGroup(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToGroupRequest(EXAMPLE_ID, null, null));
     }
 
     /** Exercises roles.unassign_from_group. */
@@ -315,6 +337,27 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     void rolesRevokePermission() throws Exception {
         mount("DELETE", "/api/v1/roles/" + EXAMPLE_ID + "/permissions/" + EXAMPLE_ID + "", 204, "");
         client.management().roles().revokePermission(EXAMPLE_ID, EXAMPLE_ID);
+    }
+
+    /** Exercises roles.list_service_accounts. */
+    @Test
+    void rolesListServiceAccounts() throws Exception {
+        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/service-accounts", 200, "[{\"service_account\": {\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"status\": \"Active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}}]");
+        client.management().roles().listServiceAccounts(EXAMPLE_ID);
+    }
+
+    /** Exercises roles.assign_to_service_account. */
+    @Test
+    void rolesAssignToServiceAccount() throws Exception {
+        mount("POST", "/api/v1/roles/" + EXAMPLE_ID + "/service-accounts", 204, "");
+        client.management().roles().assignToServiceAccount(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToServiceAccountRequest(null, EXAMPLE_ID, null));
+    }
+
+    /** Exercises roles.unassign_from_service_account. */
+    @Test
+    void rolesUnassignFromServiceAccount() throws Exception {
+        mount("DELETE", "/api/v1/roles/" + EXAMPLE_ID + "/service-accounts/" + EXAMPLE_ID + "", 204, "");
+        client.management().roles().unassignFromServiceAccount(EXAMPLE_ID, EXAMPLE_ID, null);
     }
 
     /** Exercises permissions.list. */
@@ -486,6 +529,20 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     void serviceAccountsBindCertificate() throws Exception {
         mount("POST", "/api/v1/service-accounts/" + EXAMPLE_ID + "/bind-certificate", 200, "");
         client.management().serviceAccounts().bindCertificate(EXAMPLE_ID, new io.axiam.sdk.management.models.BindCertificate(EXAMPLE_ID));
+    }
+
+    /** Exercises service_accounts.list_roles. */
+    @Test
+    void serviceAccountsListRoles() throws Exception {
+        mount("GET", "/api/v1/service-accounts/" + EXAMPLE_ID + "/roles", 200, "[{\"role\": {\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"is_global\": true, \"name\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}}]");
+        client.management().serviceAccounts().listRoles(EXAMPLE_ID);
+    }
+
+    /** Exercises service_accounts.list_groups. */
+    @Test
+    void serviceAccountsListGroups() throws Exception {
+        mount("GET", "/api/v1/service-accounts/" + EXAMPLE_ID + "/groups", 200, "[{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"metadata\": null, \"name\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}]");
+        client.management().serviceAccounts().listGroups(EXAMPLE_ID);
     }
 
     /** Exercises certificates.list. */
@@ -1111,13 +1168,16 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "federation.oidc_callback",
                 "federation.update_config",
                 "groups.add_member",
+                "groups.add_service_account",
                 "groups.create",
                 "groups.delete",
                 "groups.get",
                 "groups.list",
                 "groups.list_members",
                 "groups.list_roles",
+                "groups.list_service_accounts",
                 "groups.remove_member",
+                "groups.remove_service_account",
                 "groups.update",
                 "notification_rules.create",
                 "notification_rules.delete",
@@ -1165,6 +1225,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "resources.list_children",
                 "resources.update",
                 "roles.assign_to_group",
+                "roles.assign_to_service_account",
                 "roles.assign_to_user",
                 "roles.create",
                 "roles.delete",
@@ -1173,9 +1234,11 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "roles.list",
                 "roles.list_groups",
                 "roles.list_permissions",
+                "roles.list_service_accounts",
                 "roles.list_users",
                 "roles.revoke_permission",
                 "roles.unassign_from_group",
+                "roles.unassign_from_service_account",
                 "roles.unassign_from_user",
                 "roles.update",
                 "scim_tokens.create",
@@ -1191,6 +1254,8 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "service_accounts.delete",
                 "service_accounts.get",
                 "service_accounts.list",
+                "service_accounts.list_groups",
+                "service_accounts.list_roles",
                 "service_accounts.rotate_secret",
                 "service_accounts.update",
                 "settings.delete_tenant_override",
@@ -1224,7 +1289,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(147, exercised.size(),
+        assertEquals(155, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

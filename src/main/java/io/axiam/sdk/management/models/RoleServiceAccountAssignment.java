@@ -12,22 +12,20 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The AssignRoleToGroupRequest schema from the server's OpenAPI document.
+ * A service account together with the resource scope of its assignment.
  *
- * @param groupId the server's group_id field
- * @param resourceId the server's resource_id field
- * @param tenantScope The tenants this assignment reaches. Only meaningful for an assignment made
- *     in an organization's scope, whose global roles otherwise reach every tenant of the organization;
- *     naming tenants here confines the assignment to those and to nothing else, the organization's own
- *     scope included. Omitted — the default — reaches wherever the role does. Refused with 400 outside
- *     an organization scope, when empty, and when it names a tenant of another organization or the
- *     organization's own scope tenant.
+ * @param resourceId {@code None} means the role was assigned globally (no resource scope).
+ * @param serviceAccount The assigned service account. Carries no secret — the client secret is
+ *     returned once, at creation, and never again.
+ * @param tenantScope The tenants this assignment reaches, or omitted for "wherever the role does".
+ *     Shown next to the assignment so an operator can tell a deliberately narrowed grant from an
+ *     organization-wide one.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record AssignRoleToGroupRequest(
-        @JsonProperty("group_id") UUID groupId,
+public record RoleServiceAccountAssignment(
         @JsonProperty("resource_id") @Nullable UUID resourceId,
+        @JsonProperty("service_account") ServiceAccountResponse serviceAccount,
         @JsonProperty("tenant_scope") @Nullable List<UUID> tenantScope
 ) {
 
@@ -39,7 +37,7 @@ public record AssignRoleToGroupRequest(
      * guess which was meant. Normalising to {@code null} here means both spellings of
      * absent travel the same way — by not appearing, via {@code JsonInclude.NON_NULL}.
      */
-    public AssignRoleToGroupRequest {
+    public RoleServiceAccountAssignment {
         if (tenantScope != null && tenantScope.isEmpty()) {
             tenantScope = null;
         }

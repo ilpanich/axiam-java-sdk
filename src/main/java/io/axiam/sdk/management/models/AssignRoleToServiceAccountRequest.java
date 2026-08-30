@@ -12,10 +12,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The AssignRoleToGroupRequest schema from the server's OpenAPI document.
+ * The AssignRoleToServiceAccountRequest schema from the server's OpenAPI document.
  *
- * @param groupId the server's group_id field
  * @param resourceId the server's resource_id field
+ * @param serviceAccountId the server's service_account_id field
  * @param tenantScope The tenants this assignment reaches. Only meaningful for an assignment made
  *     in an organization's scope, whose global roles otherwise reach every tenant of the organization;
  *     naming tenants here confines the assignment to those and to nothing else, the organization's own
@@ -25,9 +25,9 @@ import java.util.UUID;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record AssignRoleToGroupRequest(
-        @JsonProperty("group_id") UUID groupId,
+public record AssignRoleToServiceAccountRequest(
         @JsonProperty("resource_id") @Nullable UUID resourceId,
+        @JsonProperty("service_account_id") UUID serviceAccountId,
         @JsonProperty("tenant_scope") @Nullable List<UUID> tenantScope
 ) {
 
@@ -39,7 +39,7 @@ public record AssignRoleToGroupRequest(
      * guess which was meant. Normalising to {@code null} here means both spellings of
      * absent travel the same way — by not appearing, via {@code JsonInclude.NON_NULL}.
      */
-    public AssignRoleToGroupRequest {
+    public AssignRoleToServiceAccountRequest {
         if (tenantScope != null && tenantScope.isEmpty()) {
             tenantScope = null;
         }
