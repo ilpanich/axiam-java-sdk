@@ -15,9 +15,23 @@ import io.axiam.sdk.Sensitive;
 /**
  * The CreateFederationConfigRequest schema from the server's OpenAPI document.
  *
+ * @param allowTenantInheritance Whether tenants of this organization may inherit this provider.
+ *     Only meaningful on a config in the organization-scope tenant.
  * @param allowedAlgorithms Accepted JWT signing algorithms (OIDC) or signature algorithms (SAML).
  *     Defaults to {@code ["RS256"]} when not provided (CQ-B40/REQ-14 AC-5).
+ * @param allowedIssuerTenants External IdP tenant identifiers accepted when the provider publishes
+ *     a templated issuer (Entra ID's {@code {tenantid}}).
+ * @param appleKeyId Apple Key ID of the {@code .p8} signing key (10 characters). With both Apple
+ *     identifiers set, {@code client_secret} is the {@code .p8} key itself and AXIAM mints a fresh
+ *     five-minute client secret per token exchange.
+ * @param appleTeamId Apple Team ID (10 characters).
  * @param attributeMap Maps external IdP attributes to AXIAM user fields.
+ * @param authorizationEndpoint OAuth2-variant authorization endpoint. Required for {@code OAuth2}.
+ * @param buttonIcon Sign-in-button icon for a **generic** provider, as a base64 raster data URL
+ *     ({@code data:image/png;base64,…}), already cropped to {@code PROVIDER_ICON_SIZE_PX} square by
+ *     the client. Refused for the branded kinds: Google, Apple and Microsoft all publish
+ *     sign-in-button rules that require their own mark, so substituting a picture would produce a
+ *     button that breaks the guidelines it exists to follow.
  * @param clientId OAuth2 client ID registered with the external IdP.
  * @param clientSecret OAuth2 client secret registered with the external IdP. -- SECRET: redacted
  *     from toString and from every JSON rendering except the one request body it is sent in
@@ -26,19 +40,42 @@ import io.axiam.sdk.Sensitive;
  * @param metadataUrl OIDC discovery URL or SAML metadata URL.
  * @param protocol Federation protocol: "OidcConnect" or "Saml".
  * @param provider Display name for the identity provider (e.g., "Google", "Okta").
+ * @param providerKind Which provider this is: {@code google}, {@code github}, {@code facebook},
+ *     {@code apple}, {@code microsoft}, {@code generic_oidc}, {@code generic_oauth2} or {@code
+ *     generic_saml}. Selects the sign-in button's branding, the per-kind defaults, and the key on
+ *     which a tenant config overrides an inherited organization one. Omitted ⇒ derived from {@code
+ *     protocol}, which is what every config written before this field existed means.
+ * @param providerSlug Operator-chosen identifier, **required** for the {@code generic_*} kinds and
+ *     refused for the branded ones.
+ * @param requirePkce Send PKCE on the authorization request. Forced on for {@code OAuth2}.
+ * @param scopes Scopes to request. Omitted or empty ⇒ the per-kind default.
+ * @param tokenEndpoint OAuth2-variant token endpoint. Required for {@code OAuth2}.
  * @param tokenExchange the server's token_exchange field
+ * @param userinfoEndpoint OAuth2-variant userinfo endpoint. Required for {@code OAuth2}.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateFederationConfigRequest(
+        @JsonProperty("allow_tenant_inheritance") @Nullable Boolean allowTenantInheritance,
         @JsonProperty("allowed_algorithms") @Nullable List<String> allowedAlgorithms,
+        @JsonProperty("allowed_issuer_tenants") @Nullable List<String> allowedIssuerTenants,
+        @JsonProperty("apple_key_id") @Nullable String appleKeyId,
+        @JsonProperty("apple_team_id") @Nullable String appleTeamId,
         @JsonProperty("attribute_map") @Nullable JsonNode attributeMap,
+        @JsonProperty("authorization_endpoint") @Nullable String authorizationEndpoint,
+        @JsonProperty("button_icon") @Nullable String buttonIcon,
         @JsonProperty("client_id") String clientId,
         @JsonProperty("client_secret") Sensitive clientSecret,
         @JsonProperty("idp_signing_cert_pem") @Nullable String idpSigningCertPem,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
         @JsonProperty("protocol") String protocol,
         @JsonProperty("provider") String provider,
-        @JsonProperty("token_exchange") @Nullable TokenExchangeTrustRequest tokenExchange
+        @JsonProperty("provider_kind") @Nullable String providerKind,
+        @JsonProperty("provider_slug") @Nullable String providerSlug,
+        @JsonProperty("require_pkce") @Nullable Boolean requirePkce,
+        @JsonProperty("scopes") @Nullable List<String> scopes,
+        @JsonProperty("token_endpoint") @Nullable String tokenEndpoint,
+        @JsonProperty("token_exchange") @Nullable TokenExchangeTrustRequest tokenExchange,
+        @JsonProperty("userinfo_endpoint") @Nullable String userinfoEndpoint
 ) {
 }

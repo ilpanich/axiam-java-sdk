@@ -219,9 +219,21 @@ class ManagementSparseBodiesGeneratedTest {
     @Test
     void updateFederationConfigRequestSendsOnlyWhatWasSet() throws Exception {
         assertKeys(UpdateFederationConfigRequest.builder()
+                .allowTenantInheritance(true).build(), "allow_tenant_inheritance");
+        assertKeys(UpdateFederationConfigRequest.builder()
                 .allowedAlgorithms(java.util.List.of()).build(), "allowed_algorithms");
         assertKeys(UpdateFederationConfigRequest.builder()
+                .allowedIssuerTenants(java.util.List.of()).build(), "allowed_issuer_tenants");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .appleKeyId("example").build(), "apple_key_id");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .appleTeamId("example").build(), "apple_team_id");
+        assertKeys(UpdateFederationConfigRequest.builder()
                 .attributeMap(JSON.createObjectNode()).build(), "attribute_map");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .authorizationEndpoint("example").build(), "authorization_endpoint");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .buttonIcon("example").build(), "button_icon");
         assertKeys(UpdateFederationConfigRequest.builder()
                 .clientId("example").build(), "client_id");
         assertKeys(UpdateFederationConfigRequest.builder()
@@ -235,21 +247,44 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateFederationConfigRequest.builder()
                 .provider("example").build(), "provider");
         assertKeys(UpdateFederationConfigRequest.builder()
+                .providerSlug("example").build(), "provider_slug");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .requirePkce(true).build(), "require_pkce");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .scopes(java.util.List.of()).build(), "scopes");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .tokenEndpoint("example").build(), "token_endpoint");
+        assertKeys(UpdateFederationConfigRequest.builder()
                 .tokenExchange(new TokenExchangeTrustRequest(null, null, null, null, null, null)).build(), "token_exchange");
         assertKeys(UpdateFederationConfigRequest.builder()
+                .userinfoEndpoint("example").build(), "userinfo_endpoint");
+        assertKeys(UpdateFederationConfigRequest.builder()
+                .allowTenantInheritance(true)
                 .allowedAlgorithms(java.util.List.of())
+                .allowedIssuerTenants(java.util.List.of())
+                .appleKeyId("example")
+                .appleTeamId("example")
                 .attributeMap(JSON.createObjectNode())
+                .authorizationEndpoint("example")
+                .buttonIcon("example")
                 .clientId("example")
                 .clientSecret(Sensitive.of("example"))
                 .enabled(true)
                 .idpSigningCertPem("example")
                 .metadataUrl("example")
                 .provider("example")
+                .providerSlug("example")
+                .requirePkce(true)
+                .scopes(java.util.List.of())
+                .tokenEndpoint("example")
                 .tokenExchange(new TokenExchangeTrustRequest(null, null, null, null, null, null))
+                .userinfoEndpoint("example")
                 .build(),
-                "allowed_algorithms", "attribute_map", "client_id", "client_secret",
-                "enabled", "idp_signing_cert_pem", "metadata_url", "provider",
-                "token_exchange");
+                "allow_tenant_inheritance", "allowed_algorithms", "allowed_issuer_tenants",
+                "apple_key_id", "apple_team_id", "attribute_map", "authorization_endpoint",
+                "button_icon", "client_id", "client_secret", "enabled", "idp_signing_cert_pem",
+                "metadata_url", "provider", "provider_slug", "require_pkce", "scopes",
+                "token_endpoint", "token_exchange", "userinfo_endpoint");
         assertKeys(UpdateFederationConfigRequest.builder().build());
     }
 
