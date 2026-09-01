@@ -10,36 +10,77 @@ import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * Federation config response -- omits client_secret.
  *
+ * @param allowTenantInheritance Whether tenants of this organization may inherit this provider.
+ * @param allowedAlgorithms Accepted signing algorithms. Returned for OIDC and SAML; meaningless,
+ *     and therefore empty, for the OAuth2 variant.
+ * @param allowedIssuerTenants Accepted external IdP tenants for a templated issuer.
+ * @param appleKeyId Apple Key ID.
+ * @param appleTeamId Apple Team ID. Not secret — the {@code .p8} key is, and it is never returned.
  * @param attributeMap the server's attribute_map field
+ * @param authorizationEndpoint OAuth2-variant authorization endpoint.
+ * @param buttonIcon Custom sign-in-button icon, when one is set.
  * @param clientId the server's client_id field
  * @param createdAt the server's created_at field
+ * @param effectiveScopes The per-kind default that an empty {@code scopes} resolves to. Returned
+ *     so the admin UI can show what will actually be requested without duplicating the table.
  * @param enabled the server's enabled field
+ * @param hasBundledMark Whether AXIAM ships this provider's own mark. When true the button uses it
+ *     and {@code button_icon} is refused; when false the button reads "Sign in with &lt;provider&gt;"
+ *     and may carry a custom icon.
  * @param id the server's id field
  * @param metadataUrl the server's metadata_url field
+ * @param mintsClientSecret Whether AXIAM mints this provider's client secret itself, per exchange,
+ *     rather than sending a stored one. True only for an Apple config with both identifiers set.
+ * @param pkceRequired Whether PKCE is sent on the authorization request. Always true for the
+ *     OAuth2 variant regardless of the stored flag.
  * @param protocol the server's protocol field
  * @param provider the server's provider field
+ * @param providerKind Which provider this is. Derived from {@code protocol} for a config written
+ *     before the field existed.
+ * @param providerSlug Operator-chosen identifier for a {@code generic_*} kind.
+ * @param scopes Scopes as stored. Empty means "use the per-kind default"; see {@code
+ *     effective_scopes}.
  * @param tenantId the server's tenant_id field
+ * @param tokenEndpoint OAuth2-variant token endpoint.
  * @param tokenExchange X4 external token-exchange trust.
  * @param updatedAt the server's updated_at field
+ * @param userinfoEndpoint OAuth2-variant userinfo endpoint.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record FederationConfigResponse(
+        @JsonProperty("allow_tenant_inheritance") Boolean allowTenantInheritance,
+        @JsonProperty("allowed_algorithms") List<String> allowedAlgorithms,
+        @JsonProperty("allowed_issuer_tenants") List<String> allowedIssuerTenants,
+        @JsonProperty("apple_key_id") @Nullable String appleKeyId,
+        @JsonProperty("apple_team_id") @Nullable String appleTeamId,
         @JsonProperty("attribute_map") JsonNode attributeMap,
+        @JsonProperty("authorization_endpoint") @Nullable String authorizationEndpoint,
+        @JsonProperty("button_icon") @Nullable String buttonIcon,
         @JsonProperty("client_id") String clientId,
         @JsonProperty("created_at") OffsetDateTime createdAt,
+        @JsonProperty("effective_scopes") List<String> effectiveScopes,
         @JsonProperty("enabled") Boolean enabled,
+        @JsonProperty("has_bundled_mark") Boolean hasBundledMark,
         @JsonProperty("id") UUID id,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
+        @JsonProperty("mints_client_secret") Boolean mintsClientSecret,
+        @JsonProperty("pkce_required") Boolean pkceRequired,
         @JsonProperty("protocol") String protocol,
         @JsonProperty("provider") String provider,
+        @JsonProperty("provider_kind") String providerKind,
+        @JsonProperty("provider_slug") @Nullable String providerSlug,
+        @JsonProperty("scopes") List<String> scopes,
         @JsonProperty("tenant_id") UUID tenantId,
+        @JsonProperty("token_endpoint") @Nullable String tokenEndpoint,
         @JsonProperty("token_exchange") TokenExchangeTrustResponse tokenExchange,
-        @JsonProperty("updated_at") OffsetDateTime updatedAt
+        @JsonProperty("updated_at") OffsetDateTime updatedAt,
+        @JsonProperty("userinfo_endpoint") @Nullable String userinfoEndpoint
 ) {
 }

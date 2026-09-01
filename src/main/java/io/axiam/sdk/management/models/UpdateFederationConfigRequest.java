@@ -19,8 +19,16 @@ import io.axiam.sdk.Sensitive;
  * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
  * builder — a canonical constructor call with six nulls in it is not something a reader can check.
  *
+ * @param allowTenantInheritance Whether tenants may inherit this organization-level provider.
  * @param allowedAlgorithms Accepted signature algorithms (CQ-B40/REQ-14 AC-5).
+ * @param allowedIssuerTenants Accepted external IdP tenants for a templated issuer. Replaced
+ *     wholesale.
+ * @param appleKeyId Apple Key ID. {@code Some(None)} clears it.
+ * @param appleTeamId Apple Team ID. {@code Some(None)} clears it.
  * @param attributeMap the server's attribute_map field
+ * @param authorizationEndpoint OAuth2-variant authorization endpoint. {@code Some(None)} clears
+ *     it.
+ * @param buttonIcon Sign-in-button icon for a generic provider. {@code Some(None)} clears it.
  * @param clientId the server's client_id field
  * @param clientSecret the server's client_secret field -- SECRET: redacted from toString and from
  *     every JSON rendering except the one request body it is sent in
@@ -29,20 +37,37 @@ import io.axiam.sdk.Sensitive;
  *     (CQ-B40/REQ-14 AC-5). {@code Some(None)} clears the stored cert.
  * @param metadataUrl the server's metadata_url field
  * @param provider the server's provider field
+ * @param providerSlug Operator-chosen identifier for a {@code generic_*} kind. {@code Some(None)}
+ *     clears it.
+ * @param requirePkce Send PKCE on the authorization request.
+ * @param scopes Scopes to request. Replaced wholesale; empty restores the per-kind default.
+ * @param tokenEndpoint OAuth2-variant token endpoint. {@code Some(None)} clears it.
  * @param tokenExchange the server's token_exchange field
+ * @param userinfoEndpoint OAuth2-variant userinfo endpoint. {@code Some(None)} clears it.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record UpdateFederationConfigRequest(
+        @JsonProperty("allow_tenant_inheritance") @Nullable Boolean allowTenantInheritance,
         @JsonProperty("allowed_algorithms") @Nullable List<String> allowedAlgorithms,
+        @JsonProperty("allowed_issuer_tenants") @Nullable List<String> allowedIssuerTenants,
+        @JsonProperty("apple_key_id") @Nullable String appleKeyId,
+        @JsonProperty("apple_team_id") @Nullable String appleTeamId,
         @JsonProperty("attribute_map") @Nullable JsonNode attributeMap,
+        @JsonProperty("authorization_endpoint") @Nullable String authorizationEndpoint,
+        @JsonProperty("button_icon") @Nullable String buttonIcon,
         @JsonProperty("client_id") @Nullable String clientId,
         @JsonProperty("client_secret") @Nullable Sensitive clientSecret,
         @JsonProperty("enabled") @Nullable Boolean enabled,
         @JsonProperty("idp_signing_cert_pem") @Nullable String idpSigningCertPem,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
         @JsonProperty("provider") @Nullable String provider,
-        @JsonProperty("token_exchange") @Nullable TokenExchangeTrustRequest tokenExchange
+        @JsonProperty("provider_slug") @Nullable String providerSlug,
+        @JsonProperty("require_pkce") @Nullable Boolean requirePkce,
+        @JsonProperty("scopes") @Nullable List<String> scopes,
+        @JsonProperty("token_endpoint") @Nullable String tokenEndpoint,
+        @JsonProperty("token_exchange") @Nullable TokenExchangeTrustRequest tokenExchange,
+        @JsonProperty("userinfo_endpoint") @Nullable String userinfoEndpoint
 ) {
 
     /**
@@ -68,15 +93,37 @@ public record UpdateFederationConfigRequest(
         private Builder() {
         }
 
+        private @Nullable Boolean allowTenantInheritance;
         private @Nullable List<String> allowedAlgorithms;
+        private @Nullable List<String> allowedIssuerTenants;
+        private @Nullable String appleKeyId;
+        private @Nullable String appleTeamId;
         private @Nullable JsonNode attributeMap;
+        private @Nullable String authorizationEndpoint;
+        private @Nullable String buttonIcon;
         private @Nullable String clientId;
         private @Nullable Sensitive clientSecret;
         private @Nullable Boolean enabled;
         private @Nullable String idpSigningCertPem;
         private @Nullable String metadataUrl;
         private @Nullable String provider;
+        private @Nullable String providerSlug;
+        private @Nullable Boolean requirePkce;
+        private @Nullable List<String> scopes;
+        private @Nullable String tokenEndpoint;
         private @Nullable TokenExchangeTrustRequest tokenExchange;
+        private @Nullable String userinfoEndpoint;
+
+        /**
+         * Sets allow_tenant_inheritance.
+         *
+         * @param allowTenantInheritance the value to send
+         * @return this builder
+         */
+        public Builder allowTenantInheritance(Boolean allowTenantInheritance) {
+            this.allowTenantInheritance = allowTenantInheritance;
+            return this;
+        }
 
         /**
          * Sets allowed_algorithms.
@@ -90,6 +137,39 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
+         * Sets allowed_issuer_tenants.
+         *
+         * @param allowedIssuerTenants the value to send
+         * @return this builder
+         */
+        public Builder allowedIssuerTenants(List<String> allowedIssuerTenants) {
+            this.allowedIssuerTenants = allowedIssuerTenants;
+            return this;
+        }
+
+        /**
+         * Sets apple_key_id.
+         *
+         * @param appleKeyId the value to send
+         * @return this builder
+         */
+        public Builder appleKeyId(String appleKeyId) {
+            this.appleKeyId = appleKeyId;
+            return this;
+        }
+
+        /**
+         * Sets apple_team_id.
+         *
+         * @param appleTeamId the value to send
+         * @return this builder
+         */
+        public Builder appleTeamId(String appleTeamId) {
+            this.appleTeamId = appleTeamId;
+            return this;
+        }
+
+        /**
          * Sets attribute_map.
          *
          * @param attributeMap the value to send
@@ -97,6 +177,28 @@ public record UpdateFederationConfigRequest(
          */
         public Builder attributeMap(JsonNode attributeMap) {
             this.attributeMap = attributeMap;
+            return this;
+        }
+
+        /**
+         * Sets authorization_endpoint.
+         *
+         * @param authorizationEndpoint the value to send
+         * @return this builder
+         */
+        public Builder authorizationEndpoint(String authorizationEndpoint) {
+            this.authorizationEndpoint = authorizationEndpoint;
+            return this;
+        }
+
+        /**
+         * Sets button_icon.
+         *
+         * @param buttonIcon the value to send
+         * @return this builder
+         */
+        public Builder buttonIcon(String buttonIcon) {
+            this.buttonIcon = buttonIcon;
             return this;
         }
 
@@ -167,6 +269,50 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
+         * Sets provider_slug.
+         *
+         * @param providerSlug the value to send
+         * @return this builder
+         */
+        public Builder providerSlug(String providerSlug) {
+            this.providerSlug = providerSlug;
+            return this;
+        }
+
+        /**
+         * Sets require_pkce.
+         *
+         * @param requirePkce the value to send
+         * @return this builder
+         */
+        public Builder requirePkce(Boolean requirePkce) {
+            this.requirePkce = requirePkce;
+            return this;
+        }
+
+        /**
+         * Sets scopes.
+         *
+         * @param scopes the value to send
+         * @return this builder
+         */
+        public Builder scopes(List<String> scopes) {
+            this.scopes = scopes;
+            return this;
+        }
+
+        /**
+         * Sets token_endpoint.
+         *
+         * @param tokenEndpoint the value to send
+         * @return this builder
+         */
+        public Builder tokenEndpoint(String tokenEndpoint) {
+            this.tokenEndpoint = tokenEndpoint;
+            return this;
+        }
+
+        /**
          * Sets token_exchange.
          *
          * @param tokenExchange the value to send
@@ -178,12 +324,23 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
+         * Sets userinfo_endpoint.
+         *
+         * @param userinfoEndpoint the value to send
+         * @return this builder
+         */
+        public Builder userinfoEndpoint(String userinfoEndpoint) {
+            this.userinfoEndpoint = userinfoEndpoint;
+            return this;
+        }
+
+        /**
          * Builds the body.
          *
          * @return a UpdateFederationConfigRequest carrying exactly the fields that were set
          */
         public UpdateFederationConfigRequest build() {
-            return new UpdateFederationConfigRequest(allowedAlgorithms, attributeMap, clientId, clientSecret, enabled, idpSigningCertPem, metadataUrl, provider, tokenExchange);
+            return new UpdateFederationConfigRequest(allowTenantInheritance, allowedAlgorithms, allowedIssuerTenants, appleKeyId, appleTeamId, attributeMap, authorizationEndpoint, buttonIcon, clientId, clientSecret, enabled, idpSigningCertPem, metadataUrl, provider, providerSlug, requirePkce, scopes, tokenEndpoint, tokenExchange, userinfoEndpoint);
         }
     }
 }
