@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta08] - 2026-09-02
+
 ### Added
+
+- The four public "Sign in with X" operations (CONTRACT §12.1, 1.38)
 
 - **Contract 1.38: the four public "Sign in with X" operations.** `ssoProviders`,
   `ssoStartOauth2`, `ssoCompleteOauth2` and `ssoCompleteHandoff`, under the exact
@@ -62,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exist and delegate.
 
 ### Changed
+
+- State contract 1.38 conformance and document the thirteen §12 operations
+
+- Regenerate the §27 surface from the re-vendored artifacts
+
+- Wire shape and the four load-bearing rules for the 1.38 operations
+
+- Re-vendor CONTRACT.md 1.38, openapi.json and management-registry.json
+
+- Bump actions/setup-java from 5.7.0 to 6.0.0
+
+- Bump com.rabbitmq:amqp-client in the minor-patch group
 
 - Re-vendored `CONTRACT.md` (1.29 → 1.38), `openapi.json` and
   `management-registry.json` byte-for-byte from `ilpanich/axiam@1c457f6`.
