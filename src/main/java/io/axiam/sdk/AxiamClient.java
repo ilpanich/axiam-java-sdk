@@ -28,6 +28,8 @@ import io.axiam.sdk.internal.SingleFlight;
 import io.axiam.sdk.oidc.AuthorizationRequest;
 import io.axiam.sdk.oidc.DeviceAuthorization;
 import io.axiam.sdk.oidc.ExchangedToken;
+import io.axiam.sdk.oidc.FederationProvider;
+import io.axiam.sdk.oidc.FederationProviderList;
 import io.axiam.sdk.oidc.RequestedPermission;
 import io.axiam.sdk.oidc.RequestingPartyToken;
 import io.axiam.sdk.oidc.ResourceSet;
@@ -166,6 +168,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private static final String DISCOVERY_PATH = "/.well-known/openid-configuration";
     private static final String SSO_START_PATH = "/api/v1/auth/federation/oidc/start";
     private static final String SSO_CALLBACK_PATH = "/api/v1/auth/federation/oidc/callback";
+    // Contract 1.38's public "Sign in with X" surface.
+    private static final String SSO_PROVIDERS_PATH = "/api/v1/auth/federation/providers";
+    private static final String SSO_OAUTH2_START_PATH = "/api/v1/auth/federation/oauth2/start";
+    private static final String SSO_OAUTH2_CALLBACK_PATH = "/api/v1/auth/federation/oauth2/callback";
+    private static final String SSO_HANDOFF_PATH = "/api/v1/auth/federation/handoff";
     /** §12.3 rule 6 floor: the discovery cache TTL is never allowed below 5 minutes. */
     private static final long MIN_OIDC_DISCOVERY_TTL_MILLIS = 300_000L;
     /** The eight query parameters {@code oidcBegin} owns (§12.1 rule 5); {@code extraParams} may not override these. */
@@ -2396,6 +2403,212 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return CompletableFuture.supplyAsync(() -> ssoComplete(state, code));
     }
 
+    @Override
+    public FederationProviderList ssoProviders(@Nullable UUID orgId, @Nullable String orgSlug,
+            @Nullable UUID tenantId, @Nullable String tenantSlug) {
+        UUID resolvedTenantId = tenantId;
+        String resolvedTenantSlug = tenantSlug;
+        if (resolvedTenantId == null && resolvedTenantSlug == null) {
+            if (UUID_PATTERN.matcher(this.tenantId).matches()) {
+                resolvedTenantId = UUID.fromString(this.tenantId);
+            } else {
+                resolvedTenantSlug = this.tenantId;
+            }
+        }
+        UUID resolvedOrgId = orgId != null ? orgId : session.configuredOrgId();
+        String resolvedOrgSlug = orgSlug != null ? orgSlug : session.configuredOrgSlug();
+
+        // Deliberately NO client-side refusal when nothing resolves. §12.1
+        // note 9 makes an unknown organization, a known one with nothing
+        // configured, and a request naming no workspace at all answer
+        // identically -- 200 with an empty list -- precisely so the endpoint
+        // cannot be used to enumerate organization or tenant slugs. Refusing
+        // here would restore that two-valued answer by another route.
+        HttpUrl.Builder url = HttpUrl.get(baseUrl + SSO_PROVIDERS_PATH).newBuilder();
+        if (resolvedOrgId != null) {
+            url.addQueryParameter("org_id", resolvedOrgId.toString());
+        } else if (resolvedOrgSlug != null) {
+            url.addQueryParameter("org_slug", resolvedOrgSlug);
+        }
+        if (resolvedTenantId != null) {
+            url.addQueryParameter("tenant_id", resolvedTenantId.toString());
+        } else if (resolvedTenantSlug != null) {
+            url.addQueryParameter("tenant_slug", resolvedTenantSlug);
+        }
+
+        Request request = new Request.Builder().url(url.build()).get().build();
+        try (Response response = executeRequest(request)) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromHttpStatus(response.code(), "ssoProviders request failed", response);
+            }
+            JsonNode wire = readJson(response);
+            List<FederationProvider> providers = new ArrayList<>();
+            for (JsonNode node : wire.path("providers")) {
+                JsonNode icon = node.get("button_icon");
+                providers.add(new FederationProvider(
+                        node.path("id").asText(),
+                        node.path("provider_kind").asText(),
+                        node.path("display_name").asText(),
+                        node.path("protocol").asText(),
+                        node.path("has_bundled_mark").asBoolean(),
+                        node.path("inherited").asBoolean(),
+                        icon == null || icon.isNull() ? null : icon.asText()));
+            }
+            return new FederationProviderList(List.copyOf(providers));
+        }
+    }
+
+    /** {@link #ssoProviders(UUID, String, UUID, String)} defaulting the whole workspace from the client's own configuration.
+     *
+     * @return the providers to offer, possibly empty
+     */
+    public FederationProviderList ssoProviders() {
+        return ssoProviders(null, null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #ssoProviders()}.
+     *
+     * @return a future resolving to the providers to offer, possibly empty
+     */
+    public CompletableFuture<FederationProviderList> ssoProvidersAsync() {
+        return CompletableFuture.supplyAsync(this::ssoProviders);
+    }
+
+    @Override
+    public SsoStartResult ssoStartOauth2(String federationConfigId, String redirectUri, @Nullable UUID tenantId,
+            @Nullable String tenantSlug, @Nullable UUID orgId, @Nullable String orgSlug) {
+        UUID resolvedTenantId = tenantId;
+        String resolvedTenantSlug = tenantSlug;
+        if (resolvedTenantId == null && resolvedTenantSlug == null) {
+            if (UUID_PATTERN.matcher(this.tenantId).matches()) {
+                resolvedTenantId = UUID.fromString(this.tenantId);
+            } else {
+                resolvedTenantSlug = this.tenantId;
+            }
+        }
+        UUID resolvedOrgId = orgId != null ? orgId : session.configuredOrgId();
+        String resolvedOrgSlug = orgSlug != null ? orgSlug : session.configuredOrgSlug();
+
+        if (resolvedTenantId == null && resolvedTenantSlug == null) {
+            throw new AuthError("ssoStartOauth2 requires tenant context: pass tenantId or tenantSlug, or "
+                    + "construct the client with one (CONTRACT.md §5.1).");
+        }
+        if (resolvedOrgId == null && resolvedOrgSlug == null) {
+            throw new AuthError("ssoStartOauth2 requires organization context: pass orgId or orgSlug, or "
+                    + "construct the client with one (CONTRACT.md §5.1).");
+        }
+
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("federation_config_id", federationConfigId);
+        body.put("redirect_uri", redirectUri);
+        if (resolvedTenantId != null) {
+            body.put("tenant_id", resolvedTenantId.toString());
+        } else {
+            body.put("tenant_slug", resolvedTenantSlug);
+        }
+        if (resolvedOrgId != null) {
+            body.put("org_id", resolvedOrgId.toString());
+        } else {
+            body.put("org_slug", resolvedOrgSlug);
+        }
+        // No PKCE anywhere in this body, and there must not be: the verifier is
+        // generated and held server-side (§12.1 note 11).
+
+        // The federation endpoints document no error schema, so this falls
+        // through to the generic §2 status mapping, never OAuthProtocolError
+        // (§12.3 rule 3 scopes that to /oauth2/*). One case is worth naming: a
+        // 400 can mean the redirectUri is not on an origin the deployment
+        // accepts (§12.1 rule 12a), and §2's 400 row makes that a NetworkError
+        // -- this taxonomy's configuration/programming-error member, distinct
+        // from the AuthError a 401 gets. It is not retried.
+        try (Response response = executeJsonPost(SSO_OAUTH2_START_PATH, body)) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromHttpStatus(response.code(), "ssoStartOauth2 request failed", response);
+            }
+            JsonNode wire = readJson(response);
+            return new SsoStartResult(
+                    wire.path("authorize_url").asText(),
+                    wire.path("state").asText(),
+                    wire.path("expires_in_secs").asLong());
+        }
+    }
+
+    /** {@link #ssoStartOauth2(String, String, UUID, String, UUID, String)} defaulting tenant/org context from the client's own configuration.
+     *
+     * @param federationConfigId UUID of the federation configuration, from the providers listing
+     * @param redirectUri        the SPA callback route, sent to the provider verbatim
+     * @return the federation start result
+     */
+    public SsoStartResult ssoStartOauth2(String federationConfigId, String redirectUri) {
+        return ssoStartOauth2(federationConfigId, redirectUri, null, null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #ssoStartOauth2(String, String)}.
+     *
+     * @param federationConfigId UUID of the federation configuration, from the providers listing
+     * @param redirectUri        the SPA callback route, sent to the provider verbatim
+     * @return a future resolving to the federation start result
+     */
+    public CompletableFuture<SsoStartResult> ssoStartOauth2Async(String federationConfigId, String redirectUri) {
+        return CompletableFuture.supplyAsync(() -> ssoStartOauth2(federationConfigId, redirectUri));
+    }
+
+    @Override
+    public SsoCompleteResult ssoCompleteOauth2(String state, String code) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("state", state);
+        body.put("code", code);
+        return completeFederationSession(SSO_OAUTH2_CALLBACK_PATH, body, "ssoCompleteOauth2");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #ssoCompleteOauth2(String, String)}.
+     *
+     * @param state the {@code state} the provider redirected back with
+     * @param code  the authorization code the provider redirected back with
+     * @return a future resolving to the federation completion result
+     */
+    public CompletableFuture<SsoCompleteResult> ssoCompleteOauth2Async(String state, String code) {
+        return CompletableFuture.supplyAsync(() -> ssoCompleteOauth2(state, code));
+    }
+
+    @Override
+    public SsoCompleteResult ssoCompleteHandoff(String code) {
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("code", code);
+        // Exactly one wire call, so a terminal 401 cannot become a retry by
+        // accident (§12.1 note 12): the code is spent either way.
+        return completeFederationSession(SSO_HANDOFF_PATH, body, "ssoCompleteHandoff");
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #ssoCompleteHandoff(String)}.
+     *
+     * @param code the single-use code read from the {@code axiam_handoff} query parameter
+     * @return a future resolving to the federation completion result
+     */
+    public CompletableFuture<SsoCompleteResult> ssoCompleteHandoffAsync(String code) {
+        return CompletableFuture.supplyAsync(() -> ssoCompleteHandoff(code));
+    }
+
+    /**
+     * The shared body of the two session-establishing federation POSTs: one
+     * wire call, the §2 status mapping on anything but success, and the same
+     * cookie-jar/CSRF sync every other response through {@code httpClient}
+     * receives (§4, §3).
+     */
+    private SsoCompleteResult completeFederationSession(String path, ObjectNode body, String operation) {
+        try (Response response = executeJsonPost(path, body)) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromHttpStatus(response.code(), operation + " request failed", response);
+            }
+            JsonNode wire = readJson(response);
+            return new SsoCompleteResult(
+                    wire.path("user_id").asText(),
+                    wire.path("session_id").asText(),
+                    wire.path("expires_in").asLong(),
+                    wire.path("redirect_uri").asText());
+        }
+    }
+
     // ------------------------------------------------------------------
     // OIDC internals
     // ------------------------------------------------------------------
@@ -3139,6 +3352,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 .url(baseUrl + path)
                 .post(RequestBody.create(payload, JSON))
                 .build();
+        try {
+            return httpClient.newCall(request).execute();
+        } catch (IOException e) {
+            throw new NetworkError("request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** Execute a prepared request, mapping a transport failure to {@link NetworkError}. */
+    private Response executeRequest(Request request) {
         try {
             return httpClient.newCall(request).execute();
         } catch (IOException e) {

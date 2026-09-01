@@ -10,9 +10,11 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
- * The nine canonical OIDC / SSO relying-party operations (CONTRACT.md
+ * The thirteen canonical OIDC / SSO relying-party operations (CONTRACT.md
  * &sect;12.1/&sect;12.2), implemented by {@code AxiamClient} directly — not a
  * parallel client type (CONTRACT.md &sect;12 T1 reference judgment call 1).
+ * Contract 1.38 added the last four, the public "Sign in with X" entry points,
+ * onto the same object.
  *
  * <p>Each method below is the <strong>canonical</strong>, full-argument
  * signature; {@code AxiamClient} additionally exposes convenience overloads
@@ -157,6 +159,105 @@ public interface OidcOperations {
      * @return the federation completion result
      */
     SsoCompleteResult ssoComplete(String state, String code);
+
+    /**
+     * {@code GET /api/v1/auth/federation/providers} (CONTRACT.md &sect;12.1,
+     * contract 1.38) — which "Sign in with X" buttons to render for a
+     * workspace. The identifiers travel as <strong>query</strong> parameters;
+     * this is a {@code GET} and sends no body.
+     *
+     * <p><strong>An empty list is a success.</strong> An unknown organization,
+     * a known one with nothing configured, and a request naming no workspace at
+     * all all answer {@code 200} with an empty {@code providers} array
+     * (&sect;12.1 note 9). This method returns every one of them as an ordinary
+     * result and never synthesises a not-found: the endpoint is deliberately
+     * shaped so it cannot be used to enumerate organization or tenant slugs,
+     * and an SDK that reintroduced the distinction would reintroduce the
+     * oracle. A caller learns it named the workspace wrongly at the start
+     * operations, where every failure is a uniform {@code 401}.
+     *
+     * <p>For the same reason this is the one federation operation that does
+     * <strong>not</strong> refuse client-side when no workspace resolves.
+     *
+     * @param orgId      organization UUID; {@code null} to default to the client's configuration
+     * @param orgSlug    organization slug, alternative to {@code orgId}; {@code null} to default to the client's configuration
+     * @param tenantId   tenant UUID; {@code null} to default to the client's configuration
+     * @param tenantSlug tenant slug, alternative to {@code tenantId}; {@code null} to default to the client's configuration
+     * @return the providers to offer, possibly empty
+     */
+    FederationProviderList ssoProviders(@Nullable UUID orgId, @Nullable String orgSlug,
+            @Nullable UUID tenantId, @Nullable String tenantSlug);
+
+    /**
+     * {@code POST /api/v1/auth/federation/oauth2/start} (CONTRACT.md
+     * &sect;12.1, contract 1.38) — step 1 of a login through a
+     * <strong>plain-OAuth2</strong> upstream (GitHub, Facebook,
+     * {@code generic_oauth2}).
+     *
+     * <p>Call this, rather than
+     * {@link #ssoStart(String, String, UUID, String, UUID, String)}, exactly
+     * when the provider's {@code protocol} is
+     * {@link FederationProvider#PROTOCOL_OAUTH2} (&sect;12.1 note 10). The
+     * server refuses a mismatch with {@code 400} rather than accepting it
+     * silently, so a client that assumes OIDC fails on every GitHub button.
+     *
+     * <p>PKCE is mandatory on this path and is generated and stored
+     * <strong>server-side</strong>; nothing about it appears in the request or
+     * the response (&sect;12.1 note 11).
+     *
+     * @param federationConfigId UUID of the federation configuration, from {@link FederationProvider#id()}
+     * @param redirectUri        the SPA callback route, sent to the provider verbatim
+     * @param tenantId           tenant UUID; {@code null} to default to the client's configuration
+     * @param tenantSlug         tenant slug, alternative to {@code tenantId}; {@code null} to default to the client's configuration
+     * @param orgId              organization UUID; {@code null} to default to the client's configuration
+     * @param orgSlug            organization slug, alternative to {@code orgId}; {@code null} to default to the client's configuration
+     * @return the federation start result
+     * @throws io.axiam.sdk.errors.AuthError client-side, without a wire call, when tenant or organization context cannot be resolved
+     */
+    SsoStartResult ssoStartOauth2(String federationConfigId, String redirectUri, @Nullable UUID tenantId,
+            @Nullable String tenantSlug, @Nullable UUID orgId, @Nullable String orgSlug);
+
+    /**
+     * {@code POST /api/v1/auth/federation/oauth2/callback} (CONTRACT.md
+     * &sect;12.1, contract 1.38) — step 2 of a plain-OAuth2 login.
+     *
+     * <p>The session arrives as {@code Set-Cookie} (&sect;12.1 note 6) through
+     * the same &sect;4 cookie jar {@code ssoComplete} uses. &sect;12.4 does not
+     * apply: an {@code OAuth2} provider issues no ID token, so there is nothing
+     * to validate — the server authenticated the user by calling a configured
+     * userinfo endpoint with the access token it had just received (&sect;12.1
+     * note 11).
+     *
+     * @param state the {@code state} the provider redirected back with — the one {@code ssoStartOauth2} returned
+     * @param code  the authorization code the provider redirected back with
+     * @return the federation completion result
+     */
+    SsoCompleteResult ssoCompleteOauth2(String state, String code);
+
+    /**
+     * {@code POST /api/v1/auth/federation/handoff} (CONTRACT.md &sect;12.1,
+     * contract 1.38) — redeem the single-use code the SAML and Apple flows
+     * deliver.
+     *
+     * <p>Those two protocols return <strong>cross-site</strong>, so the server
+     * cannot set {@code SameSite=Strict} session cookies on that response. It
+     * instead redirects the browser to the SPA's callback URL with an
+     * {@link FederationProviderList#HANDOFF_QUERY_PARAM} query parameter; this
+     * call posts that code back same-origin, and <em>this</em> response is the
+     * one that carries the cookies (&sect;12.1 note 12).
+     *
+     * <p><strong>The code is gone either way.</strong> It is valid for
+     * {@link FederationProviderList#HANDOFF_CODE_TTL_SECONDS} seconds and
+     * redeemable <strong>once</strong>. Redeem it from the same origin,
+     * immediately, and never retry a failed redemption: a {@code 401} is
+     * terminal, and this method makes exactly one wire call so that it cannot
+     * become a retry by accident. Unknown, expired and already-redeemed all
+     * answer the same {@code 401}, deliberately.
+     *
+     * @param code the single-use code read from the {@code axiam_handoff} query parameter
+     * @return the federation completion result
+     */
+    SsoCompleteResult ssoCompleteHandoff(String code);
 
     // -----------------------------------------------------------------------
     // §14 Device Authorization Grant (RFC 8628)
