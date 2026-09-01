@@ -24,8 +24,8 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19, §20, §22,
-§23, §24, §25, §26, §27 — including §6.1 mTLS (client-certificate authentication),
+This SDK conforms to **contract 1.38**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+§20, §22, §23, §24, §25, §26, §27 — including §6.1 mTLS (client-certificate authentication),
 the §1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum local-verification
 set, the §12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifier,
 the §20 UMA 2.0 Protection API and ticket grant, the §22 reactor runtime, the §23
@@ -326,7 +326,7 @@ The annotated controller is demonstrated in
 
 ## OIDC / SSO relying-party helpers (`io.axiam.sdk.oidc`)
 
-CONTRACT.md §12 adds nine operations for offering "Login with AXIAM"
+CONTRACT.md §12 adds thirteen operations for offering "Login with AXIAM"
 (authorization-code + PKCE against AXIAM's own OIDC provider), service-account
 `client_credentials` login, token introspection/revocation, and driving the
 server's upstream-IdP federation endpoints. They are exposed directly on the
@@ -346,6 +346,73 @@ JWKS verifier the §10 middleware uses).
 | `revoke(token, tokenTypeHint, tenantId, configuration)` | `POST /oauth2/revoke` (confidential clients only; idempotent) |
 | `ssoStart(federationConfigId, redirectUri, tenantId, tenantSlug, orgId, orgSlug)` | `POST /api/v1/auth/federation/oidc/start` |
 | `ssoComplete(state, code)` | `POST /api/v1/auth/federation/oidc/callback` (session via `Set-Cookie`) |
+| `ssoProviders(orgId, orgSlug, tenantId, tenantSlug)` | `GET /api/v1/auth/federation/providers` — identifiers in the **query string**, not a body. An **empty list is a success** |
+| `ssoStartOauth2(federationConfigId, redirectUri, tenantId, tenantSlug, orgId, orgSlug)` | `POST /api/v1/auth/federation/oauth2/start` — a **plain-OAuth2** upstream (GitHub, Facebook, `generic_oauth2`); PKCE is mandatory and **server-side** |
+| `ssoCompleteOauth2(state, code)` | `POST /api/v1/auth/federation/oauth2/callback` (session via `Set-Cookie`) |
+| `ssoCompleteHandoff(code)` | `POST /api/v1/auth/federation/handoff` — redeems the single-use `axiam_handoff` code the SAML and Apple flows deliver. Valid 60 s, redeemable **once**; a `401` is terminal and is **never retried** |
+
+#### The four public login-provider operations, and their rules (contract 1.38)
+
+**An empty provider list is a success** (§12.1 note 9). An unknown organization, a
+known one with nothing configured, and a request naming no workspace at all *all*
+answer `200` with an empty array. `ssoProviders` returns every one of them as an
+ordinary result and never synthesises a not-found: the endpoint is deliberately
+shaped so it cannot be used to enumerate organization or tenant slugs, and telling
+the three apart client-side would rebuild that oracle. For the same reason
+`ssoProviders` is the one federation operation that does **not** throw
+client-side when no workspace resolves — it sends the request. You learn you named
+the workspace wrongly at the start operations, where every failure is a uniform
+`401`.
+
+**`protocol` selects which start operation to call** (§12.1 note 10) — never
+`providerKind`, which is branding:
+
+| `provider.protocol()` | call |
+|---|---|
+| `FederationProvider.PROTOCOL_OIDC_CONNECT` | `ssoStart` |
+| `FederationProvider.PROTOCOL_OAUTH2` | `ssoStartOauth2` |
+| `FederationProvider.PROTOCOL_SAML` | the SAML login endpoint — not a §12 vocabulary operation |
+
+The server refuses a mismatch with `400` rather than accepting it silently, so a
+client that assumes OIDC fails on every GitHub button. An `OAuth2` provider also
+issues **no ID token**: the server authenticates by calling a configured userinfo
+endpoint, so there is no signature, no `nonce` and no `aud`. A UI rendering these
+buttons should make that distinction visible rather than presenting the two as
+equivalent.
+
+**`FederationProvider` is modelled faithfully** — `id`, `providerKind`,
+`displayName`, `protocol`, `hasBundledMark`, `inherited`, and the nullable
+`buttonIcon` (a `data:` URL, absent for most providers). Inheritance from the
+organization is resolved **server-side** (§12.1 note 13): pass back the workspace
+and the `id` `ssoProviders` gave you, and compute nothing locally. `inherited` is
+reported so an admin surface can show that a provider is not the tenant's to edit.
+
+**A `400` from a start call is a configuration refusal** (§12.1 rule 12a). On the
+SAML and Apple flows the identity provider never validates the SPA `redirectUri`,
+so the server confines it to its own issuer origin plus
+`AXIAM__AUTH__SSO_SPA_ORIGINS`. That refusal surfaces as **`NetworkError`** — §2's
+`400` row, the taxonomy's configuration/programming-error member, as distinct from
+the `AuthError` a `401` gets — and is not retried, because the same origin will be
+refused again. Never build a `redirectUri` out of anything the identity provider
+supplied.
+
+```java
+FederationProviderList list = client.ssoProviders();
+// An empty list is normal: render a password form, not an error.
+for (FederationProvider provider : list.providers()) {
+    switch (provider.protocol()) {
+        case FederationProvider.PROTOCOL_OIDC_CONNECT ->
+                client.ssoStart(provider.id(), redirectUri);
+        case FederationProvider.PROTOCOL_OAUTH2 ->
+                client.ssoStartOauth2(provider.id(), redirectUri);
+        default -> { /* Saml: use the SAML login endpoint */ }
+    }
+}
+
+// SAML / Apple come back through a handoff code on your own callback route.
+String code = request.getParameter(FederationProviderList.HANDOFF_QUERY_PARAM);
+SsoCompleteResult session = client.ssoCompleteHandoff(code); // once, never retried
+```
 
 Each also has a `*Async` `CompletableFuture` companion (`oidcExchangeAsync`, …)
 per CONTRACT.md §12.2's Java note, and a bare-`String` convenience overload
