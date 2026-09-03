@@ -40,6 +40,7 @@ import org.jspecify.annotations.Nullable;
  * @param requireLowercase the server's require_lowercase field
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
+ * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -67,7 +68,8 @@ public record TenantSettingsOverride(
         @JsonProperty("require_digits") @Nullable Boolean requireDigits,
         @JsonProperty("require_lowercase") @Nullable Boolean requireLowercase,
         @JsonProperty("require_symbols") @Nullable Boolean requireSymbols,
-        @JsonProperty("require_uppercase") @Nullable Boolean requireUppercase
+        @JsonProperty("require_uppercase") @Nullable Boolean requireUppercase,
+        @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 
     /**
@@ -117,6 +119,7 @@ public record TenantSettingsOverride(
         private @Nullable Boolean requireLowercase;
         private @Nullable Boolean requireSymbols;
         private @Nullable Boolean requireUppercase;
+        private @Nullable String webauthnUserVerification;
 
         /**
          * Sets access_token_lifetime_secs.
@@ -383,12 +386,23 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets webauthn_user_verification.
+         *
+         * @param webauthnUserVerification the value to send
+         * @return this builder
+         */
+        public Builder webauthnUserVerification(String webauthnUserVerification) {
+            this.webauthnUserVerification = webauthnUserVerification;
+            return this;
+        }
+
+        /**
          * Builds the body.
          *
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, defaultCertValidityDays, deletionGracePeriodDays, emailVerificationGracePeriodHours, emailVerificationRequired, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, defaultCertValidityDays, deletionGracePeriodDays, emailVerificationGracePeriodHours, emailVerificationRequired, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, webauthnUserVerification);
         }
     }
 }

@@ -40,6 +40,7 @@ import org.jspecify.annotations.Nullable;
  * @param requireLowercase the server's require_lowercase field
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
+ * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -67,6 +68,7 @@ public record SetOrgSettings(
         @JsonProperty("require_digits") Boolean requireDigits,
         @JsonProperty("require_lowercase") Boolean requireLowercase,
         @JsonProperty("require_symbols") Boolean requireSymbols,
-        @JsonProperty("require_uppercase") Boolean requireUppercase
+        @JsonProperty("require_uppercase") Boolean requireUppercase,
+        @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 }

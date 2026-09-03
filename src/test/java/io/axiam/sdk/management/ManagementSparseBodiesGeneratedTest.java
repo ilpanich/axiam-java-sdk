@@ -151,6 +151,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .requireUppercase(true).build(), "require_uppercase");
         assertKeys(TenantSettingsOverride.builder()
+                .webauthnUserVerification("example").build(), "webauthn_user_verification");
+        assertKeys(TenantSettingsOverride.builder()
                 .accessTokenLifetimeSecs(1L)
                 .adminNotificationsEnabled(true)
                 .defaultCertValidityDays(1)
@@ -175,6 +177,7 @@ class ManagementSparseBodiesGeneratedTest {
                 .requireLowercase(true)
                 .requireSymbols(true)
                 .requireUppercase(true)
+                .webauthnUserVerification("example")
                 .build(),
                 "access_token_lifetime_secs", "admin_notifications_enabled", "default_cert_validity_days",
                 "deletion_grace_period_days", "email_verification_grace_period_hours",
@@ -183,7 +186,7 @@ class ManagementSparseBodiesGeneratedTest {
                 "max_lockout_duration_secs", "mfa_challenge_lifetime_secs", "mfa_enforced",
                 "min_length", "opaque_ksf", "opaque_mode", "opaque_suite", "password_history_count",
                 "refresh_token_lifetime_secs", "require_digits", "require_lowercase",
-                "require_symbols", "require_uppercase");
+                "require_symbols", "require_uppercase", "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder().build());
     }
 
