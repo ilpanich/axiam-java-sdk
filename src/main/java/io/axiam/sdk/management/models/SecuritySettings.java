@@ -27,6 +27,7 @@ import java.util.UUID;
  * @param scopeId the server's scope_id field
  * @param token the server's token field
  * @param updatedAt the server's updated_at field
+ * @param webauthn the server's webauthn field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -44,6 +45,7 @@ public record SecuritySettings(
         @JsonProperty("scope") SettingsScope scope,
         @JsonProperty("scope_id") UUID scopeId,
         @JsonProperty("token") TokenPolicy token,
-        @JsonProperty("updated_at") OffsetDateTime updatedAt
+        @JsonProperty("updated_at") OffsetDateTime updatedAt,
+        @JsonProperty("webauthn") WebauthnPolicy webauthn
 ) {
 }
