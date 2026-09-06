@@ -34,6 +34,7 @@ import io.axiam.sdk.oidc.RequestedPermission;
 import io.axiam.sdk.oidc.RequestingPartyToken;
 import io.axiam.sdk.oidc.ResourceSet;
 import io.axiam.sdk.oidc.IdTokenClaims;
+import io.axiam.sdk.oidc.MtlsEndpointAliases;
 import io.axiam.sdk.oidc.IdTokenValidator;
 import io.axiam.sdk.oidc.IntrospectionResult;
 import io.axiam.sdk.oidc.OidcConfiguration;
@@ -110,6 +111,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
@@ -229,6 +231,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     /** §19 telemetry dispatcher. Inert unless a hook was installed. */
     private final TelemetryDispatcher telemetry;
+
+    /**
+     * Whether this client was built with a &sect;6.1 mTLS identity
+     * ({@code clientCertificate(...)}), and so whether CONTRACT.md &sect;21.3
+     * rule 2 applies to the calls it makes.
+     *
+     * <p>The identity is configured once and presented on every request, so
+     * "is this call going over mutual TLS" has a whole-client answer here
+     * rather than a per-call one.
+     */
+    private final boolean presentsClientCertificate;
 
     /** §18 shutdown flag, read on every operation. */
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -602,6 +615,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         KeyManager[] keyManagers = (b.clientCertPem != null && b.clientKeyPem != null)
                 ? buildKeyManagers(b.clientCertPem, b.clientKeyPem)
                 : null;
+        // §6.1 is all-or-nothing: the Builder has already refused a
+        // half-configured pair, so a non-null keyManagers is the identity.
+        this.presentsClientCertificate = keyManagers != null;
         SSLContext sslContext = buildStrictSslContext(trustManager, keyManagers);
 
         OkHttpClient.Builder clientBuilder = b.overrideHttpClient != null
@@ -2203,7 +2219,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (tokenTypeHint != null) {
             form.add("token_type_hint", tokenTypeHint);
         }
-        String url = oauth2Url(config.introspection_endpoint(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::introspection_endpoint,
+                        config.introspection_endpoint()),
+                tenantId);
         try (Response response = executeFormPost(url, form.build())) {
             if (!response.isSuccessful()) {
                 throw ErrorMapper.fromOAuth2Response(response.code(), response, "introspect request failed");
@@ -2258,7 +2277,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (tokenTypeHint != null) {
             form.add("token_type_hint", tokenTypeHint);
         }
-        String url = oauth2Url(config.revocation_endpoint(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::revocation_endpoint,
+                        config.revocation_endpoint()),
+                tenantId);
         try (Response response = executeFormPost(url, form.build())) {
             if (!response.isSuccessful()) {
                 throw ErrorMapper.fromOAuth2Response(response.code(), response, "revoke request failed");
@@ -2648,7 +2670,99 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 wire.hasNonNull("end_session_endpoint")
                         ? wire.get("end_session_endpoint").asText() : null,
                 wire.path("backchannel_logout_supported").asBoolean(false),
-                wire.path("backchannel_logout_session_supported").asBoolean(false));
+                wire.path("backchannel_logout_session_supported").asBoolean(false),
+                parseMtlsEndpointAliases(wire));
+    }
+
+    /**
+     * Parses the RFC 8705 &sect;5 {@code mtls_endpoint_aliases} object
+     * (contract 1.40, CONTRACT.md &sect;21.3 rule 2), or {@code null} when the
+     * document carries none.
+     *
+     * <p>Absence is never an error: it means "no separate mTLS host", not
+     * "mTLS unsupported". Each member is read independently, so a partial
+     * object — which RFC 8705 &sect;5 permits — aliases what it names and
+     * leaves the rest falling back to the top-level entries, rather than
+     * failing the whole document.
+     */
+    private static @Nullable MtlsEndpointAliases parseMtlsEndpointAliases(JsonNode wire) {
+        if (!wire.hasNonNull("mtls_endpoint_aliases")) {
+            return null;
+        }
+        JsonNode aliases = wire.get("mtls_endpoint_aliases");
+        return new MtlsEndpointAliases(
+                aliasEntry(aliases, "token_endpoint"),
+                aliasEntry(aliases, "userinfo_endpoint"),
+                aliasEntry(aliases, "revocation_endpoint"),
+                aliasEntry(aliases, "introspection_endpoint"),
+                aliasEntry(aliases, "device_authorization_endpoint"),
+                aliasEntry(aliases, "pushed_authorization_request_endpoint"));
+    }
+
+    private static @Nullable String aliasEntry(JsonNode aliases, String field) {
+        return aliases.hasNonNull(field) ? aliases.get(field).asText() : null;
+    }
+
+    /**
+     * The endpoint a call should use, preferring its RFC 8705 &sect;5 alias
+     * when this client presents a &sect;6.1 certificate (CONTRACT.md
+     * &sect;21.3 rule 2).
+     *
+     * <p>Three things this deliberately does NOT do, each of them a documented
+     * way to get rule 2 wrong:
+     *
+     * <ul>
+     *   <li>An absent {@code mtls_endpoint_aliases} is never an error. It means
+     *       "no separate mTLS host", not "mTLS unsupported" — a deployment
+     *       running {@code client_auth = optional} on one listener serves both
+     *       populations at the conventional endpoints and correctly publishes
+     *       nothing.</li>
+     *   <li>{@code pick} can only reach {@link MtlsEndpointAliases}, so
+     *       {@code authorization_endpoint}, {@code end_session_endpoint} and
+     *       {@code jwks_uri} are unreachable rather than merely unused: they
+     *       are front-channel or public, and an mTLS host would raise a
+     *       certificate-chooser dialog in the user's browser.</li>
+     *   <li>{@code issuer} is untouched. It is an identifier, not an endpoint,
+     *       and &sect;12.4 rule 3 still compares a token's {@code iss} against
+     *       {@code configuration.issuer()} by exact string — including for a
+     *       token minted at an alias endpoint.</li>
+     * </ul>
+     *
+     * <p>A {@code null} result for a conditionally-advertised endpoint still
+     * means "this server does not support the feature" — the caller raises
+     * that, and never concatenates a URL onto the issuer.
+     */
+    private String preferredEndpoint(
+            OidcConfiguration configuration,
+            Function<MtlsEndpointAliases, @Nullable String> pick,
+            String topLevel) {
+        String resolved = preferredEndpointOrNull(configuration, pick, topLevel);
+        return resolved == null ? topLevel : resolved;
+    }
+
+    /**
+     * {@link #preferredEndpoint} for a conditionally-advertised endpoint,
+     * where {@code null} at both levels still means "this server does not
+     * support the feature" — the caller raises that, and never concatenates a
+     * URL onto the issuer.
+     *
+     * @param configuration the discovery document
+     * @param pick          selects the endpoint from the alias object
+     * @param topLevel      the top-level entry of the same name, or {@code null}
+     * @return the alias, else the top-level entry, else {@code null}
+     */
+    private @Nullable String preferredEndpointOrNull(
+            OidcConfiguration configuration,
+            Function<MtlsEndpointAliases, @Nullable String> pick,
+            @Nullable String topLevel) {
+        MtlsEndpointAliases aliases = configuration.mtls_endpoint_aliases();
+        if (presentsClientCertificate && aliases != null) {
+            String alias = pick.apply(aliases);
+            if (alias != null && !alias.isEmpty()) {
+                return alias;
+            }
+        }
+        return topLevel;
     }
 
     private static List<String> textList(JsonNode wire, String field) {
@@ -2725,7 +2839,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public DeviceAuthorization deviceAuthorize(@Nullable String scope, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration) {
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
-        String endpoint = config.device_authorization_endpoint();
+        String endpoint = preferredEndpointOrNull(config, MtlsEndpointAliases::device_authorization_endpoint,
+                config.device_authorization_endpoint());
         if (endpoint == null || endpoint.isEmpty()) {
             throw new AuthError("the authorization server's discovery document advertises no "
                     + "device_authorization_endpoint: this server does not support the device grant "
@@ -2895,7 +3010,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         form.add("client_id", requireOidcClientId());
         form.add("client_secret", requireOidcClientSecret("tokenExchange"));
 
-        String url = oauth2Url(config.token_endpoint(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::token_endpoint, config.token_endpoint()),
+                tenantId);
         try (Response response = executeFormPost(url, form.build())) {
             if (!response.isSuccessful()) {
                 throw ErrorMapper.fromOAuth2Response(response.code(), response,
@@ -3005,7 +3122,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 .add("client_id", requireOidcClientId())
                 .add("client_secret", requireOidcClientSecret("umaExchangeTicket"));
 
-        String url = oauth2Url(config.token_endpoint(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::token_endpoint, config.token_endpoint()),
+                tenantId);
         // One POST, no retry wrapper. See the interface's rule-6 note — this is
         // the §16 exception, and it is load-bearing rather than stylistic.
         try (Response response = executeFormPost(url, form.build())) {
@@ -3281,7 +3400,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     private JsonNode postToken(OidcConfiguration configuration, RequestBody form, @Nullable UUID tenantId) {
-        String url = oauth2Url(configuration.token_endpoint(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(configuration, MtlsEndpointAliases::token_endpoint,
+                        configuration.token_endpoint()),
+                tenantId);
         try (Response response = executeFormPost(url, form)) {
             if (!response.isSuccessful()) {
                 throw ErrorMapper.fromOAuth2Response(response.code(), response, "token request failed");
@@ -3513,7 +3635,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             @Nullable UUID tenantId) {
         ensureOpen();
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
-        String endpoint = config.pushed_authorization_request_endpoint();
+        String endpoint = preferredEndpointOrNull(config, MtlsEndpointAliases::pushed_authorization_request_endpoint,
+                config.pushed_authorization_request_endpoint());
         if (endpoint == null || endpoint.isEmpty()) {
             throw new AuthError("the authorization server's discovery document advertises no "
                     + "pushed_authorization_request_endpoint: this server does not support RFC 9126 "
