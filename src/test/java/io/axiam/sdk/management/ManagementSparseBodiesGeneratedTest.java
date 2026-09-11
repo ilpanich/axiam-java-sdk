@@ -9,6 +9,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.axiam.sdk.Sensitive;
 import io.axiam.sdk.internal.ManagementTransport;
 import io.axiam.sdk.management.models.ApiProviderConfig;
+import io.axiam.sdk.management.models.AuthnRequestParamsMode;
 import io.axiam.sdk.management.models.ClientAuthMethod;
 import io.axiam.sdk.management.models.ClientProfile;
 import io.axiam.sdk.management.models.EmailConfigOverride;
@@ -109,6 +110,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .defaultCertValidityDays(1).build(), "default_cert_validity_days");
         assertKeys(TenantSettingsOverride.builder()
+                .defaultLocale("example").build(), "default_locale");
+        assertKeys(TenantSettingsOverride.builder()
                 .deletionGracePeriodDays(1).build(), "deletion_grace_period_days");
         assertKeys(TenantSettingsOverride.builder()
                 .emailVerificationGracePeriodHours(1).build(), "email_verification_grace_period_hours");
@@ -151,11 +154,14 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .requireUppercase(true).build(), "require_uppercase");
         assertKeys(TenantSettingsOverride.builder()
+                .sensitiveScopesEnabled(true).build(), "sensitive_scopes_enabled");
+        assertKeys(TenantSettingsOverride.builder()
                 .webauthnUserVerification("example").build(), "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder()
                 .accessTokenLifetimeSecs(1L)
                 .adminNotificationsEnabled(true)
                 .defaultCertValidityDays(1)
+                .defaultLocale("example")
                 .deletionGracePeriodDays(1)
                 .emailVerificationGracePeriodHours(1)
                 .emailVerificationRequired(true)
@@ -177,16 +183,18 @@ class ManagementSparseBodiesGeneratedTest {
                 .requireLowercase(true)
                 .requireSymbols(true)
                 .requireUppercase(true)
+                .sensitiveScopesEnabled(true)
                 .webauthnUserVerification("example")
                 .build(),
                 "access_token_lifetime_secs", "admin_notifications_enabled", "default_cert_validity_days",
-                "deletion_grace_period_days", "email_verification_grace_period_hours",
+                "default_locale", "deletion_grace_period_days", "email_verification_grace_period_hours",
                 "email_verification_required", "hibp_check_enabled", "lockout_backoff_multiplier",
                 "lockout_duration_secs", "max_cert_validity_days", "max_failed_login_attempts",
                 "max_lockout_duration_secs", "mfa_challenge_lifetime_secs", "mfa_enforced",
                 "min_length", "opaque_ksf", "opaque_mode", "opaque_suite", "password_history_count",
                 "refresh_token_lifetime_secs", "require_digits", "require_lowercase",
-                "require_symbols", "require_uppercase", "webauthn_user_verification");
+                "require_symbols", "require_uppercase", "sensitive_scopes_enabled",
+                "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder().build());
     }
 
@@ -337,7 +345,11 @@ class ManagementSparseBodiesGeneratedTest {
     @Test
     void updateOAuth2ClientRequestSendsOnlyWhatWasSet() throws Exception {
         assertKeys(UpdateOAuth2ClientRequest.builder()
+                .authnRequestParams(AuthnRequestParamsMode.IGNORE).build(), "authn_request_params");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
                 .backchannelLogoutUri("example").build(), "backchannel_logout_uri");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
+                .browserSso(true).build(), "browser_sso");
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .dpopBoundAccessTokens(true).build(), "dpop_bound_access_tokens");
         assertKeys(UpdateOAuth2ClientRequest.builder()
@@ -373,7 +385,9 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .tokenEndpointAuthMethod(ClientAuthMethod.CLIENT_SECRET_POST).build(), "token_endpoint_auth_method");
         assertKeys(UpdateOAuth2ClientRequest.builder()
+                .authnRequestParams(AuthnRequestParamsMode.IGNORE)
                 .backchannelLogoutUri("example")
+                .browserSso(true)
                 .dpopBoundAccessTokens(true)
                 .dpopRequireNonce(true)
                 .grantTypes(java.util.List.of())
@@ -392,9 +406,10 @@ class ManagementSparseBodiesGeneratedTest {
                 .tlsClientCertificateBoundAccessTokens(true)
                 .tokenEndpointAuthMethod(ClientAuthMethod.CLIENT_SECRET_POST)
                 .build(),
-                "backchannel_logout_uri", "dpop_bound_access_tokens", "dpop_require_nonce",
-                "grant_types", "jwks", "jwks_uri", "name", "post_logout_redirect_uris",
-                "profile", "redirect_uris", "require_par", "scopes", "self_signed_tls_client_auth_thumbprints",
+                "authn_request_params", "backchannel_logout_uri", "browser_sso",
+                "dpop_bound_access_tokens", "dpop_require_nonce", "grant_types",
+                "jwks", "jwks_uri", "name", "post_logout_redirect_uris", "profile",
+                "redirect_uris", "require_par", "scopes", "self_signed_tls_client_auth_thumbprints",
                 "tls_client_auth_san_dns", "tls_client_auth_san_uri", "tls_client_auth_subject_dn",
                 "tls_client_certificate_bound_access_tokens", "token_endpoint_auth_method");
         assertKeys(UpdateOAuth2ClientRequest.builder().build());

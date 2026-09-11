@@ -114,4 +114,65 @@ public final class PrivacyApi {
                 "/api/v1/auth/account/delete/cancel", "/api/v1/auth/account/delete/cancel", query, null);
     }
 
+    /**
+     * Issues GET /api/v1/account/consents.
+     *
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public java.util.List<io.axiam.sdk.management.models.ConsentView> listConsents() {
+        final String operation = "privacy.list_consents";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/account/consents", "/api/v1/account/consents", query, null);
+        return ManagementSupport.convertList(node, io.axiam.sdk.management.models.ConsentView.class, operation);
+    }
+
+    /**
+     * Issues POST /api/v1/account/consents/oidc-scopes.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param body the request body
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void grantScopeConsent(io.axiam.sdk.management.models.GrantScopeConsent body) {
+        final String operation = "privacy.grant_scope_consent";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        transport.send(operation, "POST",
+                "/api/v1/account/consents/oidc-scopes", "/api/v1/account/consents/oidc-scopes", query, body);
+    }
+
+    /**
+     * Issues DELETE /api/v1/account/consents/oidc-scopes/{client_id}.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param clientId the client_id path parameter
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public void withdrawScopeConsent(String clientId) {
+        final String operation = "privacy.withdraw_scope_consent";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        transport.send(operation, "DELETE",
+                "/api/v1/account/consents/oidc-scopes/{client_id}", "/api/v1/account/consents/oidc-scopes/" + java.net.URLEncoder.encode(clientId, java.nio.charset.StandardCharsets.UTF_8) + "", query, null);
+    }
+
 }

@@ -18,6 +18,8 @@ import org.jspecify.annotations.Nullable;
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
  * @param defaultCertValidityDays the server's default_cert_validity_days field
+ * @param defaultLocale The tenant's fallback UI language. Not ordered, therefore not validated
+ *     against the baseline and never clamped — see [{@code OidcPolicy}].
  * @param deletionGracePeriodDays the server's deletion_grace_period_days field
  * @param emailVerificationGracePeriodHours the server's email_verification_grace_period_hours
  *     field
@@ -40,6 +42,7 @@ import org.jspecify.annotations.Nullable;
  * @param requireLowercase the server's require_lowercase field
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
+ * @param sensitiveScopesEnabled the server's sensitive_scopes_enabled field
  * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -48,6 +51,7 @@ public record TenantSettingsOverride(
         @JsonProperty("access_token_lifetime_secs") @Nullable Long accessTokenLifetimeSecs,
         @JsonProperty("admin_notifications_enabled") @Nullable Boolean adminNotificationsEnabled,
         @JsonProperty("default_cert_validity_days") @Nullable Integer defaultCertValidityDays,
+        @JsonProperty("default_locale") @Nullable String defaultLocale,
         @JsonProperty("deletion_grace_period_days") @Nullable Integer deletionGracePeriodDays,
         @JsonProperty("email_verification_grace_period_hours") @Nullable Integer emailVerificationGracePeriodHours,
         @JsonProperty("email_verification_required") @Nullable Boolean emailVerificationRequired,
@@ -69,6 +73,7 @@ public record TenantSettingsOverride(
         @JsonProperty("require_lowercase") @Nullable Boolean requireLowercase,
         @JsonProperty("require_symbols") @Nullable Boolean requireSymbols,
         @JsonProperty("require_uppercase") @Nullable Boolean requireUppercase,
+        @JsonProperty("sensitive_scopes_enabled") @Nullable Boolean sensitiveScopesEnabled,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 
@@ -98,6 +103,7 @@ public record TenantSettingsOverride(
         private @Nullable Long accessTokenLifetimeSecs;
         private @Nullable Boolean adminNotificationsEnabled;
         private @Nullable Integer defaultCertValidityDays;
+        private @Nullable String defaultLocale;
         private @Nullable Integer deletionGracePeriodDays;
         private @Nullable Integer emailVerificationGracePeriodHours;
         private @Nullable Boolean emailVerificationRequired;
@@ -119,6 +125,7 @@ public record TenantSettingsOverride(
         private @Nullable Boolean requireLowercase;
         private @Nullable Boolean requireSymbols;
         private @Nullable Boolean requireUppercase;
+        private @Nullable Boolean sensitiveScopesEnabled;
         private @Nullable String webauthnUserVerification;
 
         /**
@@ -151,6 +158,17 @@ public record TenantSettingsOverride(
          */
         public Builder defaultCertValidityDays(Integer defaultCertValidityDays) {
             this.defaultCertValidityDays = defaultCertValidityDays;
+            return this;
+        }
+
+        /**
+         * Sets default_locale.
+         *
+         * @param defaultLocale the value to send
+         * @return this builder
+         */
+        public Builder defaultLocale(String defaultLocale) {
+            this.defaultLocale = defaultLocale;
             return this;
         }
 
@@ -386,6 +404,17 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets sensitive_scopes_enabled.
+         *
+         * @param sensitiveScopesEnabled the value to send
+         * @return this builder
+         */
+        public Builder sensitiveScopesEnabled(Boolean sensitiveScopesEnabled) {
+            this.sensitiveScopesEnabled = sensitiveScopesEnabled;
+            return this;
+        }
+
+        /**
          * Sets webauthn_user_verification.
          *
          * @param webauthnUserVerification the value to send
@@ -402,7 +431,7 @@ public record TenantSettingsOverride(
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, defaultCertValidityDays, deletionGracePeriodDays, emailVerificationGracePeriodHours, emailVerificationRequired, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, webauthnUserVerification);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, emailVerificationGracePeriodHours, emailVerificationRequired, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, webauthnUserVerification);
         }
     }
 }
