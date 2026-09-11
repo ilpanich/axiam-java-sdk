@@ -3679,6 +3679,44 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
             AuthorizationRequest request, String redirectUri, @Nullable String scope,
             @Nullable UUID tenantId) {
+        return oidcPar(configuration, request, redirectUri, scope, tenantId, null);
+    }
+
+    /**
+     * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID)} carrying
+     * an RFC 9449 &sect;10.1 {@code dpop_jkt} — the JWK thumbprint of the DPoP key the client
+     * will present at the token endpoint (contract 1.42).
+     *
+     * <p>Pushing the thumbprint binds the authorization code to the key at the moment the
+     * request is created, before the browser ever sees it. Without it the binding is only
+     * established at redemption, so an authorization code intercepted in the front channel can
+     * be redeemed by whoever holds <em>a</em> DPoP key rather than only by the client that
+     * started the flow (RFC 9449 &sect;10).
+     *
+     * <p><strong>Caller-supplied, and it has to be.</strong> This SDK implements the
+     * resource-server half of DPoP ({@link io.axiam.sdk.internal.DpopVerifier}, CONTRACT.md
+     * &sect;21.7.2) and ships no client-side proof generator, so it holds no DPoP key to derive
+     * a thumbprint from. Pass the RFC 7638 SHA-256 thumbprint of the same public key whose
+     * proofs will accompany the token request; the value is sent verbatim and only when
+     * non-{@code null}, never synthesised and never defaulted.
+     *
+     * <p>Note what is deliberately <em>not</em> here: {@code request_uri}. RFC 9126 &sect;2.1
+     * makes it the one authorization parameter a client MUST NOT push, because a pushed
+     * {@code request_uri} chains one PAR record to another. The wire schema models it so the
+     * server can refuse it, not so a client can send it.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope; {@code openid} is added when absent
+     * @param tenantId      a tenant override for the {@code ?tenant_id=} query parameter
+     * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or
+     *                      {@code null} to push no {@code dpop_jkt} at all
+     * @return the opaque handle and the URL to redirect the browser to
+     */
+    public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
+            AuthorizationRequest request, String redirectUri, @Nullable String scope,
+            @Nullable UUID tenantId, @Nullable String dpopJkt) {
         ensureOpen();
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         String endpoint = preferredEndpointOrNull(config, MtlsEndpointAliases::pushed_authorization_request_endpoint,
@@ -3703,6 +3741,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 .add("code_challenge_method", OidcPkce.CODE_CHALLENGE_METHOD_S256);
         if (oidcClientSecret != null) {
             form.add("client_secret", oidcClientSecret.expose());
+        }
+        // RFC 9449 §10.1: present only when the caller has a DPoP key. An
+        // empty or absent dpop_jkt is not "no binding requested" to the
+        // server — it is a *different* request — so it is omitted rather
+        // than sent blank.
+        if (dpopJkt != null && !dpopJkt.isEmpty()) {
+            form.add("dpop_jkt", dpopJkt);
         }
 
         String url = oauth2Url(endpoint, tenantId);
@@ -3759,8 +3804,26 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public CompletableFuture<PushedAuthorizationRequest> oidcParAsync(
             @Nullable OidcConfiguration configuration, AuthorizationRequest request,
             String redirectUri, @Nullable String scope, @Nullable UUID tenantId) {
+        return oidcParAsync(configuration, request, redirectUri, scope, tenantId, null);
+    }
+
+    /** {@code CompletableFuture} async twin of
+     * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID, String)}.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope
+     * @param tenantId      a tenant override for the query parameter
+     * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or {@code null}
+     * @return a future resolving to the pushed request
+     */
+    public CompletableFuture<PushedAuthorizationRequest> oidcParAsync(
+            @Nullable OidcConfiguration configuration, AuthorizationRequest request,
+            String redirectUri, @Nullable String scope, @Nullable UUID tenantId,
+            @Nullable String dpopJkt) {
         return CompletableFuture.supplyAsync(
-                () -> oidcPar(configuration, request, redirectUri, scope, tenantId));
+                () -> oidcPar(configuration, request, redirectUri, scope, tenantId, dpopJkt));
     }
 
     // ------------------------------------------------------------------
