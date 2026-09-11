@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RFC 9449 §10.1 `dpop_jkt` on `oidcPar` (SDK contract 1.42).** A six-argument
+  `oidcPar`/`oidcParAsync` overload pushes the JWK thumbprint of the DPoP key
+  the client will present at the token endpoint, binding the authorization code
+  to that key when the request is *created* rather than only at redemption —
+  without it, a code intercepted in the front channel is redeemable by whoever
+  holds *a* DPoP key (RFC 9449 §10).
+
+  The thumbprint is caller-supplied: this SDK implements the resource-server
+  half of DPoP (`DpopVerifier`, CONTRACT.md §21.7.2) and ships no client-side
+  proof generator, so it holds no key to derive one from and will not invent
+  it. The field is sent verbatim and **only** when non-null and non-empty —
+  absent and empty are different requests to the server. The five-argument
+  overloads are unchanged and push no `dpop_jkt`.
+
+  `request_uri`, which contract 1.42 also added to the
+  `PushedAuthorizationRequest` wire schema, is deliberately **not** exposed. RFC
+  9126 §2.1 makes it the one authorization parameter a client MUST NOT push: a
+  pushed `request_uri` chains one PAR record to another, and upstream models the
+  field so the server can *refuse* it.
+
+- **`code_challenge_methods_supported` and
+  `token_endpoint_auth_signing_alg_values_supported` on `OidcConfiguration`
+  (SDK contract 1.42, RFC 8414).** Both are modelled `@Nullable` with an absent
+  default even though `openapi.json` marks them required, per CONTRACT.md
+  §21.5: *RFC 8414 defines no default for this member, so its absence does not
+  mean `S256`*. The discovery model must keep parsing a document from a
+  non-AXIAM OP (§12.3 rule 6), and `null` carries information — "the OP
+  published nothing" — that an empty list would destroy. Both are
+  informational; the SDK's PKCE method stays pinned to `S256`.
+
+  `OidcConfiguration` keeps a constructor at its pre-1.42 arity, defaulting both
+  new components to `null`, so existing `new OidcConfiguration(...)` call sites
+  still compile.
+
 - **RFC 8705 §5 `mtls_endpoint_aliases` (SDK contract 1.40, CONTRACT.md §21.3
   rule 2).** `OidcConfiguration` gains an optional `mtls_endpoint_aliases`
   component (the new `io.axiam.sdk.oidc.MtlsEndpointAliases` record), and the
@@ -36,15 +70,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Re-vendored `CONTRACT.md`, `openapi.json` and `management-registry.json` from
-  `ilpanich/axiam` at SDK contract 1.40. The registry's 155 operations are
-  unchanged, so the generated §27 surface is unchanged; `openapi.json` gained
-  the `MtlsEndpointAliases` schema and one optional property on
-  `OidcDiscoveryDocument`.
+  `ilpanich/axiam` at SDK contract **1.42** — two revisions, 1.40 → 1.42, since
+  the previously vendored copy was 1.40. The registry grew from 155 to **158
+  operations across 24 namespaces**: `privacy.list_consents`,
+  `privacy.grant_scope_consent` and `privacy.withdraw_scope_consent`. The §27
+  surface was regenerated (`scripts/gen_management.py`), adding `PrivacyApi`
+  methods and the `AuthnRequestParamsMode`, `ConsentView`, `GrantScopeConsent`
+  and `OidcPolicy` models, and extending `ClientAuthMethod` (+
+  `client_secret_basic`), `CreateOAuth2ClientRequest`,
+  `UpdateOAuth2ClientRequest`, `OAuth2ClientResponse`, `SecuritySettings`,
+  `SetOrgSettings` and `TenantSettingsOverride`.
 
-  Additive and server-side: no deployment publishes `mtls_endpoint_aliases`
-  until an operator sets `AXIAM__AUTH__OAUTH2_MTLS_BASE_URL`, so every existing
-  consumer keeps working unchanged against every existing deployment. No public
-  API was removed or renamed.
+  `proto/` is byte-identical upstream, so no gRPC stub was regenerated.
+
+  Additive throughout: no public API was removed or renamed, and the two new
+  `OidcConfiguration` components plus the `dpop_jkt` overload are the only
+  hand-written surface changes.
+
+### Fixed
+
+- **A tenant-scoped discovery document no longer produces a doubled
+  `tenant_id` (SDK contract 1.42).** Since 1.42 the server publishes
+  `?tenant_id=<uuid>` inside the token, revocation, introspection,
+  device-authorization, PAR and end-session endpoints it advertises, whenever
+  the discovery request named a tenant or the deployment sets
+  `oauth2_default_tenant_id`. Every `/oauth2/*` URL in this SDK is built by one
+  helper, which used OkHttp's `HttpUrl.Builder.addQueryParameter` — and that
+  *appends*. Against such a document it emitted
+  `?tenant_id=A&tenant_id=B`: two values for the parameter that decides which
+  tenant's users a token is minted for, resolved by whichever one the server's
+  query parser reached first.
+
+  The helper now removes any `tenant_id` the endpoint carried before adding the
+  resolved one, and preserves every *other* query parameter — RFC 6749 §3.1/§3.2
+  require a client to retain the endpoint's own query component. The resolved
+  value wins on disagreement: it is the tenant the caller (or the live session)
+  authenticated against, and a deterministic answer beats one that depends on
+  parser ordering. `logoutUrl` is unchanged — it adds no `tenant_id` of its own
+  and carries the document's through verbatim.
+
+  Affected any deployment that sets `oauth2_default_tenant_id` or serves
+  tenant-scoped discovery; unaffected deployments saw identical URLs before and
+  after.
 
 ## [1.0.0-beta12] - 2026-09-06
 
