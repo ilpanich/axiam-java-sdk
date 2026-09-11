@@ -166,6 +166,58 @@ class AxiamClientOidcDiscoveryTest {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Contract 1.42 — code_challenge_methods_supported and
+    // token_endpoint_auth_signing_alg_values_supported
+    // -----------------------------------------------------------------------
+
+    /**
+     * Both members are marked REQUIRED in {@code openapi.json} as of contract
+     * 1.42, and both are modelled {@code @Nullable} here on purpose
+     * (CONTRACT.md &sect;21.5): RFC 8414 defines no default for either, so
+     * their absence must stay distinguishable from a published value. A
+     * document that omits them — an older AXIAM, or any of the non-AXIAM OPs
+     * &sect;12.3 rule 6 requires this model to keep parsing — must still
+     * produce a usable configuration rather than a rejection or a fabricated
+     * {@code ["S256"]}.
+     */
+    @Test
+    void aDocumentWithoutTheContract142MembersStillParsesAndReportsThemAbsent() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(OidcTestSupport.discoveryResponse(server.url("/").toString()));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(),
+                    "33333333-3333-3333-3333-333333333333").build()) {
+                OidcConfiguration config = client.oidcDiscover();
+
+                org.junit.jupiter.api.Assertions.assertNull(config.code_challenge_methods_supported(),
+                        "absent must be null, not an empty list: \"the OP published nothing\" is "
+                                + "not \"the OP supports nothing\"");
+                org.junit.jupiter.api.Assertions.assertNull(
+                        config.token_endpoint_auth_signing_alg_values_supported());
+            }
+        }
+    }
+
+    @Test
+    void theContract142MembersAreParsedWhenThePresentDocumentCarriesThem() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(OidcTestSupport.discoveryResponseWithContract142Members(
+                    server.url("/").toString()));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(),
+                    "33333333-3333-3333-3333-333333333333").build()) {
+                OidcConfiguration config = client.oidcDiscover();
+
+                assertEquals(List.of("S256"), config.code_challenge_methods_supported());
+                assertEquals(List.of("PS256", "ES256", "EdDSA"),
+                        config.token_endpoint_auth_signing_alg_values_supported());
+            }
+        }
+    }
+
     private static String stripSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }

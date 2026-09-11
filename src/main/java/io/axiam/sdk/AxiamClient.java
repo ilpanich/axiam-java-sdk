@@ -2671,7 +2671,16 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                         ? wire.get("end_session_endpoint").asText() : null,
                 wire.path("backchannel_logout_supported").asBoolean(false),
                 wire.path("backchannel_logout_session_supported").asBoolean(false),
-                parseMtlsEndpointAliases(wire));
+                parseMtlsEndpointAliases(wire),
+                // Contract 1.42 marks both REQUIRED in openapi.json; they are
+                // read as optional here on purpose. RFC 8414 defines no default
+                // for either, so an absent code_challenge_methods_supported does
+                // NOT mean S256 (CONTRACT.md §21.5) — and §12.3 rule 6 means this
+                // model must still parse a document from a non-AXIAM OP that
+                // predates them. `null` is "the OP published nothing", which is
+                // information an empty list would destroy.
+                textListOrNull(wire, "code_challenge_methods_supported"),
+                textListOrNull(wire, "token_endpoint_auth_signing_alg_values_supported"));
     }
 
     /**
@@ -2763,6 +2772,21 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             }
         }
         return topLevel;
+    }
+
+    /**
+     * {@link #textList} for a member whose <em>absence</em> is meaningful:
+     * returns {@code null} rather than an empty list when the document does
+     * not carry {@code field} (or carries JSON {@code null}). Used for the
+     * discovery members RFC 8414 gives no default — see
+     * {@link #parseDiscoveryDocument}.
+     */
+    private static @Nullable List<String> textListOrNull(JsonNode wire, String field) {
+        JsonNode node = wire.get(field);
+        if (node == null || node.isNull() || !node.isArray()) {
+            return null;
+        }
+        return textList(wire, field);
     }
 
     private static List<String> textList(JsonNode wire, String field) {

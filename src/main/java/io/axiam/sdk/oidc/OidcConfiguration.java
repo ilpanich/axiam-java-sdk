@@ -41,6 +41,8 @@ import java.util.List;
  * @param backchannel_logout_supported             whether the OP sends back-channel logout tokens
  * @param backchannel_logout_session_supported     whether those logout tokens carry {@code sid}; AXIAM always sends it
  * @param mtls_endpoint_aliases                    the RFC 8705 &sect;5 endpoint aliases for a deployment that terminates mutual TLS on a host other than the issuer's own (contract 1.40, CONTRACT.md &sect;21.3 rule 2); {@code null} means "no separate host", <strong>not</strong> "mTLS unsupported" — a deployment running {@code client_auth = optional} on one listener serves both populations at the conventional endpoints and correctly publishes nothing here, so a client treating absence as an error would refuse the most common mTLS topology AXIAM ships
+ * @param code_challenge_methods_supported         the PKCE {@code code_challenge_method} values the server supports (RFC 8414 / RFC 7636), added to the wire schema as REQUIRED in contract 1.42 but modelled here as optional: RFC 8414 defines no default for this member, so its absence does not mean {@code S256} (CONTRACT.md &sect;21.5). A document from a non-AXIAM OP that omits it must still parse. Informational only — CONTRACT.md &sect;12 pins this SDK to {@code S256} regardless of what appears here
+ * @param token_endpoint_auth_signing_alg_values_supported the JWS algorithms the token endpoint accepts for {@code private_key_jwt} / {@code client_secret_jwt} client assertions (RFC 8414, CONTRACT.md &sect;21.8), added to the wire schema as REQUIRED in contract 1.42 but modelled here as optional for the same reason as {@code code_challenge_methods_supported}
  */
 public record OidcConfiguration(
         String issuer,
@@ -62,7 +64,9 @@ public record OidcConfiguration(
         @Nullable String end_session_endpoint,
         boolean backchannel_logout_supported,
         boolean backchannel_logout_session_supported,
-        @Nullable MtlsEndpointAliases mtls_endpoint_aliases) {
+        @Nullable MtlsEndpointAliases mtls_endpoint_aliases,
+        @Nullable List<String> code_challenge_methods_supported,
+        @Nullable List<String> token_endpoint_auth_signing_alg_values_supported) {
 
     /**
      * Defensively copies every list component so a caller cannot mutate this
@@ -88,6 +92,8 @@ public record OidcConfiguration(
      * @param backchannel_logout_supported whether the OP sends logout tokens
      * @param backchannel_logout_session_supported whether those tokens carry {@code sid}
      * @param mtls_endpoint_aliases the RFC 8705 &sect;5 endpoint aliases, or {@code null}
+     * @param code_challenge_methods_supported supported PKCE {@code code_challenge_method} values, or {@code null} when the document carries none
+     * @param token_endpoint_auth_signing_alg_values_supported supported client-assertion signing algorithms, or {@code null} when the document carries none
      */
     public OidcConfiguration {
         response_types_supported = List.copyOf(response_types_supported);
@@ -97,6 +103,15 @@ public record OidcConfiguration(
         token_endpoint_auth_methods_supported = List.copyOf(token_endpoint_auth_methods_supported);
         claims_supported = List.copyOf(claims_supported);
         grant_types_supported = List.copyOf(grant_types_supported);
+        // Absent stays absent. Substituting an empty list here would erase the
+        // distinction RFC 8414 turns on: "the OP published no value" is not
+        // "the OP supports nothing", and §21.5 is explicit that absence must
+        // not be read as a default.
+        code_challenge_methods_supported = code_challenge_methods_supported == null
+                ? null : List.copyOf(code_challenge_methods_supported);
+        token_endpoint_auth_signing_alg_values_supported =
+                token_endpoint_auth_signing_alg_values_supported == null
+                        ? null : List.copyOf(token_endpoint_auth_signing_alg_values_supported);
     }
 
     /**
@@ -157,5 +172,70 @@ public record OidcConfiguration(
                 device_authorization_endpoint, pushed_authorization_request_endpoint,
                 end_session_endpoint, backchannel_logout_supported,
                 backchannel_logout_session_supported, null);
+    }
+
+    /**
+     * The pre-contract-1.42 arity, for source compatibility: a document
+     * carrying no {@code code_challenge_methods_supported} and no
+     * {@code token_endpoint_auth_signing_alg_values_supported}.
+     *
+     * <p>Both were added as components in contract 1.42, which would
+     * otherwise have stopped every existing 20-argument
+     * {@code new OidcConfiguration(...)} call from compiling. Both are
+     * modelled {@code @Nullable} rather than defaulted, and this constructor
+     * passes {@code null} for exactly that reason: RFC 8414 defines no
+     * default for either member, so "the caller did not supply one" must
+     * stay distinguishable from "the OP advertises {@code S256}"
+     * (CONTRACT.md &sect;21.5).
+     *
+     * @param issuer the authorization server's issuer identifier
+     * @param authorization_endpoint the authorization endpoint
+     * @param token_endpoint the token endpoint
+     * @param userinfo_endpoint the userinfo endpoint
+     * @param jwks_uri the JWKS document URI
+     * @param revocation_endpoint the revocation endpoint
+     * @param introspection_endpoint the introspection endpoint
+     * @param response_types_supported supported {@code response_type} values
+     * @param subject_types_supported supported subject identifier types
+     * @param id_token_signing_alg_values_supported advertised ID-token signing algorithms
+     * @param scopes_supported supported scopes
+     * @param token_endpoint_auth_methods_supported supported client-authentication methods
+     * @param claims_supported claims the server may include in an ID token
+     * @param grant_types_supported supported grant types
+     * @param device_authorization_endpoint the RFC 8628 device authorization endpoint, or {@code null}
+     * @param pushed_authorization_request_endpoint the RFC 9126 PAR endpoint, or {@code null}
+     * @param end_session_endpoint the RP-initiated logout endpoint, or {@code null}
+     * @param backchannel_logout_supported whether the OP sends logout tokens
+     * @param backchannel_logout_session_supported whether those tokens carry {@code sid}
+     * @param mtls_endpoint_aliases the RFC 8705 &sect;5 endpoint aliases, or {@code null}
+     */
+    public OidcConfiguration(
+            String issuer,
+            String authorization_endpoint,
+            String token_endpoint,
+            String userinfo_endpoint,
+            String jwks_uri,
+            String revocation_endpoint,
+            String introspection_endpoint,
+            List<String> response_types_supported,
+            List<String> subject_types_supported,
+            List<String> id_token_signing_alg_values_supported,
+            List<String> scopes_supported,
+            List<String> token_endpoint_auth_methods_supported,
+            List<String> claims_supported,
+            List<String> grant_types_supported,
+            @Nullable String device_authorization_endpoint,
+            @Nullable String pushed_authorization_request_endpoint,
+            @Nullable String end_session_endpoint,
+            boolean backchannel_logout_supported,
+            boolean backchannel_logout_session_supported,
+            @Nullable MtlsEndpointAliases mtls_endpoint_aliases) {
+        this(issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri,
+                revocation_endpoint, introspection_endpoint, response_types_supported,
+                subject_types_supported, id_token_signing_alg_values_supported, scopes_supported,
+                token_endpoint_auth_methods_supported, claims_supported, grant_types_supported,
+                device_authorization_endpoint, pushed_authorization_request_endpoint,
+                end_session_endpoint, backchannel_logout_supported,
+                backchannel_logout_session_supported, mtls_endpoint_aliases, null, null);
     }
 }

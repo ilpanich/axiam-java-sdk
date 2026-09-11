@@ -130,6 +130,32 @@ public final class OidcTestSupport {
     }
 
     /**
+     * The {@link #discoveryResponse} document plus the two members contract
+     * 1.42 added to {@code OidcDiscoveryDocument}:
+     * {@code code_challenge_methods_supported} and
+     * {@code token_endpoint_auth_signing_alg_values_supported} (RFC 8414,
+     * CONTRACT.md &sect;21.5).
+     *
+     * <p>A separate fixture rather than an edit to {@link #discoveryResponse}:
+     * the plain one is now the "an OP that publishes neither" case, which
+     * &sect;12.3 rule 6 requires the SDK to keep parsing, and both cases need
+     * covering.
+     *
+     * @param baseUrl the mock server's base URL (trailing slash stripped)
+     * @return the mock response
+     */
+    public static MockResponse discoveryResponseWithContract142Members(String baseUrl) {
+        MockResponse base = discoveryResponse(baseUrl);
+        String body = base.getBody().readUtf8();
+        String extra = ",\"code_challenge_methods_supported\":[\"S256\"],"
+                + "\"token_endpoint_auth_signing_alg_values_supported\":[\"PS256\",\"ES256\",\"EdDSA\"]}";
+        return new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(body.substring(0, body.length() - 1) + extra);
+    }
+
+    /**
      * A discovery document with the &sect;14/&sect;12.7 endpoints deliberately
      * absent — the shape an older AXIAM, or a third-party OP without those
      * features, publishes. Used to assert the SDK errors rather than
