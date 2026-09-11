@@ -3414,13 +3414,35 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /** Builds the final endpoint URL: the discovery document's endpoint plus the
      * mandatory {@code ?tenant_id=<uuid>} query parameter (§12.1 note 2), RFC
      * 3986-percent-encoded via {@link HttpUrl} (space becomes {@code %20}, not
-     * {@code +}). Existing query parameters on the endpoint are preserved. */
+     * {@code +}). Every <em>other</em> query parameter already on the endpoint is
+     * preserved: RFC 6749 §3.1/§3.2 require a client to retain the endpoint's own
+     * query component.
+     *
+     * <p><strong>The resolved tenant replaces any {@code tenant_id} the endpoint
+     * already carries; it is never appended alongside it.</strong> Since contract
+     * 1.42 the server's own discovery document publishes
+     * {@code ?tenant_id=<uuid>} on the token, revocation, introspection,
+     * device-authorization, PAR and end-session endpoints whenever the discovery
+     * request named a tenant or the deployment sets
+     * {@code oauth2_default_tenant_id}. {@link HttpUrl.Builder#addQueryParameter}
+     * appends, so adding blindly produced {@code ?tenant_id=A&tenant_id=B} — two
+     * values for a parameter that decides which tenant's users a token is minted
+     * for, resolved by whichever one the server's query parser happens to pick.
+     *
+     * <p>The resolved value wins on disagreement: it is the tenant the caller (or
+     * the live session, via {@link #resolveOauth2TenantId}) actually authenticated
+     * against, and a deterministic answer beats one that depends on parser
+     * ordering. */
     private String oauth2Url(String endpoint, @Nullable UUID tenantId) {
         HttpUrl url = HttpUrl.parse(endpoint);
         if (url == null) {
             throw new NetworkError("discovery document endpoint is not a valid URL: " + endpoint);
         }
-        return url.newBuilder().addQueryParameter("tenant_id", resolveOauth2TenantId(tenantId).toString()).build().toString();
+        return url.newBuilder()
+                .removeAllQueryParameters("tenant_id")
+                .addQueryParameter("tenant_id", resolveOauth2TenantId(tenantId).toString())
+                .build()
+                .toString();
     }
 
     private JsonNode postToken(OidcConfiguration configuration, RequestBody form, @Nullable UUID tenantId) {
