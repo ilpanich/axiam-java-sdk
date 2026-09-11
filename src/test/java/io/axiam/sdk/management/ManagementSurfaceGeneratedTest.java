@@ -728,7 +728,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises oauth2_clients.list. */
     @Test
     void oauth2ClientsList() throws Exception {
-        mount("GET", "/api/v1/oauth2-clients", 200, "{\"items\": [{\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        mount("GET", "/api/v1/oauth2-clients", 200, "{\"items\": [{\"authn_request_params\": \"ignore\", \"browser_sso\": true, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
         client.management().oauth2Clients().list(PageRequest.of(50));
         client.management().oauth2Clients().listAll(PageRequest.of(50));
     }
@@ -737,21 +737,21 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void oauth2ClientsCreate() throws Exception {
         mount("POST", "/api/v1/oauth2-clients", 201, "{\"client_id\": \"example\", \"client_secret\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"redirect_uris\": [], \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().oauth2Clients().create(new io.axiam.sdk.management.models.CreateOAuth2ClientRequest(null, null, null, java.util.List.of(), null, null, "example", null, null, java.util.List.of(), null, java.util.List.of(), null, null, null, null, null, null));
+        client.management().oauth2Clients().create(new io.axiam.sdk.management.models.CreateOAuth2ClientRequest(null, null, null, null, null, java.util.List.of(), null, null, "example", null, null, java.util.List.of(), null, java.util.List.of(), null, null, null, null, null, null));
     }
 
     /** Exercises oauth2_clients.get. */
     @Test
     void oauth2ClientsGet() throws Exception {
-        mount("GET", "/api/v1/oauth2-clients/" + EXAMPLE_ID + "", 200, "{\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        mount("GET", "/api/v1/oauth2-clients/" + EXAMPLE_ID + "", 200, "{\"authn_request_params\": \"ignore\", \"browser_sso\": true, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
         client.management().oauth2Clients().get(EXAMPLE_ID);
     }
 
     /** Exercises oauth2_clients.update. */
     @Test
     void oauth2ClientsUpdate() throws Exception {
-        mount("PUT", "/api/v1/oauth2-clients/" + EXAMPLE_ID + "", 200, "{\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().oauth2Clients().update(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateOAuth2ClientRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        mount("PUT", "/api/v1/oauth2-clients/" + EXAMPLE_ID + "", 200, "{\"authn_request_params\": \"ignore\", \"browser_sso\": true, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        client.management().oauth2Clients().update(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateOAuth2ClientRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises oauth2_clients.delete. */
@@ -920,29 +920,29 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises settings.get_org. */
     @Test
     void settingsGetOrg() throws Exception {
-        mount("GET", "/api/v1/organizations/" + ORG_ID + "/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
+        mount("GET", "/api/v1/organizations/" + ORG_ID + "/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
         client.management().settings().getOrg();
     }
 
     /** Exercises settings.set_org. */
     @Test
     void settingsSetOrg() throws Exception {
-        mount("PUT", "/api/v1/organizations/" + ORG_ID + "/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
-        client.management().settings().setOrg(new io.axiam.sdk.management.models.SetOrgSettings(1L, true, 1, null, 1, true, true, 1.0, 1L, 1, 1, 1L, 1L, true, 1, null, null, null, 1, 1L, true, true, true, true, null));
+        mount("PUT", "/api/v1/organizations/" + ORG_ID + "/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
+        client.management().settings().setOrg(new io.axiam.sdk.management.models.SetOrgSettings(1L, true, 1, null, null, 1, true, true, 1.0, 1L, 1, 1, 1L, 1L, true, 1, null, null, null, 1, 1L, true, true, true, true, null, null));
     }
 
     /** Exercises settings.get_effective. */
     @Test
     void settingsGetEffective() throws Exception {
-        mount("GET", "/api/v1/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
+        mount("GET", "/api/v1/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
         client.management().settings().getEffective();
     }
 
     /** Exercises settings.set_effective. */
     @Test
     void settingsSetEffective() throws Exception {
-        mount("PUT", "/api/v1/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
-        client.management().settings().setEffective(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        mount("PUT", "/api/v1/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
+        client.management().settings().setEffective(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises settings.get_tenant_override. */
@@ -956,7 +956,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetTenantOverride() throws Exception {
         mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/settings", 200, "{}");
-        client.management().settings().setTenantOverride(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        client.management().settings().setTenantOverride(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises settings.delete_tenant_override. */
@@ -1095,6 +1095,27 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().privacy().cancelDelete("example");
     }
 
+    /** Exercises privacy.list_consents. */
+    @Test
+    void privacyListConsents() throws Exception {
+        mount("GET", "/api/v1/account/consents", 200, "[{\"accepted_at\": \"2026-08-26T00:00:00Z\", \"consent_type\": \"example\", \"version\": \"example\", \"withdrawable\": true}]");
+        client.management().privacy().listConsents();
+    }
+
+    /** Exercises privacy.grant_scope_consent. */
+    @Test
+    void privacyGrantScopeConsent() throws Exception {
+        mount("POST", "/api/v1/account/consents/oidc-scopes", 200, "");
+        client.management().privacy().grantScopeConsent(new io.axiam.sdk.management.models.GrantScopeConsent("example", java.util.List.of()));
+    }
+
+    /** Exercises privacy.withdraw_scope_consent. */
+    @Test
+    void privacyWithdrawScopeConsent() throws Exception {
+        mount("DELETE", "/api/v1/account/consents/oidc-scopes/example", 200, "");
+        client.management().privacy().withdrawScopeConsent("example");
+    }
+
     /** Exercises platform.health. */
     @Test
     void platformHealth() throws Exception {
@@ -1209,8 +1230,11 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "platform.ready",
                 "privacy.cancel_delete",
                 "privacy.download_export",
+                "privacy.grant_scope_consent",
+                "privacy.list_consents",
                 "privacy.request_delete",
                 "privacy.request_export",
+                "privacy.withdraw_scope_consent",
                 "reactors.create",
                 "reactors.delete",
                 "reactors.get",
@@ -1289,7 +1313,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(155, exercised.size(),
+        assertEquals(158, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

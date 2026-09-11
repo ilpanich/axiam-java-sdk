@@ -433,6 +433,102 @@ class AxiamClientParTest {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Contract 1.42 — RFC 9449 §10.1 dpop_jkt
+    // -----------------------------------------------------------------------
+
+    /**
+     * Pushing {@code dpop_jkt} binds the authorization code to the client's
+     * DPoP key at request-creation time, before the browser ever sees it —
+     * without it the binding only exists at redemption, so an intercepted code
+     * is redeemable by whoever holds <em>a</em> DPoP key (RFC 9449 &sect;10).
+     * The value is caller-supplied and goes on the wire verbatim: this SDK
+     * verifies proofs (CONTRACT.md &sect;21.7.2) but generates none, so it
+     * holds no key to derive a thumbprint from and must never invent one.
+     */
+    @Test
+    void aSuppliedDpopJktIsPushedVerbatim() throws Exception {
+        String jkt = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I";
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                AuthorizationRequest begun = begin(server, client);
+                server.enqueue(parResponse());
+
+                client.oidcPar(null, begun, REDIRECT_URI, "openid", null, jkt);
+
+                assertEquals(jkt, form(server.takeRequest()).get("dpop_jkt"));
+            }
+        }
+    }
+
+    /**
+     * Omitted, not blank. To the server an absent {@code dpop_jkt} and an
+     * empty one are different requests — the second asks for a binding to the
+     * empty thumbprint — so a client with no DPoP key must send no field at
+     * all.
+     */
+    @Test
+    void noDpopJktFieldIsSentWhenTheCallerSuppliesNone() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                AuthorizationRequest begun = begin(server, client);
+                server.enqueue(parResponse());
+
+                client.oidcPar(null, begun, REDIRECT_URI, "openid", null);
+
+                assertTrue(!form(server.takeRequest()).containsKey("dpop_jkt"),
+                        "an absent dpop_jkt must be absent from the form, not empty");
+            }
+        }
+    }
+
+    /**
+     * {@code request_uri} is the one authorization parameter RFC 9126
+     * &sect;2.1 forbids a client from pushing: a pushed {@code request_uri}
+     * chains one PAR record to another, which is the attack the wire schema
+     * models the field in order to <em>refuse</em>. Contract 1.42 added it to
+     * {@code PushedAuthorizationRequest}; this SDK deliberately exposes no way
+     * to send it, and this asserts the pushed form stays the &sect;26.2 rule 1
+     * set (plus {@code client_secret} and an optional {@code dpop_jkt}).
+     */
+    @Test
+    void thePushedFormNeverCarriesARequestUri() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                AuthorizationRequest begun = begin(server, client);
+                server.enqueue(parResponse());
+
+                client.oidcPar(null, begun, REDIRECT_URI, "openid", null,
+                        "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I");
+
+                assertEquals(
+                        Set.of("client_id", "response_type", "redirect_uri", "scope", "state",
+                                "nonce", "code_challenge", "code_challenge_method",
+                                "client_secret", "dpop_jkt"),
+                        form(server.takeRequest()).keySet());
+            }
+        }
+    }
+
+    @Test
+    void parAsyncForwardsTheDpopJkt() throws Exception {
+        String jkt = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I";
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                AuthorizationRequest begun = begin(server, client);
+                server.enqueue(parResponse());
+
+                client.oidcParAsync(null, begun, REDIRECT_URI, "openid", null, jkt).join();
+
+                assertEquals(jkt, form(server.takeRequest()).get("dpop_jkt"));
+            }
+        }
+    }
+
     @Test
     void parDiscoversWhenGivenNoConfiguration() throws Exception {
         try (MockWebServer server = new MockWebServer()) {

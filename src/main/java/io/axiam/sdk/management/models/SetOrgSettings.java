@@ -18,6 +18,7 @@ import org.jspecify.annotations.Nullable;
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
  * @param defaultCertValidityDays the server's default_cert_validity_days field
+ * @param defaultLocale the server's default_locale field
  * @param deletionGracePeriodDays the server's deletion_grace_period_days field
  * @param emailVerificationGracePeriodHours the server's email_verification_grace_period_hours
  *     field
@@ -40,6 +41,7 @@ import org.jspecify.annotations.Nullable;
  * @param requireLowercase the server's require_lowercase field
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
+ * @param sensitiveScopesEnabled the server's sensitive_scopes_enabled field
  * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -48,6 +50,7 @@ public record SetOrgSettings(
         @JsonProperty("access_token_lifetime_secs") Long accessTokenLifetimeSecs,
         @JsonProperty("admin_notifications_enabled") Boolean adminNotificationsEnabled,
         @JsonProperty("default_cert_validity_days") Integer defaultCertValidityDays,
+        @JsonProperty("default_locale") @Nullable String defaultLocale,
         @JsonProperty("deletion_grace_period_days") @Nullable Integer deletionGracePeriodDays,
         @JsonProperty("email_verification_grace_period_hours") Integer emailVerificationGracePeriodHours,
         @JsonProperty("email_verification_required") Boolean emailVerificationRequired,
@@ -69,6 +72,7 @@ public record SetOrgSettings(
         @JsonProperty("require_lowercase") Boolean requireLowercase,
         @JsonProperty("require_symbols") Boolean requireSymbols,
         @JsonProperty("require_uppercase") Boolean requireUppercase,
+        @JsonProperty("sensitive_scopes_enabled") @Nullable Boolean sensitiveScopesEnabled,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 }

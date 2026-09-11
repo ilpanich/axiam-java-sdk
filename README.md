@@ -31,7 +31,7 @@ set, the §12 OIDC/SSO relying-party helpers, the §13 webhook-signature verifie
 the §20 UMA 2.0 Protection API and ticket grant, the §22 reactor runtime, the §23
 OPAQUE (RFC 9807) login path, the §24 WebAuthn relying-party layer with its
 §24.6a JSON bridge, the §25 account-lifecycle and MFA-enrolment operations, §26
-Pushed Authorization Requests (RFC 9126), and the §27 Management API — all 147
+Pushed Authorization Requests (RFC 9126), and the §27 Management API — all 158
 operations across 24 namespaces, with the §27.6 declarative layer.
 
 §12.7, §14, §15, §20, §22, §23, §24, §25, §26 and §27 are named rather than folded
@@ -394,6 +394,32 @@ JWKS verifier the §10 middleware uses).
 | `ssoStartOauth2(federationConfigId, redirectUri, tenantId, tenantSlug, orgId, orgSlug)` | `POST /api/v1/auth/federation/oauth2/start` — a **plain-OAuth2** upstream (GitHub, Facebook, `generic_oauth2`); PKCE is mandatory and **server-side** |
 | `ssoCompleteOauth2(state, code)` | `POST /api/v1/auth/federation/oauth2/callback` (session via `Set-Cookie`) |
 | `ssoCompleteHandoff(code)` | `POST /api/v1/auth/federation/handoff` — redeems the single-use `axiam_handoff` code the SAML and Apple flows deliver. Valid 60 s, redeemable **once**; a `401` is terminal and is **never retried** |
+
+#### Tenant-scoped endpoints, and two new members (contract 1.42)
+
+Since contract 1.42 the discovery document may publish the tenant **inside** the
+endpoints it advertises: the token, revocation, introspection,
+device-authorization, PAR and end-session entries come back carrying
+`?tenant_id=<uuid>` whenever the discovery request named a tenant or the
+deployment sets `oauth2_default_tenant_id`. (`userinfo_endpoint` and `jwks_uri`
+are never scoped.) The §12 helpers **replace** that parameter with the tenant
+they resolve rather than appending a second one, while keeping every other query
+parameter the endpoint carried — so the wire always shows exactly one
+`tenant_id`, and it is the tenant the caller or the live session actually
+authenticated against.
+
+`OidcConfiguration` also gains two components, `code_challenge_methods_supported`
+and `token_endpoint_auth_signing_alg_values_supported` (RFC 8414). Both are
+`@Nullable` even though `openapi.json` marks them required, and deliberately so:
+RFC 8414 defines no default for either, so an absent
+`code_challenge_methods_supported` does **not** mean `S256`, and this model must
+keep parsing a document from a non-AXIAM OP that predates them (§12.3 rule 6).
+`null` means "the OP published nothing", which an empty list would erase. Both
+are informational — the SDK's own PKCE method stays pinned to `S256`.
+
+A constructor at the pre-1.42 arity is kept for source compatibility, defaulting
+both to `null`, so existing `new OidcConfiguration(...)` call sites still
+compile.
 
 #### The four public login-provider operations, and their rules (contract 1.38)
 
@@ -1473,11 +1499,41 @@ A **FAPI 2.0 client has no alternative**: `profile: "fapi2"` refuses a
 registration that does not set `require_par`, so such a client cannot authorize
 any other way (§21.1).
 
+### `dpop_jkt` (contract 1.42, RFC 9449 §10.1)
+
+A six-argument overload pushes the JWK thumbprint of the DPoP key the client
+will present at the token endpoint:
+
+```java
+PushedAuthorizationRequest pushed = client.oidcPar(
+        config, begun, redirectUri, "openid profile", null, dpopJkt);
+```
+
+That binds the authorization code to the key when the request is *created*,
+before the browser sees anything. Without it the binding is only established at
+redemption, so a code intercepted in the front channel can be redeemed by
+whoever holds *a* DPoP key rather than only by the client that started the flow
+(RFC 9449 §10).
+
+The thumbprint is **caller-supplied**. This SDK implements the resource-server
+half of DPoP — `DpopVerifier`, all ten §21.7.2 checks — and ships no client-side
+proof generator, so it holds no DPoP key of its own and will not invent a
+thumbprint. Pass the RFC 7638 SHA-256 thumbprint of the same public key whose
+proofs accompany the token request, or pass `null`/omit the argument and no
+`dpop_jkt` field is sent at all (absent and empty are different requests to the
+server).
+
+`request_uri` is **not** exposed, and will not be. RFC 9126 §2.1 makes it the
+one authorization parameter a client MUST NOT push — a pushed `request_uri`
+chains one PAR record to another. Contract 1.42 added it to the wire schema so
+the server can *refuse* it; a client that can send it is a client that can build
+the attack.
+
 Worked end to end in [`examples/par-login`](examples/par-login).
 
 ## Management API (§27)
 
-The administrative surface: 147 operations across 24 namespaces — users, groups,
+The administrative surface: 158 operations across 24 namespaces — users, groups,
 roles, permissions, resources, scopes, service accounts, certificates, CA
 certificates, PGP keys, webhooks, OAuth2 clients, federation, notification rules,
 e-mail config, settings, SCIM tokens, reactors, WebAuthn policy, audit, privacy,

@@ -13,8 +13,20 @@ import java.util.List;
 /**
  * The CreateOAuth2ClientRequest schema from the server's OpenAPI document.
  *
+ * @param authnRequestParams X7.1 — whether this client's authorization requests may carry the
+ *     OpenID Connect authentication-request parameters ({@code prompt}, {@code max_age}, {@code
+ *     acr_values}, {@code claims}, {@code id_token_hint}, {@code login_hint}, {@code display}, {@code
+ *     ui_locales}, {@code claims_locales}). {@code "ignore"} (the default) is what every AXIAM client
+ *     has always done: they are dropped and reach no decision. {@code "honour"} opts in, and is
+ *     **refused on a {@code fapi2} client** at both this gate and the authorization endpoint — the two
+ *     are different answers to the same question about what a request from this client means.
  * @param backchannelLogoutUri B5 — where OIDC back-channel logout tokens are delivered. Omit for a
  *     client that does not participate.
+ * @param browserSso X7.3 — whether an unauthenticated authorization request from this client may
+ *     be answered with a redirect to the login page rather than the {@code 401} AXIAM answers today.
+ *     Accepted and stored, but **nothing reads it yet**: the login hop it gates is a later wave.
+ *     Unlike {@code authn_request_params} it is permitted on a {@code fapi2} client, because it
+ *     relaxes nothing — it decides only how an anonymous browser is answered.
  * @param dpopBoundAccessTokens RFC 9449 §5.2 — issue DPoP-bound (sender-constrained) access tokens
  *     to this client. Independent of both the authentication method and {@code
  *     tls_client_certificate_bound_access_tokens}; a client may ask for both constraints, and a token
@@ -65,7 +77,9 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateOAuth2ClientRequest(
+        @JsonProperty("authn_request_params") @Nullable AuthnRequestParamsMode authnRequestParams,
         @JsonProperty("backchannel_logout_uri") @Nullable String backchannelLogoutUri,
+        @JsonProperty("browser_sso") @Nullable Boolean browserSso,
         @JsonProperty("dpop_bound_access_tokens") @Nullable Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") @Nullable Boolean dpopRequireNonce,
         @JsonProperty("grant_types") List<String> grantTypes,

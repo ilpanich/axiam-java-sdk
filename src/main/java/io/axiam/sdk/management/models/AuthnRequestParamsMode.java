@@ -7,28 +7,30 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
- * How a client proves its identity at the token endpoint (RFC 8705 §2, OIDC Core §9 naming).
+ * Whether this client's authorization requests may carry OpenID Connect's authentication-request
+ * parameters, or whether they are ignored (X7.1).
  *
- * <p>Only the methods AXIAM actually implements are representable. There is deliberately no {@code
- * none} variant: every AXIAM client is confidential today (see {@code handle_authorization_code}),
- * and adding a public-client value here before the rest of the server understands one would let an
- * operator register a client whose authentication is silently skipped.
+ * <p>The bundle this governs is {@code prompt}, {@code max_age}, {@code acr_values}, {@code
+ * claims}, {@code id_token_hint}, {@code login_hint}, {@code display}, {@code ui_locales} and
+ * {@code claims_locales}. It is **one** field rather than nine booleans for the same reason
+ * [{@code ClientProfile}] is one field rather than a dozen: a client that honours {@code max_age}
+ * but ignores {@code prompt=none} is not "mostly conformant", it is a client a relying party
+ * cannot reason about.
+ *
+ * <p>[{@code Ignore}](Self::Ignore) is the serde default and is exactly what AXIAM has always done
+ * — unknown authorization-request parameters are dropped by the query deserialiser and never reach
+ * a decision. Every row written before schema v54 therefore decodes to the behaviour it already
+ * had.
  *
  * <p>The wire spelling is carried on each constant rather than derived from its name, because the
  * server's vocabulary is not uniformly cased and a derivation that worked for every value today
  * would break on the first one that did not fit.
  */
-public enum ClientAuthMethod {
-    /** The server's 'client_secret_post' value. */
-    CLIENT_SECRET_POST("client_secret_post"),
-    /** The server's 'client_secret_basic' value. */
-    CLIENT_SECRET_BASIC("client_secret_basic"),
-    /** The server's 'tls_client_auth' value. */
-    TLS_CLIENT_AUTH("tls_client_auth"),
-    /** The server's 'self_signed_tls_client_auth' value. */
-    SELF_SIGNED_TLS_CLIENT_AUTH("self_signed_tls_client_auth"),
-    /** The server's 'private_key_jwt' value. */
-    PRIVATE_KEY_JWT("private_key_jwt"),
+public enum AuthnRequestParamsMode {
+    /** The server's 'ignore' value. */
+    IGNORE("ignore"),
+    /** The server's 'honour' value. */
+    HONOUR("honour"),
     /**
      * A value this SDK's copy of the spec does not list.
      *
@@ -49,7 +51,7 @@ public enum ClientAuthMethod {
     /** The spelling this value has on the wire. */
     private final String wire;
 
-    ClientAuthMethod(String wire) {
+    AuthnRequestParamsMode(String wire) {
         this.wire = wire;
     }
 
@@ -79,11 +81,11 @@ public enum ClientAuthMethod {
      * UNKNOWN}; one that does not gets the rest of the record intact.
      *
      * @param value the server's spelling
-     * @return the matching ClientAuthMethod, or {@link #UNKNOWN}
+     * @return the matching AuthnRequestParamsMode, or {@link #UNKNOWN}
      */
     @JsonCreator
-    public static ClientAuthMethod fromWire(String value) {
-        for (ClientAuthMethod candidate : values()) {
+    public static AuthnRequestParamsMode fromWire(String value) {
+        for (AuthnRequestParamsMode candidate : values()) {
             if (candidate != UNKNOWN && candidate.wire.equals(value)) {
                 return candidate;
             }

@@ -17,8 +17,10 @@ import java.util.List;
  * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
  * builder — a canonical constructor call with six nulls in it is not something a reader can check.
  *
+ * @param authnRequestParams the server's authn_request_params field
  * @param backchannelLogoutUri Pass an empty string to clear a previously registered URI — the one
  *     edit an operator makes when an RP is decommissioned.
+ * @param browserSso X7.3 — see [{@code CreateOAuth2ClientRequest::browser_sso}].
  * @param dpopBoundAccessTokens the server's dpop_bound_access_tokens field
  * @param dpopRequireNonce the server's dpop_require_nonce field
  * @param grantTypes the server's grant_types field
@@ -44,7 +46,9 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record UpdateOAuth2ClientRequest(
+        @JsonProperty("authn_request_params") @Nullable AuthnRequestParamsMode authnRequestParams,
         @JsonProperty("backchannel_logout_uri") @Nullable String backchannelLogoutUri,
+        @JsonProperty("browser_sso") @Nullable Boolean browserSso,
         @JsonProperty("dpop_bound_access_tokens") @Nullable Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") @Nullable Boolean dpopRequireNonce,
         @JsonProperty("grant_types") @Nullable List<String> grantTypes,
@@ -87,7 +91,9 @@ public record UpdateOAuth2ClientRequest(
         private Builder() {
         }
 
+        private @Nullable AuthnRequestParamsMode authnRequestParams;
         private @Nullable String backchannelLogoutUri;
+        private @Nullable Boolean browserSso;
         private @Nullable Boolean dpopBoundAccessTokens;
         private @Nullable Boolean dpopRequireNonce;
         private @Nullable List<String> grantTypes;
@@ -107,6 +113,17 @@ public record UpdateOAuth2ClientRequest(
         private @Nullable ClientAuthMethod tokenEndpointAuthMethod;
 
         /**
+         * Sets authn_request_params.
+         *
+         * @param authnRequestParams the value to send
+         * @return this builder
+         */
+        public Builder authnRequestParams(AuthnRequestParamsMode authnRequestParams) {
+            this.authnRequestParams = authnRequestParams;
+            return this;
+        }
+
+        /**
          * Sets backchannel_logout_uri.
          *
          * @param backchannelLogoutUri the value to send
@@ -114,6 +131,17 @@ public record UpdateOAuth2ClientRequest(
          */
         public Builder backchannelLogoutUri(String backchannelLogoutUri) {
             this.backchannelLogoutUri = backchannelLogoutUri;
+            return this;
+        }
+
+        /**
+         * Sets browser_sso.
+         *
+         * @param browserSso the value to send
+         * @return this builder
+         */
+        public Builder browserSso(Boolean browserSso) {
+            this.browserSso = browserSso;
             return this;
         }
 
@@ -310,7 +338,7 @@ public record UpdateOAuth2ClientRequest(
          * @return a UpdateOAuth2ClientRequest carrying exactly the fields that were set
          */
         public UpdateOAuth2ClientRequest build() {
-            return new UpdateOAuth2ClientRequest(backchannelLogoutUri, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
+            return new UpdateOAuth2ClientRequest(authnRequestParams, backchannelLogoutUri, browserSso, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
         }
     }
 }

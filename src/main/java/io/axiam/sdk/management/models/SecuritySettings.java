@@ -20,6 +20,7 @@ import java.util.UUID;
  * @param lockout the server's lockout field
  * @param mfa the server's mfa field
  * @param notification the server's notification field
+ * @param oidc the server's oidc field
  * @param opaque the server's opaque field
  * @param password the server's password field
  * @param privacy the server's privacy field
@@ -39,6 +40,7 @@ public record SecuritySettings(
         @JsonProperty("lockout") LockoutPolicy lockout,
         @JsonProperty("mfa") MfaPolicy mfa,
         @JsonProperty("notification") NotificationPolicy notification,
+        @JsonProperty("oidc") OidcPolicy oidc,
         @JsonProperty("opaque") OpaquePolicy opaque,
         @JsonProperty("password") PasswordPolicy password,
         @JsonProperty("privacy") PrivacyPolicy privacy,

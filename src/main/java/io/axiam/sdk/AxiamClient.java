@@ -2671,7 +2671,16 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                         ? wire.get("end_session_endpoint").asText() : null,
                 wire.path("backchannel_logout_supported").asBoolean(false),
                 wire.path("backchannel_logout_session_supported").asBoolean(false),
-                parseMtlsEndpointAliases(wire));
+                parseMtlsEndpointAliases(wire),
+                // Contract 1.42 marks both REQUIRED in openapi.json; they are
+                // read as optional here on purpose. RFC 8414 defines no default
+                // for either, so an absent code_challenge_methods_supported does
+                // NOT mean S256 (CONTRACT.md §21.5) — and §12.3 rule 6 means this
+                // model must still parse a document from a non-AXIAM OP that
+                // predates them. `null` is "the OP published nothing", which is
+                // information an empty list would destroy.
+                textListOrNull(wire, "code_challenge_methods_supported"),
+                textListOrNull(wire, "token_endpoint_auth_signing_alg_values_supported"));
     }
 
     /**
@@ -2763,6 +2772,21 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             }
         }
         return topLevel;
+    }
+
+    /**
+     * {@link #textList} for a member whose <em>absence</em> is meaningful:
+     * returns {@code null} rather than an empty list when the document does
+     * not carry {@code field} (or carries JSON {@code null}). Used for the
+     * discovery members RFC 8414 gives no default — see
+     * {@link #parseDiscoveryDocument}.
+     */
+    private static @Nullable List<String> textListOrNull(JsonNode wire, String field) {
+        JsonNode node = wire.get(field);
+        if (node == null || node.isNull() || !node.isArray()) {
+            return null;
+        }
+        return textList(wire, field);
     }
 
     private static List<String> textList(JsonNode wire, String field) {
@@ -3390,13 +3414,35 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /** Builds the final endpoint URL: the discovery document's endpoint plus the
      * mandatory {@code ?tenant_id=<uuid>} query parameter (§12.1 note 2), RFC
      * 3986-percent-encoded via {@link HttpUrl} (space becomes {@code %20}, not
-     * {@code +}). Existing query parameters on the endpoint are preserved. */
+     * {@code +}). Every <em>other</em> query parameter already on the endpoint is
+     * preserved: RFC 6749 §3.1/§3.2 require a client to retain the endpoint's own
+     * query component.
+     *
+     * <p><strong>The resolved tenant replaces any {@code tenant_id} the endpoint
+     * already carries; it is never appended alongside it.</strong> Since contract
+     * 1.42 the server's own discovery document publishes
+     * {@code ?tenant_id=<uuid>} on the token, revocation, introspection,
+     * device-authorization, PAR and end-session endpoints whenever the discovery
+     * request named a tenant or the deployment sets
+     * {@code oauth2_default_tenant_id}. {@link HttpUrl.Builder#addQueryParameter}
+     * appends, so adding blindly produced {@code ?tenant_id=A&tenant_id=B} — two
+     * values for a parameter that decides which tenant's users a token is minted
+     * for, resolved by whichever one the server's query parser happens to pick.
+     *
+     * <p>The resolved value wins on disagreement: it is the tenant the caller (or
+     * the live session, via {@link #resolveOauth2TenantId}) actually authenticated
+     * against, and a deterministic answer beats one that depends on parser
+     * ordering. */
     private String oauth2Url(String endpoint, @Nullable UUID tenantId) {
         HttpUrl url = HttpUrl.parse(endpoint);
         if (url == null) {
             throw new NetworkError("discovery document endpoint is not a valid URL: " + endpoint);
         }
-        return url.newBuilder().addQueryParameter("tenant_id", resolveOauth2TenantId(tenantId).toString()).build().toString();
+        return url.newBuilder()
+                .removeAllQueryParameters("tenant_id")
+                .addQueryParameter("tenant_id", resolveOauth2TenantId(tenantId).toString())
+                .build()
+                .toString();
     }
 
     private JsonNode postToken(OidcConfiguration configuration, RequestBody form, @Nullable UUID tenantId) {
@@ -3633,6 +3679,44 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
             AuthorizationRequest request, String redirectUri, @Nullable String scope,
             @Nullable UUID tenantId) {
+        return oidcPar(configuration, request, redirectUri, scope, tenantId, null);
+    }
+
+    /**
+     * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID)} carrying
+     * an RFC 9449 &sect;10.1 {@code dpop_jkt} — the JWK thumbprint of the DPoP key the client
+     * will present at the token endpoint (contract 1.42).
+     *
+     * <p>Pushing the thumbprint binds the authorization code to the key at the moment the
+     * request is created, before the browser ever sees it. Without it the binding is only
+     * established at redemption, so an authorization code intercepted in the front channel can
+     * be redeemed by whoever holds <em>a</em> DPoP key rather than only by the client that
+     * started the flow (RFC 9449 &sect;10).
+     *
+     * <p><strong>Caller-supplied, and it has to be.</strong> This SDK implements the
+     * resource-server half of DPoP ({@link io.axiam.sdk.internal.DpopVerifier}, CONTRACT.md
+     * &sect;21.7.2) and ships no client-side proof generator, so it holds no DPoP key to derive
+     * a thumbprint from. Pass the RFC 7638 SHA-256 thumbprint of the same public key whose
+     * proofs will accompany the token request; the value is sent verbatim and only when
+     * non-{@code null}, never synthesised and never defaulted.
+     *
+     * <p>Note what is deliberately <em>not</em> here: {@code request_uri}. RFC 9126 &sect;2.1
+     * makes it the one authorization parameter a client MUST NOT push, because a pushed
+     * {@code request_uri} chains one PAR record to another. The wire schema models it so the
+     * server can refuse it, not so a client can send it.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope; {@code openid} is added when absent
+     * @param tenantId      a tenant override for the {@code ?tenant_id=} query parameter
+     * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or
+     *                      {@code null} to push no {@code dpop_jkt} at all
+     * @return the opaque handle and the URL to redirect the browser to
+     */
+    public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
+            AuthorizationRequest request, String redirectUri, @Nullable String scope,
+            @Nullable UUID tenantId, @Nullable String dpopJkt) {
         ensureOpen();
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         String endpoint = preferredEndpointOrNull(config, MtlsEndpointAliases::pushed_authorization_request_endpoint,
@@ -3657,6 +3741,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 .add("code_challenge_method", OidcPkce.CODE_CHALLENGE_METHOD_S256);
         if (oidcClientSecret != null) {
             form.add("client_secret", oidcClientSecret.expose());
+        }
+        // RFC 9449 §10.1: present only when the caller has a DPoP key. An
+        // empty or absent dpop_jkt is not "no binding requested" to the
+        // server — it is a *different* request — so it is omitted rather
+        // than sent blank.
+        if (dpopJkt != null && !dpopJkt.isEmpty()) {
+            form.add("dpop_jkt", dpopJkt);
         }
 
         String url = oauth2Url(endpoint, tenantId);
@@ -3713,8 +3804,26 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public CompletableFuture<PushedAuthorizationRequest> oidcParAsync(
             @Nullable OidcConfiguration configuration, AuthorizationRequest request,
             String redirectUri, @Nullable String scope, @Nullable UUID tenantId) {
+        return oidcParAsync(configuration, request, redirectUri, scope, tenantId, null);
+    }
+
+    /** {@code CompletableFuture} async twin of
+     * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID, String)}.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope
+     * @param tenantId      a tenant override for the query parameter
+     * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or {@code null}
+     * @return a future resolving to the pushed request
+     */
+    public CompletableFuture<PushedAuthorizationRequest> oidcParAsync(
+            @Nullable OidcConfiguration configuration, AuthorizationRequest request,
+            String redirectUri, @Nullable String scope, @Nullable UUID tenantId,
+            @Nullable String dpopJkt) {
         return CompletableFuture.supplyAsync(
-                () -> oidcPar(configuration, request, redirectUri, scope, tenantId));
+                () -> oidcPar(configuration, request, redirectUri, scope, tenantId, dpopJkt));
     }
 
     // ------------------------------------------------------------------

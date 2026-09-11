@@ -15,6 +15,9 @@ import java.util.UUID;
 /**
  * OAuth2 client response -- omits client_secret_hash.
  *
+ * @param authnRequestParams X7.1 — echoed so an operator can audit which clients act on the OIDC
+ *     authentication-request parameters, from this endpoint rather than from the database.
+ * @param browserSso X7.3 — echoed for the same reason.
  * @param clientId the server's client_id field
  * @param createdAt the server's created_at field
  * @param dpopBoundAccessTokens the server's dpop_bound_access_tokens field
@@ -46,6 +49,8 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OAuth2ClientResponse(
+        @JsonProperty("authn_request_params") AuthnRequestParamsMode authnRequestParams,
+        @JsonProperty("browser_sso") Boolean browserSso,
         @JsonProperty("client_id") String clientId,
         @JsonProperty("created_at") OffsetDateTime createdAt,
         @JsonProperty("dpop_bound_access_tokens") Boolean dpopBoundAccessTokens,
