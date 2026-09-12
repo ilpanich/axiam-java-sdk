@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta13] - 2026-09-12
+
 ### Added
+
+- Push RFC 9449 §10.1 dpop_jkt on oidcPar
+
+- Model the two contract-1.42 discovery members as optional
+
+- Prefer RFC 8705 §5 mtls_endpoint_aliases on mTLS calls
 
 - **RFC 9449 §10.1 `dpop_jkt` on `oidcPar` (SDK contract 1.42).** A six-argument
   `oidcPar`/`oidcParAsync` overload pushes the JWK thumbprint of the DPoP key
@@ -69,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Record the 1.40 → 1.42 re-sync in CHANGELOG and README
+
+- Re-vendor CONTRACT/openapi/registry at 1.42 and regenerate §27
+
+- Bump the minor-patch group with 4 updates
+
 - Re-vendored `CONTRACT.md`, `openapi.json` and `management-registry.json` from
   `ilpanich/axiam` at SDK contract **1.42** — two revisions, 1.40 → 1.42, since
   the previously vendored copy was 1.40. The registry grew from 155 to **158
@@ -88,6 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand-written surface changes.
 
 ### Fixed
+
+- Replace, never append, tenant_id on a discovery-advertised endpoint
 
 - **A tenant-scoped discovery document no longer produces a doubled
   `tenant_id` (SDK contract 1.42).** Since 1.42 the server publishes
