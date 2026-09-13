@@ -3,11 +3,15 @@ package io.axiam.sdk.rest;
 import io.axiam.sdk.internal.RefreshGuard;
 import io.axiam.sdk.internal.SessionState;
 
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
+import okhttp3.HttpUrl;
 import okhttp3.Interceptor;
 import okhttp3.Request;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -75,6 +79,14 @@ public final class AuthInterceptor implements Interceptor {
         boolean isRefreshCall = SessionState.isRefreshPath(encodedPath)
                 || SessionState.isOauth2SkipRefreshPath(encodedPath);
 
+        // §24.1 (contract 1.45): webauthn/setup/register/{start,finish} take
+        // no session at all — the setup token in the body is the ONLY
+        // credential they accept. An already-signed-in client's bearer token,
+        // CSRF token and cookies must never ride along, so this call is
+        // excluded from every credential-attaching branch below exactly as
+        // isRefreshCall is excluded from the proactive-refresh branch.
+        boolean isSessionlessSetupCall = SessionState.isWebauthnSetupRegisterPath(encodedPath);
+
         // Host-isolation (3A): only same-origin requests receive the bearer
         // token and CSRF token. A request built against an absolute
         // third-party URL (or a redirect resolved off-origin) is left
@@ -91,7 +103,8 @@ public final class AuthInterceptor implements Interceptor {
 
         // Non-blocking read — never session/guard.lock() synchronously here.
         String access = session.cachedAccessToken();
-        if (sameHost && !isRefreshCall && access != null && session.isNearExpiry(access, NEAR_EXPIRY_BUFFER_MILLIS)) {
+        if (sameHost && !isRefreshCall && !isSessionlessSetupCall
+                && access != null && session.isNearExpiry(access, NEAR_EXPIRY_BUFFER_MILLIS)) {
             access = guard.refreshIfNeeded(access, session::doHttpRefresh).access();
         }
 
@@ -100,21 +113,63 @@ public final class AuthInterceptor implements Interceptor {
             builder.header("X-Tenant-Id", session.tenantId());
         }
         if (sameHost) {
-            if (access != null) {
+            if (access != null && !isSessionlessSetupCall) {
                 builder.header("Authorization", "Bearer " + access);
             }
             String csrf = session.csrfToken();
-            if (csrf != null && STATE_CHANGING_METHODS.contains(original.method())) {
+            if (csrf != null && !isSessionlessSetupCall && STATE_CHANGING_METHODS.contains(original.method())) {
                 builder.header("X-CSRF-Token", csrf);
             }
         }
+        // okhttp3.internal.http.BridgeInterceptor (5.x) loads the outgoing
+        // Cookie header from chain.getCookieJar() UNCONDITIONALLY — it no
+        // longer skips a request that already carries one, so overriding the
+        // header here would just be clobbered back. Chain#withCookieJar is
+        // the supported way to swap the jar for the rest of THIS call only:
+        // loadForRequest() returning empty is what keeps an already-signed-in
+        // client's session cookie off the wire, while saveFromResponse()
+        // still delegates to the real jar so a successful
+        // setup/register/finish's Set-Cookie response is captured exactly as
+        // it would be through the normal jar (§24.8's adoption test).
+        Chain effectiveChain = isSessionlessSetupCall
+                ? chain.withCookieJar(new LoadSuppressedCookieJar(chain.getCookieJar()))
+                : chain;
 
-        Response response = chain.proceed(builder.build());
+        Response response = effectiveChain.proceed(builder.build());
 
         String newCsrf = response.header("X-CSRF-Token");
         if (newCsrf != null) {
             session.setCsrfToken(newCsrf);
         }
         return response;
+    }
+
+    /**
+     * A {@link CookieJar} that never loads a cookie for an outgoing request
+     * but still saves an incoming response's {@code Set-Cookie} headers into
+     * the real jar it wraps.
+     *
+     * <p>Used only for &sect;24.1's session-less {@code setup/register/*}
+     * pair (contract 1.45), via {@link Chain#withCookieJar}, and only for the
+     * duration of that one call: the client's shared jar (and every other
+     * request) is untouched.
+     */
+    private static final class LoadSuppressedCookieJar implements CookieJar {
+
+        private final CookieJar delegate;
+
+        LoadSuppressedCookieJar(CookieJar delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+            delegate.saveFromResponse(url, cookies);
+        }
+
+        @Override
+        public List<Cookie> loadForRequest(HttpUrl url) {
+            return List.of();
+        }
     }
 }

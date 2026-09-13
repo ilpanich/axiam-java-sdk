@@ -567,6 +567,13 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().certificates().generate(new io.axiam.sdk.management.models.CreateCertificateRequest(io.axiam.sdk.management.models.CertificateType.USER, EXAMPLE_ID, io.axiam.sdk.management.models.KeyAlgorithm.RSA4096, null, "example", 1));
     }
 
+    /** Exercises certificates.sign_csr. */
+    @Test
+    void certificatesSignCsr() throws Exception {
+        mount("POST", "/api/v1/certificates/sign-csr", 201, "{\"cert_type\": \"User\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"key_algorithm\": \"Rsa4096\", \"metadata\": {}, \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"public_cert_pem\": \"example\", \"status\": \"Active\", \"subject\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}");
+        client.management().certificates().signCsr(new io.axiam.sdk.management.models.SignCertificateCsrRequest(io.axiam.sdk.management.models.CertificateType.USER, "example", EXAMPLE_ID, null, 1));
+    }
+
     /** Exercises certificates.get. */
     @Test
     void certificatesGet() throws Exception {
@@ -1178,6 +1185,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "certificates.get",
                 "certificates.list",
                 "certificates.revoke",
+                "certificates.sign_csr",
                 "email_config.delete_org",
                 "email_config.delete_tenant",
                 "email_config.get_org",
@@ -1321,7 +1329,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(159, exercised.size(),
+        assertEquals(160, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

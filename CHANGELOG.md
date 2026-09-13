@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `certificates.sign_csr` — an end-entity certificate from a caller CSR
+
+- Add `webauthnSetupRegisterStart`/`Finish` — a passkey as the first factor at forced enrolment
+
+- **`certificates.sign_csr` — an end-entity certificate from a caller-supplied
+  CSR (management API, contract 1.45).** `POST /api/v1/certificates/sign-csr`,
+  generated onto `ManagementApi.certificates()` from the re-vendored
+  `management-registry.json`/`openapi.json`; the operation count moves 159 →
+  160 and the surface test's expected set was regenerated with it, never
+  hand-edited.
+
+  The response is the existing `Certificate` model, not `GeneratedCertificate`:
+  a CSR-signed certificate has no private key for AXIAM to return, and
+  `GeneratedCertificate`'s mandatory `private_key_pem` would have to be `null`
+  on every response this operation produces — a field that lies about every
+  value it ever holds. §27.5 records `sign_csr` as deliberately absent from
+  the `Sensitive<T>` table for the same reason. A reflective model test
+  (`signCsrReturnsCertificateWithNoPrivateKeyField`) asserts the return type
+  carries no `private`-named field and nothing wrapped in `Sensitive<T>`, so a
+  future generator or registry change that reattached a key field would fail
+  here rather than ship silently.
+
+- **`webauthnSetupRegisterStart` / `webauthnSetupRegisterFinish` — a passkey
+  or security key as the first factor at forced enrolment (CONTRACT.md §24.1,
+  §25.2 rule 2, contract 1.45).** The WebAuthn twins of `mfaSetupEnroll` /
+  `mfaSetupConfirm`: `POST /api/v1/auth/webauthn/setup/register/start` and
+  `.../finish`, each with a `*Async` `CompletableFuture` twin per §1. There is
+  no session at forced first-login enrolment — the setup token from the
+  `mfaSetupRequired` outcome is the only credential, and it travels in the
+  request body.
+
+  Unlike `webauthnRegisterStart`/`Finish`, this pair takes **no** session and
+  MUST NOT attach one: an already-signed-in client's `Authorization` header,
+  CSRF token and cookie are all withheld from these two requests even when a
+  session is configured. `AuthInterceptor` gained a same-shaped exclusion to
+  the one it already carries for the refresh endpoint, plus — OkHttp 5.x
+  having dropped `BridgeInterceptor`'s "only load a cookie when the request
+  carries none" guard, which no longer left an explicit header alone — a
+  per-call `Chain#withCookieJar` override whose `loadForRequest` is always
+  empty but whose `saveFromResponse` still delegates to the real jar, so a
+  successful `finish`'s `Set-Cookie` response is still captured and the client
+  ends up authenticated exactly as after `login()`.
+
+  `webauthnSetupRegisterFinish` adopts credentials exactly as `mfaSetupConfirm`
+  does (§25.2 rule 2): the two ways of completing a forced enrolment leave the
+  client in the same state. Both `setup_token` and `state_token` are
+  `Sensitive<T>` and never decoded — opaque, per §24.1. Nine new tests in
+  `AxiamClientWebauthnTest` cover the no-session-credential guarantee (asserted
+  on the transport, with a session configured), the same guarantee across a
+  reactive 401 retry (`AuthAuthenticator` gained the same path exclusion
+  `AuthInterceptor` did — a 401 here must not "fix itself" by attaching the
+  session's credential), the adoption assertion, the `503` not retried on
+  `start`, the `403` policy message surfacing verbatim on `finish`, and token
+  opacity.
+
+- Re-vendored `CONTRACT.md` (1.45), `openapi.json`, `management-registry.json`
+  and `proto/` from `axiam` (`3d5b279`). `proto/` was already current — no
+  changes.
+
 ## [1.0.0-beta14] - 2026-09-13
 
 ### Added

@@ -96,6 +96,29 @@ public final class CertificatesApi {
     }
 
     /**
+     * Issues POST /api/v1/certificates/sign-csr.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param body the request body
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public io.axiam.sdk.management.models.Certificate signCsr(io.axiam.sdk.management.models.SignCertificateCsrRequest body) {
+        final String operation = "certificates.sign_csr";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "POST",
+                "/api/v1/certificates/sign-csr", "/api/v1/certificates/sign-csr", query, body);
+        return ManagementSupport.convert(node, io.axiam.sdk.management.models.Certificate.class, operation);
+    }
+
+    /**
      * Issues GET /api/v1/certificates/{id}.
      *
      * @param id the id path parameter

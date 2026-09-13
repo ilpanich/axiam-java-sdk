@@ -49,7 +49,18 @@ public final class AuthAuthenticator implements Authenticator {
         // expiry — it must never enter this guard. The oidc engine's own
         // OAuth2ErrorResponse mapping (ErrorMapper.fromOAuth2Response) sees the
         // original, unretried 401 response.
+        //
+        // §24.1 (contract 1.45): a 401 from webauthn/setup/register/{start,
+        // finish} means the SETUP TOKEN is invalid/expired/wrong-purpose —
+        // never a session expiry, since this pair never carried a session in
+        // the first place (AuthInterceptor withholds it on the way out). This
+        // guard must not "fix" that 401 by attaching the caller's own session
+        // credential on retry: that would attach exactly the credential §24.1
+        // says an SDK MUST NOT attach to these two, the moment the server
+        // rejects the setup token — the one scenario the request-side
+        // exclusion alone would miss.
         if (SessionState.isRefreshPath(encodedPath) || SessionState.isOauth2SkipRefreshPath(encodedPath)
+                || SessionState.isWebauthnSetupRegisterPath(encodedPath)
                 || responseCount(response) >= 2) {
             return null;
         }
