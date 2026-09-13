@@ -184,6 +184,41 @@ public final class SessionState {
     }
 
     /**
+     * {@code setup/register/start} — the WebAuthn twin of
+     * {@code mfa_setup_enroll}, taking a setup token rather than a session
+     * (CONTRACT.md &sect;24.1, contract 1.45).
+     */
+    public static final String WEBAUTHN_SETUP_REGISTER_START_PATH =
+            "/api/v1/auth/webauthn/setup/register/start";
+
+    /**
+     * {@code setup/register/finish} — the WebAuthn twin of
+     * {@code mfa_setup_confirm} (CONTRACT.md &sect;24.1, contract 1.45).
+     */
+    public static final String WEBAUTHN_SETUP_REGISTER_FINISH_PATH =
+            "/api/v1/auth/webauthn/setup/register/finish";
+
+    /**
+     * Checks whether {@code encodedPath} is one of the two session-less
+     * {@code webauthn/setup/register/*} endpoints (CONTRACT.md &sect;24.1,
+     * contract 1.45): the setup token is the only credential this pair
+     * accepts, and it travels in the request body, never as a header. An
+     * already-authenticated client's {@code Authorization} header and cookies
+     * MUST NOT reach either endpoint, so {@code AuthInterceptor} special-cases
+     * this predicate exactly as it already special-cases
+     * {@link #isRefreshPath(String)}.
+     *
+     * @param encodedPath a request URL's encoded path
+     * @return {@code true} if {@code encodedPath} is
+     *         {@link #WEBAUTHN_SETUP_REGISTER_START_PATH} or
+     *         {@link #WEBAUTHN_SETUP_REGISTER_FINISH_PATH}
+     */
+    public static boolean isWebauthnSetupRegisterPath(String encodedPath) {
+        return WEBAUTHN_SETUP_REGISTER_START_PATH.equals(encodedPath)
+                || WEBAUTHN_SETUP_REGISTER_FINISH_PATH.equals(encodedPath);
+    }
+
+    /**
      * Checks whether {@code encodedPath} is an {@code /oauth2/*} endpoint —
      * broader than {@link #isOauth2SkipRefreshPath(String)}'s three-path
      * refresh-guard set, covering every endpoint a discovery document can

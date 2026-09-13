@@ -50,6 +50,7 @@ class AxiamClientWebauthnTest {
     private static final String CHALLENGE_TOKEN = "challenge-token-fixture-do-not-log";
     private static final String ACCESS_TOKEN = "access-token-fixture-do-not-log";
     private static final String REFRESH_TOKEN = "refresh-token-fixture-do-not-log";
+    private static final String SETUP_TOKEN = "setup-token-fixture-do-not-log";
 
     /**
      * Deliberately "unusual but valid": every optional field populated, so the
@@ -136,6 +137,23 @@ class AxiamClientWebauthnTest {
                 .setResponseCode(code)
                 .setHeader("Content-Type", "application/json")
                 .setBody(body);
+    }
+
+    /**
+     * A completed-login response shaped for {@code webauthnSetupRegisterFinish}
+     * specifically: unlike {@link #loginResponse()} (consumed only as a
+     * {@link WebauthnLoginResult}, which never decodes the access token),
+     * {@code setupRegisterFinish} runs through the SAME {@code authenticatedFrom}
+     * path {@code login()}/{@code mfaSetupConfirm} do, which decodes
+     * {@code sub}/{@code tenant_id} out of the access cookie to build the
+     * {@link AxiamUser} — so the fixture needs a structurally valid token, not
+     * an opaque literal.
+     */
+    private static MockResponse setupFinishLoginResponse(String accessToken) {
+        return json(200, "{\"session_id\":\"" + UUID.randomUUID() + "\",\"expires_in\":900}")
+                .addHeader("Set-Cookie", "axiam_access=" + accessToken + "; Path=/")
+                .addHeader("Set-Cookie", "axiam_refresh=refresh-cookie; Path=/")
+                .addHeader("X-CSRF-Token", "csrf-tok");
     }
 
     /** Seed the access cookie — what the SDK reads as "signed in" (§24.1). */
@@ -347,6 +365,211 @@ class AxiamClientWebauthnTest {
                         "a never-used credential should have no lastUsedAt");
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // §24.1 (contract 1.45) — the session-less setup/register pair
+    //
+    // Unlike register/*, this pair takes NO session: the setup token in the
+    // body is the only credential, and an SDK MUST NOT attach its own
+    // session credential even when one is configured (§24.1, §24.8).
+    // -----------------------------------------------------------------------
+
+    @Test
+    void setupRegisterStartReachesItsOwnEndpointWithTheSetupTokenInTheBody() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(challengeResponse(MINIMAL_CREATION_CHALLENGE));
+
+                WebauthnChallenge challenge = client.webauthnSetupRegisterStart(Sensitive.of(SETUP_TOKEN));
+
+                RecordedRequest request = server.takeRequest();
+                assertEquals("/api/v1/auth/webauthn/setup/register/start", request.getPath());
+                assertEquals(SETUP_TOKEN,
+                        MAPPER.readTree(request.getBody().readUtf8()).path("setup_token").asText());
+                assertEquals(STATE_TOKEN, challenge.stateToken().expose());
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterCallsCarryNoSessionCredentialEvenWhenOneIsConfigured() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                // A session IS configured — the very case §24.8 asks to guard
+                // against: an already-signed-in caller must not have that
+                // session's credential ride along with a setup token.
+                signIn(server, client);
+
+                server.enqueue(challengeResponse(MINIMAL_CREATION_CHALLENGE));
+                client.webauthnSetupRegisterStart(Sensitive.of(SETUP_TOKEN));
+                RecordedRequest startRequest = server.takeRequest();
+                assertNull(startRequest.getHeader("Authorization"),
+                        "setup/register/start must not carry the session's Authorization header");
+                assertTrue(isBlank(startRequest.getHeader("Cookie")),
+                        "setup/register/start must not carry the session's cookie, got: "
+                                + startRequest.getHeader("Cookie"));
+
+                server.enqueue(setupFinishLoginResponse(OidcTestTokens.unsignedAccessToken()));
+                client.webauthnSetupRegisterFinish(Sensitive.of(SETUP_TOKEN), Sensitive.of(STATE_TOKEN),
+                        "Alice's phone", REGISTRATION_RESPONSE);
+                RecordedRequest finishRequest = server.takeRequest();
+                assertNull(finishRequest.getHeader("Authorization"),
+                        "setup/register/finish must not carry the session's Authorization header");
+                assertTrue(isBlank(finishRequest.getHeader("Cookie")),
+                        "setup/register/finish must not carry the session's cookie, got: "
+                                + finishRequest.getHeader("Cookie"));
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterFinishAdoptsCredentialsExactlyAsMfaSetupConfirmDoes() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                String accessToken = OidcTestTokens.unsignedAccessToken();
+                server.enqueue(setupFinishLoginResponse(accessToken));
+
+                LoginResult result = client.webauthnSetupRegisterFinish(Sensitive.of(SETUP_TOKEN),
+                        Sensitive.of(STATE_TOKEN), "Alice's phone", REGISTRATION_RESPONSE);
+
+                RecordedRequest finishRequest = server.takeRequest();
+                assertEquals("/api/v1/auth/webauthn/setup/register/finish", finishRequest.getPath());
+
+                // §25.2 rule 2: this IS the completion of a login, adopted
+                // exactly as mfaSetupConfirm/login adopt one — not handed back
+                // for the caller to install.
+                assertFalse(result.mfaRequired());
+                assertFalse(result.mfaSetupRequired());
+
+                // A cookie-jar SDK additionally captures the CSRF token, and a
+                // state-changing call made immediately afterwards carries it —
+                // the same assertion §24.3 requires of webauthnAuthenticateFinish
+                // (§24.8's adoption test).
+                server.enqueue(json(200, "{}"));
+                client.mfaEnroll();
+                RecordedRequest afterward = server.takeRequest();
+                assertEquals("Bearer " + accessToken, afterward.getHeader("Authorization"),
+                        "the client must be authenticated after setup/register/finish, "
+                                + "exactly as after login()");
+                assertEquals("csrf-tok", afterward.getHeader("X-CSRF-Token"),
+                        "the captured CSRF token must be echoed on the very next state-changing call");
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterStartDoesNotRetry503() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                int before = server.getRequestCount();
+                server.enqueue(json(503, "{\"message\":\"FIDO metadata unavailable\"}"));
+
+                assertThrows(RuntimeException.class,
+                        () -> client.webauthnSetupRegisterStart(Sensitive.of(SETUP_TOKEN)));
+
+                // §24.4 rule 2, same as registerStartDoesNotRetry503.
+                assertEquals(1, server.getRequestCount() - before,
+                        "the 503 must not be retried");
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterStart401MeansTheTokenIsInvalidExpiredOrWrongPurpose() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(json(401, "{\"message\":\"invalid or expired setup token\"}"));
+                assertThrows(AuthError.class,
+                        () -> client.webauthnSetupRegisterStart(Sensitive.of("not-a-real-token")));
+            }
+        }
+    }
+
+    @Test
+    void a401OnSetupRegisterIsNeverRetriedWithTheSessionsCredential() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                // A session IS configured, so AuthAuthenticator's reactive 401
+                // handler has a credential it COULD reach for. It must not: the
+                // setup token — not this client's own session — is what a 401
+                // here is complaining about (§24.1), and "fixing" it by
+                // retrying with the session's Authorization header would
+                // attach exactly the credential this pair must never carry.
+                signIn(server, client);
+                int before = server.getRequestCount();
+                server.enqueue(json(401, "{\"message\":\"invalid or expired setup token\"}"));
+
+                assertThrows(AuthError.class,
+                        () -> client.webauthnSetupRegisterStart(Sensitive.of("not-a-real-token")));
+
+                assertEquals(1, server.getRequestCount() - before,
+                        "a 401 here must not trigger AuthAuthenticator's reactive refresh-and-retry");
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterStart400MeansTheAccountAlreadyHasAFactor() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(json(400, "{\"message\":\"account already has a factor\"}"));
+                // A setup token adds the FIRST factor, never a second — the same
+                // rule mfaSetupEnroll enforces.
+                assertThrows(RuntimeException.class,
+                        () -> client.webauthnSetupRegisterStart(Sensitive.of(SETUP_TOKEN)));
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterFinish403SurfacesThePolicyMessageVerbatim() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                server.enqueue(json(403, "{\"message\":\"this security key is not FIDO certified\"}"));
+
+                AuthzError error = assertThrows(AuthzError.class,
+                        () -> client.webauthnSetupRegisterFinish(Sensitive.of(SETUP_TOKEN),
+                                Sensitive.of(STATE_TOKEN), "key", REGISTRATION_RESPONSE));
+                // §24.4 rule 1, same as webauthnRegisterFinish's 403.
+                assertTrue(error.getMessage().contains("FIDO certified")
+                                || String.valueOf(error.getCause()).contains("FIDO certified"),
+                        "the attestation policy message was lost: " + error.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void setupRegisterTokensAreNeverParsed() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = client(server.url("/").toString())) {
+                // Neither the setup token nor the state token is a JWT or
+                // anything base64-shaped. If either were decoded, this fails.
+                String notAJwt = "this-is-not-a-jwt-and-never-will-be";
+                server.enqueue(setupFinishLoginResponse(OidcTestTokens.unsignedAccessToken()));
+
+                client.webauthnSetupRegisterFinish(Sensitive.of(notAJwt), Sensitive.of(notAJwt),
+                        "key", REGISTRATION_RESPONSE);
+
+                JsonNode body = MAPPER.readTree(server.takeRequest().getBody().readUtf8());
+                assertEquals(notAJwt, body.path("setup_token").asText());
+                assertEquals(notAJwt, body.path("state_token").asText());
+            }
+        }
+    }
+
+    /** {@code null} or blank — the shape an absent/suppressed header takes. */
+    private static boolean isBlank(String header) {
+        return header == null || header.isBlank();
     }
 
     // -----------------------------------------------------------------------

@@ -8,19 +8,24 @@ import io.axiam.sdk.errors.ConflictError;
 import io.axiam.sdk.errors.NetworkError;
 import io.axiam.sdk.errors.NotFoundError;
 import io.axiam.sdk.errors.ValidationError;
+import io.axiam.sdk.management.models.Certificate;
+import io.axiam.sdk.management.models.CertificateType;
 import io.axiam.sdk.management.models.CreateRoleRequest;
 import io.axiam.sdk.management.models.CreateScimTokenRequest;
 import io.axiam.sdk.management.models.CreateUserRequest;
 import io.axiam.sdk.management.models.SetMtlsTrustAnchor;
+import io.axiam.sdk.management.models.SignCertificateCsrRequest;
 import io.axiam.sdk.management.models.UpdateUserRequest;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -530,6 +535,41 @@ class ManagementSemanticsTest extends ManagementTestBase {
         JsonNode sent = route.last().json();
         assertEquals("hunter2hunter2", sent.path("password").asText(),
                 "wrapping a secret must not stop it reaching the server");
+    }
+
+    /**
+     * §27.5 (contract 1.45): {@code certificates.sign_csr} returns the existing
+     * {@code Certificate} model, never {@code GeneratedCertificate} — asserted by
+     * return type, and reflectively over every record component so a future
+     * generator or registry change that reintroduced a key-shaped field here
+     * would fail this test rather than ship a model that lies about a key it
+     * cannot actually return.
+     */
+    @Test
+    void signCsrReturnsCertificateWithNoPrivateKeyField() throws Exception {
+        mount("POST", "/api/v1/certificates/sign-csr", 201,
+                "{\"cert_type\":\"User\",\"created_at\":\"2026-08-26T00:00:00Z\","
+                        + "\"fingerprint\":\"example\",\"id\":\"" + EXAMPLE_ID + "\","
+                        + "\"issuer_ca_id\":\"" + EXAMPLE_ID + "\",\"key_algorithm\":\"Rsa4096\","
+                        + "\"metadata\":{},\"not_after\":\"2026-08-26T00:00:00Z\","
+                        + "\"not_before\":\"2026-08-26T00:00:00Z\",\"public_cert_pem\":\"example\","
+                        + "\"status\":\"Active\",\"subject\":\"example\",\"tenant_id\":\"" + TENANT_ID + "\"}");
+
+        Object result = client.management().certificates().signCsr(
+                new SignCertificateCsrRequest(CertificateType.USER, "example", EXAMPLE_ID, null, 1));
+
+        assertInstanceOf(Certificate.class, result,
+                "sign_csr must return the existing Certificate model, not GeneratedCertificate "
+                        + "(§27.5: there is no key to return and no field to leave empty)");
+
+        for (var component : result.getClass().getRecordComponents()) {
+            assertFalse(component.getName().toLowerCase(Locale.ROOT).contains("private"),
+                    "Certificate must carry no private-key field; sign_csr has no key to return, "
+                            + "found: " + component.getName());
+            assertNotEquals(Sensitive.class, component.getType(),
+                    "Certificate must wrap nothing in Sensitive<T>; sign_csr has no secret material, "
+                            + "found on: " + component.getName());
+        }
     }
 
     /** §27.2 rule 1: acquiring a handle performs no I/O. */

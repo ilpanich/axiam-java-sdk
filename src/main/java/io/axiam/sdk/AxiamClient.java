@@ -146,6 +146,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             "/api/v1/auth/webauthn/authenticate/discoverable/start";
     private static final String WEBAUTHN_DISCOVERABLE_FINISH_PATH =
             "/api/v1/auth/webauthn/authenticate/discoverable/finish";
+    // Contract 1.45 — §24.1's session-less pair; single source of truth is
+    // SessionState, which AuthInterceptor also reads to withhold this
+    // client's session credential from these two.
+    private static final String WEBAUTHN_SETUP_REGISTER_START_PATH =
+            SessionState.WEBAUTHN_SETUP_REGISTER_START_PATH;
+    private static final String WEBAUTHN_SETUP_REGISTER_FINISH_PATH =
+            SessionState.WEBAUTHN_SETUP_REGISTER_FINISH_PATH;
 
     // CONTRACT.md §25 — account lifecycle and MFA enrolment.
     private static final String MFA_ENROLL_PATH = "/api/v1/auth/mfa/enroll";
@@ -3958,7 +3965,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         try (Response http = executeJsonPost(WEBAUTHN_REGISTER_FINISH_PATH, body)) {
             if (http.code() != 200 && http.code() != 201) {
-                throw registerFinishError(http);
+                throw registerFinishError(http, "webauthnRegisterFinish");
             }
             JsonNode wire = readJson(http);
             String lastUsed = wire.path("last_used_at").asText("");
@@ -4103,11 +4110,114 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     /**
-     * &sect;24.4 rule 1: the {@code 403} from {@code register/finish} is the
-     * one whose <em>body</em> matters.
+     * {@code POST /api/v1/auth/webauthn/setup/register/start} (CONTRACT.md
+     * &sect;24.1, contract 1.45) — the WebAuthn twin of {@link #mfaSetupEnroll}.
+     *
+     * <p>Reached when {@link #login} returns {@code mfaSetupRequired} and the
+     * caller chooses a passkey or security key instead of an authenticator
+     * app. There is no session yet: the setup token from that outcome
+     * <strong>is</strong> the credential, and it travels in the request body.
+     *
+     * <p>Unlike {@link #webauthnRegisterStart}, this call requires
+     * <strong>no</strong> session and raises nothing client-side when there is
+     * none — and, symmetrically, an already-signed-in client's Authorization
+     * header and cookies are withheld from this request even when a session
+     * <em>is</em> configured (&sect;24.1: "an SDK MUST NOT attach its session
+     * credential to these two").
+     *
+     * <p>A {@code 503} means the tenant's attestation policy requires
+     * attestation and the FIDO metadata service has no usable snapshot — a
+     * server configuration state, not retried (&sect;24.4 rule 2). A
+     * {@code 400} means the account already has a factor: a setup token adds
+     * the first factor, never a second (the same answer {@link #mfaSetupEnroll}
+     * gives). A {@code 401} means the token is invalid, expired, or not a
+     * setup token.
+     *
+     * @param setupToken the token from the {@code mfaSetupRequired} outcome
+     * @return the server's challenge and the state token binding a response to it
+     */
+    public WebauthnChallenge webauthnSetupRegisterStart(Sensitive setupToken) {
+        ensureOpen();
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("setup_token", setupToken.expose());
+        return webauthnStart(WEBAUTHN_SETUP_REGISTER_START_PATH, body);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnSetupRegisterStart}.
+     *
+     * @param setupToken the token from the {@code mfaSetupRequired} outcome
+     * @return a future resolving to the challenge
+     */
+    public CompletableFuture<WebauthnChallenge> webauthnSetupRegisterStartAsync(Sensitive setupToken) {
+        return CompletableFuture.supplyAsync(() -> webauthnSetupRegisterStart(setupToken));
+    }
+
+    /**
+     * {@code POST /api/v1/auth/webauthn/setup/register/finish} (CONTRACT.md
+     * &sect;24.1, &sect;25.2 rule 2, contract 1.45) — the WebAuthn twin of
+     * {@link #mfaSetupConfirm}.
+     *
+     * <p>Adopts credentials <strong>exactly as {@link #mfaSetupConfirm}
+     * does</strong>, because it <em>is</em> the completion of a login
+     * (&sect;25.2 rule 2): the two ways of finishing a forced first-login
+     * enrolment must leave the client in the same state, or a caller's next
+     * request succeeds or fails depending on which factor the user happened
+     * to choose. Like {@link #webauthnSetupRegisterStart}, this call requires
+     * no session and MUST NOT attach one even when a session is configured.
+     *
+     * <p>A {@code 403} is the tenant's attestation policy refusing this
+     * authenticator; the server's message is surfaced verbatim (&sect;24.4
+     * rule 1), exactly as {@link #webauthnRegisterFinish} does.
+     *
+     * @param setupToken     the token from the {@code mfaSetupRequired} outcome
+     * @param stateToken     the token from {@link #webauthnSetupRegisterStart}
+     * @param credentialName the label to store the credential under
+     * @param response       the authenticator's response JSON, verbatim
+     * @return the completed login
+     */
+    public LoginResult webauthnSetupRegisterFinish(
+            Sensitive setupToken, Sensitive stateToken, String credentialName, String response) {
+        ensureOpen();
+        // §17.1 rule 9 / §24.3 rule 4: memo entries are keyed by subject, and
+        // this call — like mfaSetupConfirm — changes the subject.
+        onCredentialChange();
+
+        ObjectNode body = MAPPER.createObjectNode();
+        body.put("setup_token", setupToken.expose());
+        body.put("state_token", stateToken.expose());
+        body.put("credential_name", credentialName);
+        body.set("response", parseAuthenticatorResponse(response, "webauthnSetupRegisterFinish"));
+
+        try (Response http = executeJsonPost(WEBAUTHN_SETUP_REGISTER_FINISH_PATH, body)) {
+            if (http.code() != 200) {
+                throw registerFinishError(http, "webauthnSetupRegisterFinish");
+            }
+            return authenticatedFrom(http);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #webauthnSetupRegisterFinish}.
+     *
+     * @param setupToken     the token from the {@code mfaSetupRequired} outcome
+     * @param stateToken     the token from {@link #webauthnSetupRegisterStart}
+     * @param credentialName the label to store the credential under
+     * @param response       the authenticator's response JSON, verbatim
+     * @return a future resolving to the completed login
+     */
+    public CompletableFuture<LoginResult> webauthnSetupRegisterFinishAsync(
+            Sensitive setupToken, Sensitive stateToken, String credentialName, String response) {
+        return CompletableFuture.supplyAsync(
+                () -> webauthnSetupRegisterFinish(setupToken, stateToken, credentialName, response));
+    }
+
+    /**
+     * &sect;24.4 rule 1: the {@code 403} from a {@code finish} completion is
+     * the one whose <em>body</em> matters — shared by {@link
+     * #webauthnRegisterFinish} and {@link #webauthnSetupRegisterFinish}, the
+     * two completions this rule applies to.
      *
      * <p>The generic &sect;2 mapping would raise an {@link AuthzError} reading
-     * "webauthnRegisterFinish failed", which tells the person holding the key
+     * "{@code <operation> failed}", which tells the person holding the key
      * nothing they can act on. The tenant's attestation policy rejected
      * <em>this</em> authenticator, and the server's message is the only place
      * that says which one would be accepted, so it is lifted into the
@@ -4116,9 +4226,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * <p>Only the named {@code message} field is read — the rest of the body
      * is still discarded, exactly as {@link ErrorMapper}'s
      * {@code action}/{@code resource_id} peek does.
+     *
+     * @param http      the unsuccessful response
+     * @param operation the calling method's name, used to build the message
      */
-    private static RuntimeException registerFinishError(Response http) {
-        String message = "webauthnRegisterFinish failed";
+    private static RuntimeException registerFinishError(Response http, String operation) {
+        String message = operation + " failed";
         if (http.code() == 403) {
             try {
                 JsonNode body = MAPPER.readTree(http.peekBody(MAX_POLICY_MESSAGE_PEEK_BYTES).string());
