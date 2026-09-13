@@ -2768,10 +2768,70 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (presentsClientCertificate && aliases != null) {
             String alias = pick.apply(aliases);
             if (alias != null && !alias.isEmpty()) {
+                assertUsableMtlsAlias(alias, topLevel);
                 return alias;
             }
         }
         return topLevel;
+    }
+
+    /**
+     * Refuses an {@code mtls_endpoint_aliases} entry that cannot carry a client
+     * certificate (CONTRACT.md &sect;21.3.1 vector C, contract 1.43).
+     *
+     * <p>Falling back to the top-level endpoint looks like the safe answer and
+     * is the dangerous one: the caller asked to authenticate with a
+     * certificate, the operator published something unusable, and sending the
+     * certificate to the front-channel host authenticates nothing while
+     * appearing to work.
+     *
+     * <p>Two defects, each a refusal on its own:
+     *
+     * <ul>
+     *   <li><strong>Not an absolute URL.</strong> A relative alias resolves
+     *       against nothing the client holds, and the base that might seem
+     *       obvious &mdash; the issuer's host &mdash; is precisely the host the
+     *       alias exists to name a different one from.</li>
+     *   <li><strong>A scheme weaker than the endpoint it replaces.</strong> An
+     *       alias substitutes for exactly one top-level endpoint, so that is
+     *       what it is compared against: {@code https} &rarr; {@code http} is a
+     *       downgrade, while {@code http} &rarr; {@code http} is a development
+     *       deployment, which AXIAM's own {@code build_mtls_aliases} supports
+     *       and this suite's harness is.</li>
+     * </ul>
+     *
+     * <p>The refusal is an {@link AuthError}, matching every other "the
+     * discovery document advertises something this client cannot use" in this
+     * class. It also matters operationally: &sect;16.3 retries
+     * {@link io.axiam.sdk.errors.NetworkError} and only that, so the other
+     * choice would have attempted a permanent, deterministic misconfiguration
+     * three times and reported it as transient.
+     *
+     * @param alias    the published alias
+     * @param replaces the top-level endpoint it stands in for, or {@code null}
+     *                 when the document names none
+     * @throws AuthError if the alias cannot carry a client certificate
+     */
+    private static void assertUsableMtlsAlias(String alias, @Nullable String replaces) {
+        URI parsed;
+        try {
+            parsed = URI.create(alias);
+        } catch (IllegalArgumentException e) {
+            parsed = null;
+        }
+        if (parsed == null || parsed.getScheme() == null || parsed.getHost() == null) {
+            throw new AuthError("mtls_endpoint_aliases publishes \"" + alias + "\", which is not an absolute URL. "
+                    + "Refusing rather than falling back to the top-level endpoint: this call presents a client "
+                    + "certificate, and sending it to the front-channel host would authenticate nothing while "
+                    + "appearing to work (CONTRACT.md §21.3.1 vector C)");
+        }
+        boolean replacedIsTls = replaces != null && replaces.regionMatches(true, 0, "https://", 0, 8);
+        if (replacedIsTls && !"https".equalsIgnoreCase(parsed.getScheme())) {
+            throw new AuthError("mtls_endpoint_aliases publishes \"" + alias + "\", whose scheme is \""
+                    + parsed.getScheme() + "\", in place of an https endpoint. That is a downgrade, and mutual TLS "
+                    + "over cleartext is a contradiction; refusing rather than falling back to the top-level "
+                    + "endpoint (CONTRACT.md §21.3.1 vector C)");
+        }
     }
 
     /**

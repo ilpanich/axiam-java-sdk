@@ -262,4 +262,24 @@ public final class UsersApi {
         return ManagementSupport.convertList(node, io.axiam.sdk.management.models.RoleAssignment.class, operation);
     }
 
+    /**
+     * Issues GET /api/v1/users/{user_id}/sessions.
+     *
+     * @param userId the user_id path parameter
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public java.util.List<io.axiam.sdk.management.models.SessionResponse> listSessions(java.util.UUID userId) {
+        final String operation = "users.list_sessions";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/users/{user_id}/sessions", "/api/v1/users/" + userId + "/sessions", query, null);
+        return ManagementSupport.convertList(node, io.axiam.sdk.management.models.SessionResponse.class, operation);
+    }
+
 }

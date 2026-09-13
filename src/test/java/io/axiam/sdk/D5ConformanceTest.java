@@ -122,6 +122,66 @@ class D5ConformanceTest {
     }
 
     // -----------------------------------------------------------------------
+    // §16 — AXIAM T-262: the contended-write answer
+    // -----------------------------------------------------------------------
+    //
+    // Since 2026-09-12 a write that loses an optimistic-concurrency race in the
+    // datastore answers `503 write_contention` with `Retry-After: 1` instead of
+    // `500 internal_error`. Nothing in this SDK changes: §16.3 already retries
+    // 5xx on an eligible operation, and Retry (the implementation whose
+    // parameters the contract adopted) already honours the header as a floor.
+    // That is exactly why the behaviour is pinned — §16.7 exists because two
+    // SDKs once shipped a retry helper that was exported, unit-tested and green
+    // while no production path called it. Only a request count taken on the
+    // wire distinguishes the two.
+
+    /** The server's real answer for a write that lost the race. */
+    private MockResponse contendedWrite() {
+        return new MockResponse().setResponseCode(503)
+                .setHeader("Content-Type", "application/json")
+                .setHeader("Retry-After", "1")
+                .setBody("{\"error\":\"write_contention\","
+                        + "\"message\":\"the datastore is busy; retry this request\"}");
+    }
+
+    /**
+     * An eligible read-only operation survives the server's new answer.
+     *
+     * <p>This one really waits: {@code Retry-After} is a floor, the server says
+     * one second, and pinning a jitter source cannot shorten it. That is the
+     * point — §16.1's floor is what a test that stubbed the clock would stop
+     * asserting.
+     */
+    @Test
+    @DisplayName("§16/T-262: the contended-write answer is retried and the success returned")
+    void contendedWriteAnswerIsRetriedAndSucceeds() {
+        server.enqueue(contendedWrite());
+        enqueue(200);
+        try (AxiamClient client = builder().build()) {
+            AccessResult result = client.checkAccess("read", "r-1");
+            assertTrue(result.allowed(), "a 503 with Retry-After is transient and is retried");
+            assertEquals(2, server.getRequestCount());
+        }
+    }
+
+    /**
+     * The half that catches a retry wired at the transport layer instead of at
+     * the operation layer (§16.7). {@code login} changes state and consumes a
+     * credential, so a silent retry would replay a spent one and turn a
+     * recoverable blip into a hard failure the caller cannot interpret.
+     */
+    @Test
+    @DisplayName("§16.7/T-262: a non-idempotent call makes exactly one attempt against the same 503")
+    void loginMakesExactlyOneAttemptAgainstTheSame503() {
+        server.enqueue(contendedWrite());
+        try (AxiamClient client = builder().build()) {
+            assertThrows(NetworkError.class, () -> client.login("someone@example.test", "password"),
+                    "a mutation is never retried, so the 503 must reach the caller");
+            assertEquals(1, server.getRequestCount());
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // §17 — decision memo
     // -----------------------------------------------------------------------
 

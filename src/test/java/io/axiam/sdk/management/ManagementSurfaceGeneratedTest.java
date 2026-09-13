@@ -153,6 +153,13 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().users().listRoles(EXAMPLE_ID);
     }
 
+    /** Exercises users.list_sessions. */
+    @Test
+    void usersListSessions() throws Exception {
+        mount("GET", "/api/v1/users/" + EXAMPLE_ID + "/sessions", 200, "[{\"amr\": [], \"authenticated_at\": \"example\", \"created_at\": \"example\", \"expires_at\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"refresh_replay_grace_accepted\": 1, \"refresh_replay_refused\": 1, \"refresh_replay_verdict\": \"example\"}]");
+        client.management().users().listSessions(EXAMPLE_ID);
+    }
+
     /** Exercises groups.list. */
     @Test
     void groupsList() throws Exception {
@@ -1302,6 +1309,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "users.list",
                 "users.list_mfa_methods",
                 "users.list_roles",
+                "users.list_sessions",
                 "users.reset_mfa",
                 "users.unlock",
                 "users.update",
@@ -1313,7 +1321,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(158, exercised.size(),
+        assertEquals(159, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

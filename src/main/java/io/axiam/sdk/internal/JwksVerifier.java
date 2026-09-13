@@ -164,6 +164,16 @@ public final class JwksVerifier {
     private final LocalVerificationPolicy policy;
 
     /**
+     * The optional CONTRACT.md &sect;10.4 revocation feed (contract 1.44).
+     *
+     * <p>{@code null} &mdash; the default &mdash; means this verifier behaves
+     * exactly as it did before 1.44: a revoked session's access token verifies
+     * locally until it expires, which is the &sect;10.2 posture the feed
+     * narrows rather than replaces.
+     */
+    private final @Nullable RevocationFeed revocationFeed;
+
+    /**
      * Serializes the forced-refetch path so a concurrent burst of
      * unknown-{@code kid} verifications collapses to exactly one Nimbus
      * refetch (D-08/D-09) &mdash; we do NOT rely on {@link RemoteJWKSet}'s
@@ -180,7 +190,7 @@ public final class JwksVerifier {
      *                the JWKS URL is derived as {@code {baseUrl}/oauth2/jwks}
      */
     public JwksVerifier(String baseUrl) {
-        this(deriveJwksUrl(baseUrl), LocalVerificationPolicy.defaults());
+        this(deriveJwksUrl(baseUrl), LocalVerificationPolicy.defaults(), null);
     }
 
     /**
@@ -196,7 +206,25 @@ public final class JwksVerifier {
      *                issuer check, no audience check, RECOMMENDED skew"
      */
     public JwksVerifier(String baseUrl, LocalVerificationPolicy policy) {
-        this(deriveJwksUrl(baseUrl), policy);
+        this(deriveJwksUrl(baseUrl), policy, null);
+    }
+
+    /**
+     * Creates a verifier that additionally consults {@code revocationFeed}
+     * (CONTRACT.md &sect;10.4, contract 1.44) after every &sect;10.1 rule has
+     * passed.
+     *
+     * <p>It is not a control: it can only ever turn an accept into a reject,
+     * it is never consulted for a token that names no session, and a feed that
+     * cannot be read denies nothing. Use the two-argument constructor for the
+     * pre-1.44 behaviour, which is the default everywhere else.
+     *
+     * @param baseUrl        the AXIAM server base URL (trailing slash tolerated)
+     * @param policy         the &sect;10.1 rule 5&ndash;7 policy
+     * @param revocationFeed the feed to consult, or {@code null} for none
+     */
+    public JwksVerifier(String baseUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
+        this(deriveJwksUrl(baseUrl), policy, revocationFeed);
     }
 
     /**
@@ -268,14 +296,15 @@ public final class JwksVerifier {
      */
     public static JwksVerifier forJwksUri(String jwksUri) {
         try {
-            return new JwksVerifier(URI.create(jwksUri).toURL(), LocalVerificationPolicy.defaults());
+            return new JwksVerifier(URI.create(jwksUri).toURL(), LocalVerificationPolicy.defaults(), null);
         } catch (MalformedURLException | IllegalArgumentException e) {
             throw new AuthError("invalid jwks_uri in discovery document: " + jwksUri);
         }
     }
 
-    private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy) {
+    private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
         this.policy = policy;
+        this.revocationFeed = revocationFeed;
         // TTL 300s, forced-refetch cooldown 60s — matches the Rust
         // (JWKS_CACHE_TTL=300s / FORCED_REFETCH_MIN_INTERVAL=60s), Go
         // (jwx minInterval=60s / maxInterval=300s), and Python
@@ -376,6 +405,19 @@ public final class JwksVerifier {
         String expectedAudience = policy.expectedAudience();
         if (expectedAudience != null && !claims.getAudience().contains(expectedAudience)) {
             throw new AuthError("token aud does not contain the configured audience");
+        }
+
+        // §10.4 (contract 1.44) — last, and only ever a rejection. Every rule
+        // above has already decided the token is valid; a feed that cannot be
+        // read, or a token with no session behind it, changes nothing here. The
+        // message names the session rather than the credential: "the session is
+        // gone" is not "this token was never valid", and a guard that conflated
+        // them would report an expired credential for a logout.
+        if (revocationFeed != null) {
+            String sessionId = claims.getClaim("sid") instanceof String sid ? sid : null;
+            if (sessionId != null && revocationFeed.isRevoked(sessionId)) {
+                throw new AuthError("the session behind this token has been revoked");
+            }
         }
 
         return claims;
