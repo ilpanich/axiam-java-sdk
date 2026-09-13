@@ -394,4 +394,135 @@ class AxiamClientMtlsEndpointAliasesTest {
             }
         }
     }
+
+    // ── Vector C: a malformed alias is refused, never fallen back from ─────
+    //
+    // CONTRACT.md §21.3.1 vector C, contract 1.43. Rule 2 had been normative
+    // since 1.40 and, until the 2026-09-12 pass, said nothing about an alias
+    // that is PRESENT and unusable — every SDK that read the member fell back
+    // to the top-level endpoint. Falling back looks like the safe answer and is
+    // the dangerous one: the caller asked to authenticate with a certificate,
+    // the operator published something unusable, and sending the certificate to
+    // the front-channel host authenticates nothing while appearing to work.
+
+    @Test
+    void aRelativeAliasIsRefusedRatherThanResolved() throws Exception {
+        // A relative alias resolves against nothing the client holds, and the
+        // base that might seem obvious — the issuer's host — is precisely the
+        // host the alias exists to name a different one from.
+        try (MockWebServer conv = new MockWebServer()) {
+            conv.setDispatcher(recordingDispatcher(conventionalHits,
+                    () -> discoveryJson(conv.url("/").toString(),
+                            "{\"token_endpoint\":\"/oauth2/token\"}")));
+            conv.start();
+
+            try (AxiamClient client = client(conv, true)) {
+                AuthError refused = assertThrows(AuthError.class,
+                        () -> client.loginClientCredentials(null, TENANT_UUID, null));
+                assertTrue(refused.getMessage().contains("not an absolute URL"), refused.getMessage());
+            }
+
+            // And the certificate never reached the conventional host, which is
+            // the whole point of refusing rather than falling back.
+            assertTrue(conventionalHits.isEmpty(),
+                    "a refused alias still produced a call to " + conventionalHits);
+        }
+    }
+
+    @Test
+    void aSchemeDowngradeIsRefused() throws Exception {
+        // The comparison is like with like: the alias substitutes for exactly
+        // one top-level endpoint, and that endpoint's scheme is what a
+        // downgrade is measured against.
+        try (MockWebServer conv = new MockWebServer()) {
+            conv.setDispatcher(recordingDispatcher(conventionalHits, () -> {
+                String document = discoveryJson(conv.url("/").toString(),
+                        "{\"token_endpoint\":\"http://mtls.example.test/oauth2/token\"}");
+                return document.replace("\"token_endpoint\":\"" + strip(conv.url("/").toString())
+                        + "/oauth2/token\"", "\"token_endpoint\":\"https://iam.example.test/oauth2/token\"");
+            }));
+            conv.start();
+
+            try (AxiamClient client = client(conv, true)) {
+                AuthError refused = assertThrows(AuthError.class,
+                        () -> client.loginClientCredentials(null, TENANT_UUID, null));
+                assertTrue(refused.getMessage().contains("downgrade"), refused.getMessage());
+            }
+        }
+    }
+
+    /**
+     * The I4 twin of the downgrade refusal, and the reason the rule compares
+     * like with like rather than demanding {@code https} outright: an
+     * {@code http} alias for an {@code http} endpoint is a development
+     * deployment, which AXIAM's own {@code build_mtls_aliases} supports and
+     * this class's own servers are. A rule written as "the scheme must be
+     * https" would have failed every test above.
+     */
+    @Test
+    void anHttpAliasForAnHttpEndpointIsAccepted() throws Exception {
+        try (MockWebServer mtls = new MockWebServer(); MockWebServer conv = new MockWebServer()) {
+            mtls.setDispatcher(recordingDispatcher(mtlsHits, () -> "{}"));
+            mtls.start();
+            String aliases = allAliases(mtls.url("/").toString());
+            conv.setDispatcher(recordingDispatcher(conventionalHits,
+                    () -> discoveryJson(conv.url("/").toString(), aliases)));
+            conv.start();
+
+            try (AxiamClient client = client(conv, true)) {
+                client.loginClientCredentials(null, TENANT_UUID, null);
+            }
+
+            assertEquals(List.of("/oauth2/token"), mtlsHits);
+        }
+    }
+
+    /**
+     * The second I4 twin, and the more important one: a client with no
+     * certificate never reads the member at all, not even to validate it. A
+     * deployment whose aliases are malformed cannot break the clients that
+     * never use them.
+     */
+    @Test
+    void aMalformedAliasCannotBreakAClientNotDoingMtls() throws Exception {
+        try (MockWebServer conv = new MockWebServer()) {
+            conv.setDispatcher(recordingDispatcher(conventionalHits,
+                    () -> discoveryJson(conv.url("/").toString(),
+                            "{\"token_endpoint\":\"not-a-url-at-all\"}")));
+            conv.start();
+
+            try (AxiamClient client = client(conv, false)) {
+                client.loginClientCredentials(null, TENANT_UUID, null);
+            }
+
+            assertEquals(List.of("/oauth2/token"), conventionalHits);
+        }
+    }
+
+    /**
+     * Per endpoint, like the fallback itself: one malformed alias stops the
+     * calls that would have used it and leaves every other endpoint working.
+     */
+    @Test
+    void oneMalformedAliasDoesNotPoisonTheOthers() throws Exception {
+        try (MockWebServer mtls = new MockWebServer(); MockWebServer conv = new MockWebServer()) {
+            mtls.setDispatcher(recordingDispatcher(mtlsHits, () -> "{}"));
+            mtls.start();
+            String m = strip(mtls.url("/").toString());
+            String aliases = "{\"token_endpoint\":\"" + m + "/oauth2/token\","
+                    + "\"introspection_endpoint\":\"::not a url::\"}";
+            conv.setDispatcher(recordingDispatcher(conventionalHits,
+                    () -> discoveryJson(conv.url("/").toString(), aliases)));
+            conv.start();
+
+            try (AxiamClient client = client(conv, true)) {
+                client.loginClientCredentials(null, TENANT_UUID, null);
+                AuthError refused = assertThrows(AuthError.class,
+                        () -> client.introspect(Sensitive.of("t"), null, TENANT_UUID, null));
+                assertTrue(refused.getMessage().contains("not an absolute URL"), refused.getMessage());
+            }
+
+            assertEquals(List.of("/oauth2/token"), mtlsHits);
+        }
+    }
 }
