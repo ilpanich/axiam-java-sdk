@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta15] - 2026-09-15
+
 ### Added
+
+- Sign_csr management op and a session-less passkey setup pair (#93)
 
 - Add `certificates.sign_csr` — an end-entity certificate from a caller CSR
 
@@ -67,6 +71,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-vendored `CONTRACT.md` (1.45), `openapi.json`, `management-registry.json`
   and `proto/` from `axiam` (`3d5b279`). `proto/` was already current — no
   changes.
+
+### Changed
+
+- Re-vendor CONTRACT.md at 1.46
+
+- Bump the minor-patch group with 2 updates
+
+- Bump dev.sigstore:sigstore-maven-plugin
+
+- Bump actions/setup-java from 6.0.0 to 6.0.1
 
 ## [1.0.0-beta14] - 2026-09-13
 
