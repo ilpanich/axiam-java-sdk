@@ -30,7 +30,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Date;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -178,7 +180,9 @@ class Rule8CallerCredentialTest {
         // (§28.8: "nothing in §28 is sensitive"), never a credential. So the
         // pin widens from "exactly one constructor, these two params" to
         // "every public constructor takes only a JwksVerifier and Strings" —
-        // still refusing anything session- or client-shaped.
+        // still refusing anything session- or client-shaped. The edge that
+        // widening gives up is restored by the field allow-list at the end of
+        // this method; read the two halves together.
         Constructor<?>[] ctors = AxiamAuthenticationFilter.class.getConstructors();
         assertEquals(2, ctors.length, "the filter must have exactly the pre-§28 constructor and the §28 overload");
 
@@ -204,6 +208,44 @@ class Rule8CallerCredentialTest {
                         "field " + f.getName() + " is a " + type
                                 + " — a second credential in the guard makes rule 8 violable");
             }
+        }
+
+        // The edge the §28 widening above gave up, restored (CONTRACT.md
+        // §28.11 row R-12, the T21.9 T9d cross-SDK review).
+        //
+        // "A verifier and Strings" still refuses every OBJECT-shaped
+        // credential, which is what SEC-085 was, and the type scan above
+        // enumerates those. What it would now admit is a STRING-shaped one: a
+        // fourth parameter carrying a client secret or a bearer token
+        // satisfies "only a verifier and Strings", and a String field holding
+        // it passes the type scan too. The pre-§28 assertion refused any third
+        // parameter at all and would have caught it.
+        //
+        // So pin the instance fields by NAME rather than only by type. A
+        // credential has to be stored somewhere to be reachable, and a name
+        // allow-list catches it whatever its type. Any new field fails this
+        // test until someone adds it here deliberately — which is exactly the
+        // guardrail this test's own header asks for ("so the properties above
+        // cannot be quietly undone by widening the constructor later").
+        //
+        // Additive: no assertion above is relaxed to make room for this one.
+        Set<String> allowedInstanceFields = Set.of(
+                "jwksVerifier", // the verifier, never a logged-in client
+                "configuredTenantId", // §5 tenant pin, not a credential
+                "mcpChallenges"); // §28.4 challenge strings, published to a failed caller
+
+        for (Field f : AxiamAuthenticationFilter.class.getDeclaredFields()) {
+            if (Modifier.isStatic(f.getModifiers())) {
+                continue; // constants, not per-instance state a caller could reach
+            }
+            assertTrue(
+                    allowedInstanceFields.contains(f.getName()),
+                    "AxiamAuthenticationFilter gained instance field '" + f.getName() + "' of type "
+                            + f.getType().getSimpleName()
+                            + ". Rule 8 (SEC-085) is violable the moment the guard holds a second "
+                            + "credential, and a String-typed one passes the parameter and type checks "
+                            + "above. If this field is genuinely not a credential, add it to "
+                            + "allowedInstanceFields and say why in a comment.");
         }
     }
 
