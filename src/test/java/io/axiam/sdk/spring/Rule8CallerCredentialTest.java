@@ -171,13 +171,28 @@ class Rule8CallerCredentialTest {
         // through the client it held. Keep the filter's dependency surface free
         // of anything like that, so the properties above cannot be quietly
         // undone by widening the constructor later.
+        //
+        // §28 (CONTRACT.md, MCP resource-server helpers) added a second,
+        // three-argument public constructor carrying a `resourceMetadataUrl`
+        // String — the RFC 9728 document URL, published unauthenticated
+        // (§28.8: "nothing in §28 is sensitive"), never a credential. So the
+        // pin widens from "exactly one constructor, these two params" to
+        // "every public constructor takes only a JwksVerifier and Strings" —
+        // still refusing anything session- or client-shaped.
         Constructor<?>[] ctors = AxiamAuthenticationFilter.class.getConstructors();
-        assertEquals(1, ctors.length, "the filter must have exactly one public constructor");
+        assertEquals(2, ctors.length, "the filter must have exactly the pre-§28 constructor and the §28 overload");
 
-        Class<?>[] params = ctors[0].getParameterTypes();
-        assertEquals(2, params.length, "the filter takes a verifier and a configured tenant, nothing more");
-        assertEquals(JwksVerifier.class, params[0]);
-        assertEquals(String.class, params[1]);
+        for (Constructor<?> ctor : ctors) {
+            Class<?>[] params = ctor.getParameterTypes();
+            assertTrue(params.length == 2 || params.length == 3,
+                    "unexpected constructor arity: " + params.length);
+            assertEquals(JwksVerifier.class, params[0], "the first parameter must always be the verifier");
+            for (int i = 1; i < params.length; i++) {
+                assertEquals(String.class, params[i],
+                        "every parameter beyond the verifier must be a String (tenant id / resourceMetadataUrl), "
+                                + "never a second credential");
+            }
+        }
 
         // And no field may hold something session-shaped, which would put a
         // second credential in reach even with a narrow constructor.
