@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP resource-server helpers (`io.axiam.sdk.mcp`, CONTRACT.md §28, contract
+  1.48) — opt-in and off by default.** The resource-server half of the Model
+  Context Protocol authorization handshake: `Mcp.protectedResourceMetadata`
+  builds and validates the RFC 9728 protected-resource metadata document an
+  MCP server publishes about itself, and `Mcp.bearerChallenge` builds the
+  `WWW-Authenticate` value that starts a client's discovery. Neither performs
+  network I/O, so §16's retry policy and §9's single-flight refresh do not
+  apply, and neither is ever consulted when deciding whether a request is
+  authorized — that stays §10.1's and §11's decision, unchanged.
+
+  Three Spring MVC collaborators build on it: `AxiamAuthenticationFilter`
+  gains a `resourceMetadataUrl` constructor argument (reusing its
+  `JwksVerifier`'s already-configured expected audience — §28 adds no second
+  audience option, and refuses at construction if the two are set
+  inconsistently) and now answers its own credential-rejected 401 with the
+  challenge; `AxiamMcpAuthenticationEntryPoint` answers the *other* 401 (no
+  credential at all), which the filter itself cannot own in Spring's filter
+  model since the request may yet reach a route that permits anonymous
+  access; `AxiamAuthorizationInterceptor` gains the same `resourceMetadataUrl`
+  option and answers its own 401 plus a `@AxiamRequireAccess` denial whose
+  `reason_code` is `no_grant` with the scope-specific `insufficient_scope`
+  hint, deferring to a successfully-minted `UmaChallenger` ticket when both
+  apply; `AxiamProtectedResourceMetadataController` is the `@RestController`
+  serving the document itself, at its own derived (never chosen) path,
+  unauthenticated, with `Cache-Control: public, max-age=3600` and
+  `Access-Control-Allow-Origin: *` — `AxiamAuthenticationFilter` exempts that
+  exact path from its otherwise-global authentication check.
+
+  With `resourceMetadataUrl` unset, every guard's behaviour is byte-for-byte
+  what it was before §28 existed — asserted by a regression test that checks
+  the header's absence explicitly rather than the response status.
+
+  `io.axiam.sdk.grpc` is untouched: it is entirely the *client* role (calling
+  AXIAM's own `TokenService`/`AuthzService`), never a resource-server-side
+  guard for inbound gRPC calls, so §28.5 rule 8's optional gRPC
+  `www-authenticate` trailer has no guard to attach to here. `io.axiam.sdk.amqp`
+  is untouched because §28.5 rule 8 forbids an AMQP equivalent outright.
+
+  `CONTRACT.md`, `openapi.json` and `proto/` re-vendored from the `axiam`
+  repository's `claude_dev/mcp-authorization-server-plan.md` branch (contract
+  1.48) — ahead of `axiam` `main` until that phase lands; `proto/` is
+  byte-identical to the previous vendored copy.
+
 ## [1.0.0-beta15] - 2026-09-15
 
 ### Added

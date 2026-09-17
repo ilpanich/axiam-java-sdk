@@ -11,6 +11,8 @@ import io.axiam.sdk.annotations.AxiamRequireRole;
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.AuthzError;
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.mcp.Mcp;
+import io.axiam.sdk.mcp.McpGuardChallenges;
 import io.axiam.sdk.oidc.RequestedPermission;
 import io.axiam.sdk.oidc.UmaChallenge;
 
@@ -84,6 +86,8 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
 
     private final AxiamClient client;
     private final @Nullable UmaChallenger challenger;
+    private final @Nullable String resourceMetadataUrl;
+    private final @Nullable McpGuardChallenges mcpChallenges;
 
     /**
      * Creates an interceptor that enforces the &sect;11 annotations by calling
@@ -110,8 +114,51 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
      *                   rather than escalating
      */
     public AxiamAuthorizationInterceptor(AxiamClient client, @Nullable UmaChallenger challenger) {
+        this(client, challenger, null, null);
+    }
+
+    /**
+     * Creates an interceptor that additionally emits the CONTRACT.md
+     * &sect;28.4 {@code WWW-Authenticate} challenge: on the initial 401 (no
+     * verified identity in the request context) and on a &sect;11 denial
+     * whose {@code reason_code} is {@code no_grant} on a route that named a
+     * scope (&sect;28.5 rule 5).
+     *
+     * <p>&sect;28.5's rule that only <strong>one</strong>
+     * {@code WWW-Authenticate} value is ever emitted holds here too: where
+     * both a {@link UmaChallenger} and a &sect;28 configuration apply to the
+     * same denial, a successfully minted UMA ticket wins; the &sect;28
+     * challenge is used only when {@code challenger} is {@code null} or
+     * minting failed &mdash; UMA's "failure is not escalation" rule is
+     * preserved, and a caller who was going to be told nothing now gets the
+     * scope hint instead of silence.
+     *
+     * @param client              as above
+     * @param challenger          as above, or {@code null}
+     * @param resourceMetadataUrl the RFC 9728 protected-resource metadata
+     *                            document's URL (&sect;28.5), as
+     *                            {@link io.axiam.sdk.mcp.Mcp#protectedResourceMetadata}
+     *                            derived it, or {@code null} to leave &sect;28 off
+     * @param expectedAudience    the &sect;10.1 row 6 expected audience this
+     *                            resource server's tokens must carry &mdash;
+     *                            the SAME value configured on the
+     *                            {@link AxiamAuthenticationFilter} guarding
+     *                            these routes, since &sect;28 adds no second
+     *                            audience option. MUST be set whenever
+     *                            {@code resourceMetadataUrl} is
+     * @throws io.axiam.sdk.errors.ValidationError if {@code resourceMetadataUrl}
+     *         is given and {@code expectedAudience} is not (&sect;28.5 rule 2),
+     *         or {@code resourceMetadataUrl} is outside &sect;28.4's syntax
+     */
+    public AxiamAuthorizationInterceptor(
+            AxiamClient client,
+            @Nullable UmaChallenger challenger,
+            @Nullable String resourceMetadataUrl,
+            @Nullable String expectedAudience) {
         this.client = client;
         this.challenger = challenger;
+        this.resourceMetadataUrl = resourceMetadataUrl;
+        this.mcpChallenges = Mcp.mcpGuardChallenges(resourceMetadataUrl, expectedAudience, "AxiamAuthorizationInterceptor");
     }
 
     @Override
@@ -133,6 +180,15 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
 
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (!isAuthenticated(authentication)) {
+            // §28.5 rule 4: every 401 this guard emits carries the challenge.
+            // This interceptor runs strictly after AxiamAuthenticationFilter
+            // (D-14), so an unauthenticated SecurityContext here always means
+            // the filter saw no credential at all — never a rejected one, which
+            // the filter would already have 401'd before this interceptor ran —
+            // so this is always §28.4 vector 1.
+            if (mcpChallenges != null) {
+                response.setHeader("WWW-Authenticate", mcpChallenges.noCredential());
+            }
             writeError(response, HttpServletResponse.SC_UNAUTHORIZED,
                     "authentication_failed", "authentication required");
             return false;
@@ -167,7 +223,7 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
         try {
             AxiamClient.AccessResult result = client.checkAccess(subjectId, action, resourceId, scope);
             if (!result.allowed()) {
-                deny(response, action, resourceId);
+                deny(response, action, resourceId, result.reasonCode(), scope);
                 return false;
             }
             return true;
@@ -178,7 +234,10 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
             writeError(response, 503, "authz_unavailable", "authorization service unavailable");
             return false;
         } catch (AuthzError e) {
-            deny(response, action, resourceId);
+            // No reason_code accompanies a thrown AuthzError — §28.5 rule 5
+            // requires an unrecognised (here, absent) reason_code to leave the
+            // outcome alone, so this 403 gains no §28 header either.
+            deny(response, action, resourceId, null, scope);
             return false;
         } catch (AuthError e) {
             writeError(response, HttpServletResponse.SC_UNAUTHORIZED,
@@ -188,18 +247,33 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
     }
 
     /**
-     * The single deny path for a resource check: a 403, carrying a
-     * {@code WWW-Authenticate: UMA} challenge when — and only when — this
-     * interceptor was built with a {@link UmaChallenger}.
+     * The single deny path for a resource check: a 403, carrying at most ONE
+     * {@code WWW-Authenticate} challenge.
+     *
+     * <p>A successfully minted {@code UMA} ticket ({@link UmaChallenger},
+     * &sect;20.3) wins when both apply; the CONTRACT.md &sect;28.4
+     * {@code insufficient_scope} hint (&sect;28.5 rule 5) is used only when no
+     * {@link UmaChallenger} is configured or minting failed &mdash; UMA's
+     * "failure is not escalation" rule is preserved (the request was already
+     * going to be refused), and a caller who would otherwise be told nothing
+     * now gets the scope hint instead of silence. The JSON body is unchanged
+     * either way: still {@code authorization_denied}.
+     *
+     * @param reasonCode the decision's {@code reason_code} (&sect;11 rule 9), or
+     *                   {@code null} when the denial came from a thrown exception
+     * @param scope      this route's own {@code @AxiamRequireAccess} scope, or
+     *                   {@code null} for none
      */
-    private void deny(HttpServletResponse response, String action, String resourceId) throws IOException {
+    private void deny(HttpServletResponse response, String action, String resourceId,
+            @Nullable String reasonCode, @Nullable String scope) throws IOException {
         LOG.debug("authorization denied: action={} resource_id={}", action, resourceId);
         UmaChallenger emitter = challenger;
-        if (emitter != null) {
-            String header = mintChallenge(emitter, action, resourceId);
-            if (header != null) {
-                response.setHeader("WWW-Authenticate", header);
-            }
+        String header = emitter != null ? mintChallenge(emitter, action, resourceId) : null;
+        if (header == null) {
+            header = Mcp.challengeFor403(resourceMetadataUrl, reasonCode, scope);
+        }
+        if (header != null) {
+            response.setHeader("WWW-Authenticate", header);
         }
         writeError(response, HttpServletResponse.SC_FORBIDDEN, "authorization_denied", "access denied");
     }

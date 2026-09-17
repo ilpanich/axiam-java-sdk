@@ -8,6 +8,8 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.AuthzError;
 import io.axiam.sdk.internal.JwksVerifier;
+import io.axiam.sdk.mcp.Mcp;
+import io.axiam.sdk.mcp.McpGuardChallenges;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -81,6 +83,29 @@ import java.util.Set;
  * own endpoints (&sect;3) — {@code AxiamAutoConfiguration} disables Spring
  * Security's own CSRF filter specifically because this filter now covers
  * that ground for cookie-sourced requests.
+ *
+ * <p><strong>MCP resource-server challenge (CONTRACT.md &sect;28, opt-in):</strong>
+ * pass {@code resourceMetadataUrl} to {@link #AxiamAuthenticationFilter(JwksVerifier, String, String)}
+ * and this filter's <em>own</em> 401 &mdash; a credential was presented and
+ * rejected &mdash; gains a {@code WWW-Authenticate: Bearer …} header (&sect;28.4)
+ * naming the RFC 9728 protected-resource metadata document, and that document's
+ * own path, derived from that same URL, is exempted from authentication
+ * entirely (&sect;28.3 rule 2), so it answers unauthenticated even though this
+ * filter runs globally. The <em>other</em> §28.4 vector &mdash; no credential
+ * presented at all &mdash; is not this filter's response to make: on that path
+ * this filter passes the request through unauthenticated exactly as it always
+ * has, deferring to whatever {@code AuthenticationEntryPoint} the application's
+ * {@code SecurityFilterChain} configures; pair {@link AxiamMcpAuthenticationEntryPoint}
+ * with the same {@code jwksVerifier}/{@code resourceMetadataUrl} there for that
+ * vector. {@code jwksVerifier}'s own {@link JwksVerifier.LocalVerificationPolicy#expectedAudience()}
+ * is reused as the &sect;28.5 rule 2 expected audience &mdash; &sect;28 adds no
+ * second audience option &mdash; and MUST already be set when
+ * {@code resourceMetadataUrl} is: the two-argument constructor's implicit
+ * {@code null} leaves &sect;28 off, but passing a URL with no audience
+ * configured on {@code jwksVerifier} fails at construction
+ * ({@link io.axiam.sdk.errors.ValidationError}), naming both. With
+ * {@code resourceMetadataUrl} unset, this filter's behaviour is byte-for-byte
+ * what it was before &sect;28 existed.
  */
 public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
 
@@ -93,27 +118,75 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwksVerifier jwksVerifier;
     private final String configuredTenantId;
+    private final @Nullable McpGuardChallenges mcpChallenges;
 
     /**
      * Creates a filter that verifies tokens via {@code jwksVerifier} and enforces the
      * cross-tenant claim check against {@code configuredTenantId}.
+     *
+     * <p>Equivalent to {@link #AxiamAuthenticationFilter(JwksVerifier, String, String)}
+     * with a {@code null} {@code resourceMetadataUrl} — CONTRACT.md &sect;28 stays off.
      *
      * @param jwksVerifier       verifies a token's signature and returns its claims
      * @param configuredTenantId the tenant this resource server accepts tokens for
      *                           (CONTRACT.md &sect;10 "Spring Boot" row)
      */
     public AxiamAuthenticationFilter(JwksVerifier jwksVerifier, String configuredTenantId) {
+        this(jwksVerifier, configuredTenantId, null);
+    }
+
+    /**
+     * Creates a filter that verifies tokens via {@code jwksVerifier}, enforces the
+     * cross-tenant claim check against {@code configuredTenantId}, and — when
+     * {@code resourceMetadataUrl} is given — emits the CONTRACT.md &sect;28
+     * {@code WWW-Authenticate} challenge on every 401 and exempts the RFC 9728
+     * protected-resource metadata document's own path from authentication.
+     *
+     * @param jwksVerifier         verifies a token's signature and returns its claims
+     * @param configuredTenantId   the tenant this resource server accepts tokens for
+     *                             (CONTRACT.md &sect;10 "Spring Boot" row)
+     * @param resourceMetadataUrl  the RFC 9728 protected-resource metadata document's
+     *                             URL (&sect;28.5), as {@link io.axiam.sdk.mcp.Mcp#protectedResourceMetadata}
+     *                             derived it, or {@code null} to leave &sect;28 off
+     * @throws io.axiam.sdk.errors.ValidationError if {@code resourceMetadataUrl} is
+     *         given and {@code jwksVerifier}'s {@link JwksVerifier.LocalVerificationPolicy#expectedAudience()}
+     *         is not set (&sect;28.5 rule 2), or {@code resourceMetadataUrl} is outside
+     *         &sect;28.4's syntax
+     */
+    public AxiamAuthenticationFilter(
+            JwksVerifier jwksVerifier, String configuredTenantId, @Nullable String resourceMetadataUrl) {
         this.jwksVerifier = jwksVerifier;
         this.configuredTenantId = configuredTenantId;
+        this.mcpChallenges = Mcp.mcpGuardChallenges(
+                resourceMetadataUrl, jwksVerifier.policy().expectedAudience(), "AxiamAuthenticationFilter");
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+        // §28.3 rule 2: the metadata document MUST answer without a
+        // credential, and this filter is normally mounted globally — so the
+        // exemption is here, explicit, and derived from the one path
+        // resourceMetadataUrl names. A no-op (mcpChallenges is null) unless
+        // §28 is configured.
+        if (Mcp.isMetadataDocumentRequest(mcpChallenges, request.getMethod(), request.getRequestURI())) {
+            chain.doFilter(request, response);
+            return;
+        }
+
         Credential credential = extractToken(request);
         if (credential == null) {
             // No credentials presented; let the request through unauthenticated
-            // — Spring Security's own access-control rules 401/403 it.
+            // — Spring Security's own access-control rules 401/403 it, via
+            // whatever AuthenticationEntryPoint the application configured.
+            // This filter cannot emit the §28.4 "no credential" challenge
+            // itself here: unlike the branches below, this one does not own
+            // the eventual response — the request may yet reach a route that
+            // permits anonymous access and answer 200, and attaching a
+            // WWW-Authenticate header to that response would violate §28.3
+            // rule 7 ("no other response is touched"). AxiamMcpAuthenticationEntryPoint
+            // is the collaborator that owns that 401 instead, and emits the
+            // same challenge from the same configuration.
             chain.doFilter(request, response);
             return;
         }
@@ -141,13 +214,25 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
             SecurityContextHolder.getContext().setAuthentication(authentication);
             chain.doFilter(request, response);
         } catch (AuthzError e) {
+            // §28.5 rule 5: this 403 is not a §11 no_grant scope denial — no header.
             writeJsonError(response, HttpServletResponse.SC_FORBIDDEN, e.getMessage());
         } catch (AuthError e) {
+            // §28.4: a credential was presented and rejected. Expired, not yet
+            // valid, wrong tenant, wrong audience, bad signature, an
+            // unsatisfiable cnf, a revoked sid — all of them are
+            // invalid_token, indistinguishably. Every distinction a 401 draws
+            // for an unauthenticated stranger is an oracle.
+            if (mcpChallenges != null) {
+                response.setHeader("WWW-Authenticate", mcpChallenges.invalidToken());
+            }
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, e.getMessage());
         } catch (RuntimeException e) {
             // Any other verification failure (malformed claims, etc.) is an
             // authentication failure — never let an unexpected exception
             // fall through to an authenticated SecurityContext.
+            if (mcpChallenges != null) {
+                response.setHeader("WWW-Authenticate", mcpChallenges.invalidToken());
+            }
             writeJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, "invalid or expired token");
         }
     }

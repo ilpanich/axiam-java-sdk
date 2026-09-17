@@ -6,6 +6,7 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -16,8 +17,13 @@ import io.axiam.sdk.Sensitive;
  * Response for client creation -- includes the one-time plaintext secret.
  *
  * @param clientId the server's client_id field
- * @param clientSecret the server's client_secret field -- SECRET: redacted from toString and from
- *     every JSON rendering except the one request body it is sent in
+ * @param clientSecret The plaintext client secret, shown exactly once. T21.2 — **absent** for a
+ *     client registered with {@code token_endpoint_auth_method: none}. A public client is created with
+ *     no secret, so there is nothing to show; the member is omitted rather than sent as {@code ""},
+ *     which an operator (or an SDK) would reasonably read as a secret that happens to be empty. Every
+ *     confidential registration — that is, every registration that existed before T21.2 — carries it
+ *     exactly as before. -- SECRET: redacted from toString and from every JSON rendering except the
+ *     one request body it is sent in
  * @param createdAt the server's created_at field
  * @param grantTypes the server's grant_types field
  * @param id the server's id field
@@ -31,7 +37,7 @@ import io.axiam.sdk.Sensitive;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OAuth2ClientCreatedResponse(
         @JsonProperty("client_id") String clientId,
-        @JsonProperty("client_secret") Sensitive clientSecret,
+        @JsonProperty("client_secret") @Nullable Sensitive clientSecret,
         @JsonProperty("created_at") OffsetDateTime createdAt,
         @JsonProperty("grant_types") List<String> grantTypes,
         @JsonProperty("id") UUID id,

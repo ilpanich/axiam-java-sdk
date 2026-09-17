@@ -302,6 +302,21 @@ public final class JwksVerifier {
         }
     }
 
+    /**
+     * The local-verification policy this verifier was configured with.
+     *
+     * <p>CONTRACT.md &sect;28.5 rule 2 reads {@link LocalVerificationPolicy#expectedAudience()}
+     * off this accessor: &sect;10.1 row 6's existing expected-audience
+     * configuration is the one &sect;28's MCP resource-server guard reuses,
+     * rather than adding a second audience option
+     * ({@link io.axiam.sdk.spring.AxiamAuthenticationFilter}).
+     *
+     * @return the configured policy
+     */
+    public LocalVerificationPolicy policy() {
+        return policy;
+    }
+
     private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
         this.policy = policy;
         this.revocationFeed = revocationFeed;

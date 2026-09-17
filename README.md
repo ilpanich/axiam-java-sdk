@@ -799,6 +799,104 @@ contract forbids collapsing them into a bare `false`. An unrecognised code is
 surfaced verbatim and never changes `allowed()`; `null` means the server did not
 send one.
 
+## MCP resource-server helpers (`io.axiam.sdk.mcp`, §28, opt-in)
+
+The resource-server half of the Model Context Protocol authorization
+handshake: publish the RFC 9728 protected-resource metadata document that
+tells an MCP client which authorization server guards this resource, and
+answer its first, credential-less request with a `WWW-Authenticate` challenge
+that names the document. AXIAM is the authorization server and implements
+none of this — an MCP server built with this SDK is the resource server, and
+`io.axiam.sdk.mcp` is the whole of its side. Nothing here performs network
+I/O: the document and the challenge are pure local computation, and neither
+is ever consulted when deciding whether a request is authorized — that stays
+§10.1's and §11's decision, unchanged.
+
+**Off by default, and additive when off.** With no `resourceMetadataUrl`
+configured, every guard in this SDK behaves byte-for-byte as it always has —
+no header, no status change, no exempted path.
+
+```java
+import io.axiam.sdk.mcp.Mcp;
+import io.axiam.sdk.mcp.ProtectedResourceMetadata;
+
+ProtectedResourceMetadata metadata = Mcp.protectedResourceMetadata(
+        "https://mcp.example.com/mcp",
+        List.of("https://axiam.example.com"),
+        List.of("mcp:read", "mcp:tools"));
+
+metadata.metadataPath(); // "/.well-known/oauth-protected-resource/mcp"
+metadata.metadataUrl();  // "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+```
+
+Validation happens at construction and it refuses rather than repairs — a
+`resource` with a query or fragment, an `http` scheme off loopback, a
+duplicate authorization server or scope, all raise `ValidationError`
+(CONTRACT.md §2's existing taxonomy; §28 adds no new type) before any route
+exists.
+
+**Wiring it into Spring Boot** touches three collaborators, all built on the
+same `resourceMetadataUrl`:
+
+```java
+JwksVerifier verifier = new JwksVerifier(baseUrl,
+        new JwksVerifier.LocalVerificationPolicy(null, metadata.document().resource(), 60));
+
+AxiamAuthenticationFilter filter =
+        new AxiamAuthenticationFilter(verifier, tenantId, metadata.metadataUrl());
+
+http.exceptionHandling(handling -> handling.authenticationEntryPoint(
+                new AxiamMcpAuthenticationEntryPoint(verifier, metadata.metadataUrl())))
+    .addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class);
+
+registry.addInterceptor(new AxiamAuthorizationInterceptor(
+        client, null, metadata.metadataUrl(), metadata.document().resource()));
+```
+
+- **`AxiamAuthenticationFilter`** reuses `JwksVerifier`'s own configured
+  audience as the §28.5 rule 2 expected audience — §28 adds no second
+  audience option — and refuses at construction if `resourceMetadataUrl` is
+  given without one. Its own 401 (a credential was presented and rejected)
+  gains the challenge directly.
+- **`AxiamMcpAuthenticationEntryPoint`** is the other half of that same 401
+  family: the *no credential at all* case. Spring's filter model means this
+  one is not the authentication filter's own response to make — the filter
+  passes an uncredentialed request through unchanged, since it might yet
+  reach a route that permits anonymous access, and only Spring Security's own
+  access-control layer knows whether the final answer is a 401 or a 200.
+  Pairing this entry point (via `exceptionHandling().authenticationEntryPoint(...)`)
+  with the same verifier and URL is what answers that 401 with the challenge.
+  This split is this port's one structural divergence from the reference
+  TypeScript implementation, where a single middleware function owns both
+  branches — there is no Express-style "one function decides the whole
+  response" seam in the servlet filter model to hang it on instead.
+- **`AxiamAuthorizationInterceptor`**'s own 401 (no verified identity) and its
+  403 `insufficient_scope` (a `@AxiamRequireAccess(scope = "…")` denial whose
+  `reason_code` is `no_grant`) both gain the challenge; a `denied_by_rule`
+  denial, a role failure, and a CSRF refusal never do. Where the same
+  interceptor also carries a `UmaChallenger` (§20.3), a successfully minted
+  UMA ticket wins — the §28 hint is used only when no `UmaChallenger` is
+  configured or minting failed.
+- **`AxiamProtectedResourceMetadataController`** is the `@RestController`
+  serving the document itself, registered at its own derived path (never
+  chosen) programmatically — a `@GetMapping` path must be a compile-time
+  constant, and this one is only known once `metadata` is built. Answers
+  `200`, unauthenticated, identical for every caller, with
+  `Cache-Control: public, max-age=3600` and
+  `Access-Control-Allow-Origin: *`. `AxiamAuthenticationFilter` exempts this
+  exact path from its otherwise-global authentication check.
+
+**Naming an inbound gRPC or AMQP guard is not part of this port.**
+CONTRACT.md §28.5 rule 8 makes attaching the same challenge as
+`www-authenticate` gRPC trailer metadata optional (MAY) for an SDK whose
+guard also covers gRPC — and this SDK's `io.axiam.sdk.grpc` package is
+entirely the *client* role (calling AXIAM's own `TokenService`/`AuthzService`
+over gRPC), never a resource-server-side interceptor guarding inbound gRPC
+calls to an application built with this SDK; there is no such guard here to
+attach it to. §28.5 rule 8 forbids an AMQP equivalent outright ("there is no
+client waiting on a response to re-authorize with"), so `io.axiam.sdk.amqp`
+is untouched by design either way.
+
 ## Webhook signature verification (`io.axiam.sdk.webhook`, §13)
 
 ```java

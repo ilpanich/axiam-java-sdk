@@ -7,34 +7,34 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
- * How a client proves its identity at the token endpoint (RFC 8705 §2, OIDC Core §9 naming).
+ * Who created a client registration (D5, T21.4).
  *
- * <p>Only the methods AXIAM actually implements are representable. {@code None} — the
- * public-client value — was deliberately absent until T21.2: adding it before the rest of the
- * server understood one would have let an operator register a client whose authentication is
- * silently skipped. The server understands one now ({@code token.rs}'s {@code
- * authenticate_client_credential} has an arm that accepts *no* credential and refuses a presented
- * one, the authorization endpoint derives its PKCE requirement from this enum, and the admin API
- * refuses the method alongside any grant or binding that contradicts it), so the variant exists —
- * and only that arm may ever treat a missing credential as success.
+ * <p>The discriminator that separates a registration an administrator made from one that arrived
+ * over an open endpoint. Three things read it and each would otherwise have to infer provenance
+ * from something that is not provenance:
+ *
+ * <p>* {@code axiam_oauth2::fapi} refuses a FAPI profile on anything but [{@code
+ * Admin}](Self::Admin) (I5) — a client nobody vetted cannot be financial-grade; * the
+ * authorization endpoint forces a consent hop for every other value (D4) — an unrelated party gets
+ * a question put to the end user, whatever scopes it asked for; * the T21.4 sweeper deletes only
+ * [{@code Dcr}](Self::Dcr) rows, so an administrator's client is never swept however long it sits
+ * unused.
+ *
+ * <p>[{@code Admin}](Self::Admin) is the serde default and therefore what every row written before
+ * T21.4 decodes to, which is the truth: they were all created through {@code POST /oauth2-clients}
+ * by somebody holding {@code oauth2_clients:create}.
  *
  * <p>The wire spelling is carried on each constant rather than derived from its name, because the
  * server's vocabulary is not uniformly cased and a derivation that worked for every value today
  * would break on the first one that did not fit.
  */
-public enum ClientAuthMethod {
-    /** The server's 'client_secret_post' value. */
-    CLIENT_SECRET_POST("client_secret_post"),
-    /** The server's 'client_secret_basic' value. */
-    CLIENT_SECRET_BASIC("client_secret_basic"),
-    /** The server's 'tls_client_auth' value. */
-    TLS_CLIENT_AUTH("tls_client_auth"),
-    /** The server's 'self_signed_tls_client_auth' value. */
-    SELF_SIGNED_TLS_CLIENT_AUTH("self_signed_tls_client_auth"),
-    /** The server's 'private_key_jwt' value. */
-    PRIVATE_KEY_JWT("private_key_jwt"),
-    /** The server's 'none' value. */
-    NONE("none"),
+public enum ManagedBy {
+    /** The server's 'admin' value. */
+    ADMIN("admin"),
+    /** The server's 'dcr' value. */
+    DCR("dcr"),
+    /** The server's 'cimd' value. */
+    CIMD("cimd"),
     /**
      * A value this SDK's copy of the spec does not list.
      *
@@ -55,7 +55,7 @@ public enum ClientAuthMethod {
     /** The spelling this value has on the wire. */
     private final String wire;
 
-    ClientAuthMethod(String wire) {
+    ManagedBy(String wire) {
         this.wire = wire;
     }
 
@@ -85,11 +85,11 @@ public enum ClientAuthMethod {
      * UNKNOWN}; one that does not gets the rest of the record intact.
      *
      * @param value the server's spelling
-     * @return the matching ClientAuthMethod, or {@link #UNKNOWN}
+     * @return the matching ManagedBy, or {@link #UNKNOWN}
      */
     @JsonCreator
-    public static ClientAuthMethod fromWire(String value) {
-        for (ClientAuthMethod candidate : values()) {
+    public static ManagedBy fromWire(String value) {
+        for (ManagedBy candidate : values()) {
             if (candidate != UNKNOWN && candidate.wire.equals(value)) {
                 return candidate;
             }

@@ -17,6 +17,8 @@ import java.util.List;
  * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
  * builder — a canonical constructor call with six nulls in it is not something a reader can check.
  *
+ * @param allowedResources T21.3 — see [{@code CreateOAuth2ClientRequest::allowed_resources}]. A
+ *     whole-list replacement; {@code []} withdraws every target.
  * @param authnRequestParams the server's authn_request_params field
  * @param backchannelLogoutUri Pass an empty string to clear a previously registered URI — the one
  *     edit an operator makes when an RP is decommissioned.
@@ -46,6 +48,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record UpdateOAuth2ClientRequest(
+        @JsonProperty("allowed_resources") @Nullable List<String> allowedResources,
         @JsonProperty("authn_request_params") @Nullable AuthnRequestParamsMode authnRequestParams,
         @JsonProperty("backchannel_logout_uri") @Nullable String backchannelLogoutUri,
         @JsonProperty("browser_sso") @Nullable Boolean browserSso,
@@ -91,6 +94,7 @@ public record UpdateOAuth2ClientRequest(
         private Builder() {
         }
 
+        private @Nullable List<String> allowedResources;
         private @Nullable AuthnRequestParamsMode authnRequestParams;
         private @Nullable String backchannelLogoutUri;
         private @Nullable Boolean browserSso;
@@ -111,6 +115,17 @@ public record UpdateOAuth2ClientRequest(
         private @Nullable String tlsClientAuthSubjectDn;
         private @Nullable Boolean tlsClientCertificateBoundAccessTokens;
         private @Nullable ClientAuthMethod tokenEndpointAuthMethod;
+
+        /**
+         * Sets allowed_resources.
+         *
+         * @param allowedResources the value to send
+         * @return this builder
+         */
+        public Builder allowedResources(List<String> allowedResources) {
+            this.allowedResources = allowedResources;
+            return this;
+        }
 
         /**
          * Sets authn_request_params.
@@ -338,7 +353,7 @@ public record UpdateOAuth2ClientRequest(
          * @return a UpdateOAuth2ClientRequest carrying exactly the fields that were set
          */
         public UpdateOAuth2ClientRequest build() {
-            return new UpdateOAuth2ClientRequest(authnRequestParams, backchannelLogoutUri, browserSso, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
+            return new UpdateOAuth2ClientRequest(allowedResources, authnRequestParams, backchannelLogoutUri, browserSso, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
         }
     }
 }
