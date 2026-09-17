@@ -13,6 +13,15 @@ import java.util.List;
 /**
  * The CreateOAuth2ClientRequest schema from the server's OpenAPI document.
  *
+ * @param allowedResources T21.3 / RFC 8707 — the target services this client may name in a {@code
+ *     resource} parameter, at {@code /oauth2/authorize}, {@code /oauth2/par}, {@code
+ *     /oauth2/device_authorization} and {@code /oauth2/token}. Each entry must be an absolute URI
+ *     without a fragment (RFC 8707 §2). Entries are stored in their RFC 3986 §6.2.2 normalised form,
+ *     which is what the read-back shows and what every comparison uses; matching is by equivalence and
+ *     **never by prefix**. Empty (the default) means the client may name no resource, so every token
+ *     it obtains carries {@code axiam:user} or {@code axiam:m2m} exactly as before RFC 8707 support
+ *     existed. This is also the list the RFC 8693 token exchange consults for its {@code
+ *     audience}/{@code resource} target.
  * @param authnRequestParams X7.1 — whether this client's authorization requests may carry the
  *     OpenID Connect authentication-request parameters ({@code prompt}, {@code max_age}, {@code
  *     acr_values}, {@code claims}, {@code id_token_hint}, {@code login_hint}, {@code display}, {@code
@@ -54,10 +63,13 @@ import java.util.List;
  *     private_key_jwt}), and at least one sender-constraining mechanism ({@code
  *     tls_client_certificate_bound_access_tokens} or {@code dpop_bound_access_tokens}). See the FAPI
  *     operator guide.
- * @param redirectUris Allowed redirect URIs (must be HTTPS, except localhost for dev). SEC-089:
- *     this list doubles as the token-exchange audience allow-list — adding a URI here also authorises
- *     it as a token audience for this client, so review additions on exchange-capable clients with
- *     that in mind (see {@code docs/api/token-exchange.md#audience}).
+ * @param redirectUris Allowed redirect URIs (must be HTTPS, except localhost for dev). SEC-089 /
+ *     T21.3: this list **also** authorises token-exchange audiences, and that coupling is now
+ *     deprecated — {@code allowed_resources} is the field that means "audiences this client may
+ *     address". The redirect-URI branch survives one release so that no deployment's working exchange
+ *     breaks on upgrade, and it logs a deprecation warning when it is the branch that matched.
+ *     Register exchange targets in {@code allowed_resources} (see {@code
+ *     docs/api/token-exchange.md#audience}).
  * @param requirePar B5 — require this client to push its authorization parameters to {@code
  *     /oauth2/par} (RFC 9126) rather than sending them through the browser.
  * @param scopes Scopes the client may request.
@@ -77,6 +89,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateOAuth2ClientRequest(
+        @JsonProperty("allowed_resources") @Nullable List<String> allowedResources,
         @JsonProperty("authn_request_params") @Nullable AuthnRequestParamsMode authnRequestParams,
         @JsonProperty("backchannel_logout_uri") @Nullable String backchannelLogoutUri,
         @JsonProperty("browser_sso") @Nullable Boolean browserSso,

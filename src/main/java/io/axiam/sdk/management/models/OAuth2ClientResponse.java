@@ -15,6 +15,9 @@ import java.util.UUID;
 /**
  * OAuth2 client response -- omits client_secret_hash.
  *
+ * @param allowedResources T21.3 — echoed in its stored, normalised form, so an operator auditing
+ *     which audiences a client may mint tokens for reads the strings the server actually compares
+ *     rather than the ones they typed.
  * @param authnRequestParams X7.1 — echoed so an operator can audit which clients act on the OIDC
  *     authentication-request parameters, from this endpoint rather than from the database.
  * @param browserSso X7.3 — echoed for the same reason.
@@ -28,6 +31,18 @@ import java.util.UUID;
  *     document itself is public key material, so returning it leaks nothing; a {@code jwks_uri} is
  *     likewise public by construction.
  * @param jwksUri the server's jwks_uri field
+ * @param lastAuthorizedAt T21.4 — when this client was last issued an authorization code, for the
+ *     sweeper that deletes self-registered clients nobody uses. Always absent for an {@code admin}
+ *     client: the stamp is written only for a non-{@code admin} one, so that an administrator's client
+ *     takes exactly the path it took before T21.4 (I1). {@code null} on a self-registered client means
+ *     it has never been authorized, and the sweeper reads {@code created_at} instead.
+ * @param managedBy T21.4 / D5 — who created this registration: {@code admin}, {@code dcr} or
+ *     {@code cimd}. Echoed because an operator auditing a tenant needs to answer "which of these did
+ *     we create?" from this endpoint rather than from the database, and because three behaviours hang
+ *     off it: a non-{@code admin} client may never carry the FAPI profile, is always consent-gated,
+ *     and is the only kind the unused-client sweeper touches. Read-only. There is no corresponding
+ *     member on the update DTO: a registration's provenance is a fact about how it came to exist, and
+ *     a field that could be edited to {@code admin} would be a field that launders one.
  * @param name the server's name field
  * @param profile X5.1 — the registered posture and mTLS credentials. Read-back matters: an
  *     operator auditing which clients are financial-grade should be able to answer it from this
@@ -49,6 +64,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OAuth2ClientResponse(
+        @JsonProperty("allowed_resources") List<String> allowedResources,
         @JsonProperty("authn_request_params") AuthnRequestParamsMode authnRequestParams,
         @JsonProperty("browser_sso") Boolean browserSso,
         @JsonProperty("client_id") String clientId,
@@ -59,6 +75,8 @@ public record OAuth2ClientResponse(
         @JsonProperty("id") UUID id,
         @JsonProperty("jwks") @Nullable String jwks,
         @JsonProperty("jwks_uri") @Nullable String jwksUri,
+        @JsonProperty("last_authorized_at") @Nullable OffsetDateTime lastAuthorizedAt,
+        @JsonProperty("managed_by") ManagedBy managedBy,
         @JsonProperty("name") String name,
         @JsonProperty("profile") ClientProfile profile,
         @JsonProperty("redirect_uris") List<String> redirectUris,

@@ -8,6 +8,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
+
 /**
  * Input for setting organization-level security settings.
  *
@@ -17,12 +19,18 @@ import org.jspecify.annotations.Nullable;
  *
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
+ * @param dcrAllowedRedirectHosts the server's dcr_allowed_redirect_hosts field
+ * @param dcrAllowedScopes the server's dcr_allowed_scopes field
+ * @param dcrMaxClients the server's dcr_max_clients field
+ * @param dcrUnusedClientTtlDays the server's dcr_unused_client_ttl_days field
  * @param defaultCertValidityDays the server's default_cert_validity_days field
  * @param defaultLocale the server's default_locale field
  * @param deletionGracePeriodDays the server's deletion_grace_period_days field
+ * @param dynamicRegistration the server's dynamic_registration field
  * @param emailVerificationGracePeriodHours the server's email_verification_grace_period_hours
  *     field
  * @param emailVerificationRequired the server's email_verification_required field
+ * @param externalClientAllowedResources the server's external_client_allowed_resources field
  * @param hibpCheckEnabled the server's hibp_check_enabled field
  * @param lockoutBackoffMultiplier the server's lockout_backoff_multiplier field
  * @param lockoutDurationSecs the server's lockout_duration_secs field
@@ -49,11 +57,17 @@ import org.jspecify.annotations.Nullable;
 public record SetOrgSettings(
         @JsonProperty("access_token_lifetime_secs") Long accessTokenLifetimeSecs,
         @JsonProperty("admin_notifications_enabled") Boolean adminNotificationsEnabled,
+        @JsonProperty("dcr_allowed_redirect_hosts") @Nullable List<String> dcrAllowedRedirectHosts,
+        @JsonProperty("dcr_allowed_scopes") @Nullable List<String> dcrAllowedScopes,
+        @JsonProperty("dcr_max_clients") @Nullable Integer dcrMaxClients,
+        @JsonProperty("dcr_unused_client_ttl_days") @Nullable Integer dcrUnusedClientTtlDays,
         @JsonProperty("default_cert_validity_days") Integer defaultCertValidityDays,
         @JsonProperty("default_locale") @Nullable String defaultLocale,
         @JsonProperty("deletion_grace_period_days") @Nullable Integer deletionGracePeriodDays,
+        @JsonProperty("dynamic_registration") @Nullable String dynamicRegistration,
         @JsonProperty("email_verification_grace_period_hours") Integer emailVerificationGracePeriodHours,
         @JsonProperty("email_verification_required") Boolean emailVerificationRequired,
+        @JsonProperty("external_client_allowed_resources") @Nullable List<String> externalClientAllowedResources,
         @JsonProperty("hibp_check_enabled") Boolean hibpCheckEnabled,
         @JsonProperty("lockout_backoff_multiplier") Double lockoutBackoffMultiplier,
         @JsonProperty("lockout_duration_secs") Long lockoutDurationSecs,

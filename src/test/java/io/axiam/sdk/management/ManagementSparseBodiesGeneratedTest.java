@@ -108,15 +108,27 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .adminNotificationsEnabled(true).build(), "admin_notifications_enabled");
         assertKeys(TenantSettingsOverride.builder()
+                .dcrAllowedRedirectHosts(java.util.List.of()).build(), "dcr_allowed_redirect_hosts");
+        assertKeys(TenantSettingsOverride.builder()
+                .dcrAllowedScopes(java.util.List.of()).build(), "dcr_allowed_scopes");
+        assertKeys(TenantSettingsOverride.builder()
+                .dcrMaxClients(1).build(), "dcr_max_clients");
+        assertKeys(TenantSettingsOverride.builder()
+                .dcrUnusedClientTtlDays(1).build(), "dcr_unused_client_ttl_days");
+        assertKeys(TenantSettingsOverride.builder()
                 .defaultCertValidityDays(1).build(), "default_cert_validity_days");
         assertKeys(TenantSettingsOverride.builder()
                 .defaultLocale("example").build(), "default_locale");
         assertKeys(TenantSettingsOverride.builder()
                 .deletionGracePeriodDays(1).build(), "deletion_grace_period_days");
         assertKeys(TenantSettingsOverride.builder()
+                .dynamicRegistration("example").build(), "dynamic_registration");
+        assertKeys(TenantSettingsOverride.builder()
                 .emailVerificationGracePeriodHours(1).build(), "email_verification_grace_period_hours");
         assertKeys(TenantSettingsOverride.builder()
                 .emailVerificationRequired(true).build(), "email_verification_required");
+        assertKeys(TenantSettingsOverride.builder()
+                .externalClientAllowedResources(java.util.List.of()).build(), "external_client_allowed_resources");
         assertKeys(TenantSettingsOverride.builder()
                 .hibpCheckEnabled(true).build(), "hibp_check_enabled");
         assertKeys(TenantSettingsOverride.builder()
@@ -160,11 +172,17 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .accessTokenLifetimeSecs(1L)
                 .adminNotificationsEnabled(true)
+                .dcrAllowedRedirectHosts(java.util.List.of())
+                .dcrAllowedScopes(java.util.List.of())
+                .dcrMaxClients(1)
+                .dcrUnusedClientTtlDays(1)
                 .defaultCertValidityDays(1)
                 .defaultLocale("example")
                 .deletionGracePeriodDays(1)
+                .dynamicRegistration("example")
                 .emailVerificationGracePeriodHours(1)
                 .emailVerificationRequired(true)
+                .externalClientAllowedResources(java.util.List.of())
                 .hibpCheckEnabled(true)
                 .lockoutBackoffMultiplier(1.0)
                 .lockoutDurationSecs(1L)
@@ -186,15 +204,17 @@ class ManagementSparseBodiesGeneratedTest {
                 .sensitiveScopesEnabled(true)
                 .webauthnUserVerification("example")
                 .build(),
-                "access_token_lifetime_secs", "admin_notifications_enabled", "default_cert_validity_days",
-                "default_locale", "deletion_grace_period_days", "email_verification_grace_period_hours",
-                "email_verification_required", "hibp_check_enabled", "lockout_backoff_multiplier",
-                "lockout_duration_secs", "max_cert_validity_days", "max_failed_login_attempts",
-                "max_lockout_duration_secs", "mfa_challenge_lifetime_secs", "mfa_enforced",
-                "min_length", "opaque_ksf", "opaque_mode", "opaque_suite", "password_history_count",
-                "refresh_token_lifetime_secs", "require_digits", "require_lowercase",
-                "require_symbols", "require_uppercase", "sensitive_scopes_enabled",
-                "webauthn_user_verification");
+                "access_token_lifetime_secs", "admin_notifications_enabled", "dcr_allowed_redirect_hosts",
+                "dcr_allowed_scopes", "dcr_max_clients", "dcr_unused_client_ttl_days",
+                "default_cert_validity_days", "default_locale", "deletion_grace_period_days",
+                "dynamic_registration", "email_verification_grace_period_hours",
+                "email_verification_required", "external_client_allowed_resources",
+                "hibp_check_enabled", "lockout_backoff_multiplier", "lockout_duration_secs",
+                "max_cert_validity_days", "max_failed_login_attempts", "max_lockout_duration_secs",
+                "mfa_challenge_lifetime_secs", "mfa_enforced", "min_length", "opaque_ksf",
+                "opaque_mode", "opaque_suite", "password_history_count", "refresh_token_lifetime_secs",
+                "require_digits", "require_lowercase", "require_symbols", "require_uppercase",
+                "sensitive_scopes_enabled", "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder().build());
     }
 
@@ -345,6 +365,8 @@ class ManagementSparseBodiesGeneratedTest {
     @Test
     void updateOAuth2ClientRequestSendsOnlyWhatWasSet() throws Exception {
         assertKeys(UpdateOAuth2ClientRequest.builder()
+                .allowedResources(java.util.List.of()).build(), "allowed_resources");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
                 .authnRequestParams(AuthnRequestParamsMode.IGNORE).build(), "authn_request_params");
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .backchannelLogoutUri("example").build(), "backchannel_logout_uri");
@@ -385,6 +407,7 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .tokenEndpointAuthMethod(ClientAuthMethod.CLIENT_SECRET_POST).build(), "token_endpoint_auth_method");
         assertKeys(UpdateOAuth2ClientRequest.builder()
+                .allowedResources(java.util.List.of())
                 .authnRequestParams(AuthnRequestParamsMode.IGNORE)
                 .backchannelLogoutUri("example")
                 .browserSso(true)
@@ -406,10 +429,10 @@ class ManagementSparseBodiesGeneratedTest {
                 .tlsClientCertificateBoundAccessTokens(true)
                 .tokenEndpointAuthMethod(ClientAuthMethod.CLIENT_SECRET_POST)
                 .build(),
-                "authn_request_params", "backchannel_logout_uri", "browser_sso",
-                "dpop_bound_access_tokens", "dpop_require_nonce", "grant_types",
-                "jwks", "jwks_uri", "name", "post_logout_redirect_uris", "profile",
-                "redirect_uris", "require_par", "scopes", "self_signed_tls_client_auth_thumbprints",
+                "allowed_resources", "authn_request_params", "backchannel_logout_uri",
+                "browser_sso", "dpop_bound_access_tokens", "dpop_require_nonce",
+                "grant_types", "jwks", "jwks_uri", "name", "post_logout_redirect_uris",
+                "profile", "redirect_uris", "require_par", "scopes", "self_signed_tls_client_auth_thumbprints",
                 "tls_client_auth_san_dns", "tls_client_auth_san_uri", "tls_client_auth_subject_dn",
                 "tls_client_certificate_bound_access_tokens", "token_endpoint_auth_method");
         assertKeys(UpdateOAuth2ClientRequest.builder().build());

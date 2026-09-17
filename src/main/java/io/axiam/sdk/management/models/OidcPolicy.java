@@ -8,23 +8,59 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
+
 /**
- * OpenID Connect surface controls (X7 G8, plan §4.6/§4.8).
+ * OpenID Connect surface controls (X7 G8, plan §4.6/§4.8; T21.4).
  *
- * <p>Two settings that are not password rules, and are here because this is the
- * org-baseline-plus-tenant-override surface every other per-tenant control lives on. They are also
- * the two settings in this model that are *not* of the same kind as each other, so it is worth
- * saying which is which:
+ * <p>Settings that are not password rules, here because this is the
+ * org-baseline-plus-tenant-override surface every other per-tenant control lives on. They are not
+ * all of the same kind as each other, and which is which is the whole of what [{@code
+ * validate_tenant_override}] and [{@code clamp_overrides_to_org}] read, so it is set out rather
+ * than inferred.
  *
- * <p>* [{@code Self::sensitive_scopes_enabled}] **is** ordered. Releasing personal data is the
- * less-restrictive direction, so it is validated disable-only — the mirror image of {@code
- * mfa_enforced} — and a tenant can turn its organization's decision off but never on. * [{@code
- * Self::default_locale}] is **not** ordered, and no ordering is invented for it. A language is a
- * presentation preference; there is no sense in which Italian is stricter than French. [{@code
- * validate_tenant_override}] therefore does not check it and [{@code clamp_overrides_to_org}]
- * never clears it. The model's rule is "a tenant may only be more restrictive", which binds every
- * field that *has* a restrictiveness; a field that has none cannot violate it.
+ * <p>**Ordered** — a tenant may be stricter than its organization and never more permissive:
  *
+ * <p>* [{@code Self::sensitive_scopes_enabled}], validated **disable-only** — the mirror image of
+ * {@code mfa_enforced}, because releasing personal data is the less-restrictive direction, so a
+ * tenant can turn its organization's decision off but never on. * [{@code
+ * Self::dynamic_registration}], on the ladder {@code disabled} → {@code initial_access_token} →
+ * {@code anonymous}: a tenant may move down it and never up. * [{@code Self::dcr_max_clients}] and
+ * [{@code Self::dcr_unused_client_ttl_days}], on the ordinary {@code tenant &lt;= org} rule — with
+ * the wrinkle that {@code 0} on the second means *never sweep*, which is the longest window of all
+ * and is handled by [{@code dcr_ttl_strictness}].
+ *
+ * <p>**Not ordered**, therefore never validated against the baseline and never clamped:
+ *
+ * <p>* [{@code Self::default_locale}]. A language is a presentation preference; there is no sense
+ * in which Italian is stricter than French. * [{@code Self::dcr_allowed_scopes}], [{@code
+ * Self::dcr_allowed_redirect_hosts}] and [{@code Self::external_client_allowed_resources}]. Each
+ * names per-tenant resources — *this* tenant's MCP servers, *this* tenant's callback hosts — and
+ * there is no sense in which one such list is stricter than another. A subset rule would force an
+ * organization to enumerate every tenant's resource servers in its own baseline before any tenant
+ * could name one.
+ *
+ * <p>The model's rule is "a tenant may only be more restrictive", which binds every field that
+ * *has* a restrictiveness; a field that has none cannot violate it.
+ *
+ * <p>One cross-field interlock spans both groups and is checked on the resolved policy rather than
+ * on either input: see [{@code validate_dcr_policy}].
+ *
+ * @param dcrAllowedRedirectHosts T21.4 — hosts a self-registered client's {@code redirect_uris}
+ *     may point at, as globs ({@code *.example.com}, or {@code *} for any). The loopback hosts ({@code
+ *     127.0.0.1}, {@code [::1]}, {@code localhost}) are always allowed whatever this says, because RFC
+ *     8252 §7.3 is how every desktop MCP client receives its callback and a tenant that forbade them
+ *     would have turned registration on for nobody.
+ * @param dcrAllowedScopes T21.4 — the scopes a self-registered client may ask for. A {@code scope}
+ *     a registration names that is not on this list is {@code invalid_client_metadata}; an empty list
+ *     means a self-registered client gets no scopes at all, which is the honest default for a tenant
+ *     that has turned registration on without deciding what it grants. May not contain {@code address}
+ *     or {@code phone} — see this module's [{@code sensitive_scope_in_dcr_list}].
+ * @param dcrMaxClients T21.4 — how many {@code managed_by: dcr} clients this tenant may hold. See
+ *     [{@code DEFAULT_DCR_MAX_CLIENTS}].
+ * @param dcrUnusedClientTtlDays T21.4 — how long a {@code managed_by: dcr} client survives without
+ *     being authorized. See [{@code DEFAULT_DCR_UNUSED_CLIENT_TTL_DAYS}]. {@code 0} disables the sweep
+ *     for this tenant, which an operator who prunes out of band may legitimately want.
  * @param defaultLocale The BCP 47 tag the sign-in page falls back to when the relying party's
  *     {@code ui_locales} selects nothing (W5's chain, plan §4.6). {@code None} means "no tenant
  *     preference", which lands on the deployment default ({@code en}) — the behaviour every deployment
@@ -33,6 +69,17 @@ import org.jspecify.annotations.Nullable;
  *     something this binary does not ship" rather than as a guess at French. Stored as a string rather
  *     than as the {@code Locale} enum because that enum lives in {@code axiam-oauth2}, four layers
  *     above this crate, and the crate layering points inward.
+ * @param dynamicRegistration T21.4 — whether a client may register itself (RFC 7591), and on what
+ *     terms. {@code disabled} unless somebody says otherwise (I1).
+ * @param externalClientAllowedResources **D3** — the audiences an externally registered client may
+ *     address. The single most important field on this policy, and the reason the settings handler
+ *     refuses {@code dynamic_registration: anonymous} while it is empty. A client an unrelated party
+ *     registered cannot declare its own {@code allowed_resources}; it inherits this list verbatim, so
+ *     what a stranger can mint a token *for* is a decision the tenant took in advance rather than one
+ *     the registration request makes. Empty means an externally registered client can obtain only
+ *     today's {@code axiam:user} tokens — which AXIAM's own APIs accept. That is why the interlock
+ *     exists: the empty list is not a safe default for an *open* registration endpoint, it is the most
+ *     dangerous one. Shared with T5 (CIMD), which inherits the same list for the same reason.
  * @param sensitiveScopesEnabled Whether {@code address} and {@code phone} may be registered on a
  *     client, requested at the authorization endpoint, and released at UserInfo (X7 G8). **Off unless
  *     an organization turns it on.** The two scopes release a postal address and a telephone number —
@@ -46,7 +93,13 @@ import org.jspecify.annotations.Nullable;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OidcPolicy(
+        @JsonProperty("dcr_allowed_redirect_hosts") @Nullable List<String> dcrAllowedRedirectHosts,
+        @JsonProperty("dcr_allowed_scopes") @Nullable List<String> dcrAllowedScopes,
+        @JsonProperty("dcr_max_clients") @Nullable Integer dcrMaxClients,
+        @JsonProperty("dcr_unused_client_ttl_days") @Nullable Integer dcrUnusedClientTtlDays,
         @JsonProperty("default_locale") @Nullable String defaultLocale,
+        @JsonProperty("dynamic_registration") @Nullable String dynamicRegistration,
+        @JsonProperty("external_client_allowed_resources") @Nullable List<String> externalClientAllowedResources,
         @JsonProperty("sensitive_scopes_enabled") Boolean sensitiveScopesEnabled
 ) {
 }

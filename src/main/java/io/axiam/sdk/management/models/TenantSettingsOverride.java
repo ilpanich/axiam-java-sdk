@@ -8,6 +8,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
+
 /**
  * Partial tenant overrides. {@code None} = inherit from org baseline.
  *
@@ -17,13 +19,19 @@ import org.jspecify.annotations.Nullable;
  *
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
+ * @param dcrAllowedRedirectHosts the server's dcr_allowed_redirect_hosts field
+ * @param dcrAllowedScopes the server's dcr_allowed_scopes field
+ * @param dcrMaxClients the server's dcr_max_clients field
+ * @param dcrUnusedClientTtlDays the server's dcr_unused_client_ttl_days field
  * @param defaultCertValidityDays the server's default_cert_validity_days field
  * @param defaultLocale The tenant's fallback UI language. Not ordered, therefore not validated
  *     against the baseline and never clamped — see [{@code OidcPolicy}].
  * @param deletionGracePeriodDays the server's deletion_grace_period_days field
+ * @param dynamicRegistration the server's dynamic_registration field
  * @param emailVerificationGracePeriodHours the server's email_verification_grace_period_hours
  *     field
  * @param emailVerificationRequired the server's email_verification_required field
+ * @param externalClientAllowedResources the server's external_client_allowed_resources field
  * @param hibpCheckEnabled the server's hibp_check_enabled field
  * @param lockoutBackoffMultiplier the server's lockout_backoff_multiplier field
  * @param lockoutDurationSecs the server's lockout_duration_secs field
@@ -50,11 +58,17 @@ import org.jspecify.annotations.Nullable;
 public record TenantSettingsOverride(
         @JsonProperty("access_token_lifetime_secs") @Nullable Long accessTokenLifetimeSecs,
         @JsonProperty("admin_notifications_enabled") @Nullable Boolean adminNotificationsEnabled,
+        @JsonProperty("dcr_allowed_redirect_hosts") @Nullable List<String> dcrAllowedRedirectHosts,
+        @JsonProperty("dcr_allowed_scopes") @Nullable List<String> dcrAllowedScopes,
+        @JsonProperty("dcr_max_clients") @Nullable Integer dcrMaxClients,
+        @JsonProperty("dcr_unused_client_ttl_days") @Nullable Integer dcrUnusedClientTtlDays,
         @JsonProperty("default_cert_validity_days") @Nullable Integer defaultCertValidityDays,
         @JsonProperty("default_locale") @Nullable String defaultLocale,
         @JsonProperty("deletion_grace_period_days") @Nullable Integer deletionGracePeriodDays,
+        @JsonProperty("dynamic_registration") @Nullable String dynamicRegistration,
         @JsonProperty("email_verification_grace_period_hours") @Nullable Integer emailVerificationGracePeriodHours,
         @JsonProperty("email_verification_required") @Nullable Boolean emailVerificationRequired,
+        @JsonProperty("external_client_allowed_resources") @Nullable List<String> externalClientAllowedResources,
         @JsonProperty("hibp_check_enabled") @Nullable Boolean hibpCheckEnabled,
         @JsonProperty("lockout_backoff_multiplier") @Nullable Double lockoutBackoffMultiplier,
         @JsonProperty("lockout_duration_secs") @Nullable Long lockoutDurationSecs,
@@ -102,11 +116,17 @@ public record TenantSettingsOverride(
 
         private @Nullable Long accessTokenLifetimeSecs;
         private @Nullable Boolean adminNotificationsEnabled;
+        private @Nullable List<String> dcrAllowedRedirectHosts;
+        private @Nullable List<String> dcrAllowedScopes;
+        private @Nullable Integer dcrMaxClients;
+        private @Nullable Integer dcrUnusedClientTtlDays;
         private @Nullable Integer defaultCertValidityDays;
         private @Nullable String defaultLocale;
         private @Nullable Integer deletionGracePeriodDays;
+        private @Nullable String dynamicRegistration;
         private @Nullable Integer emailVerificationGracePeriodHours;
         private @Nullable Boolean emailVerificationRequired;
+        private @Nullable List<String> externalClientAllowedResources;
         private @Nullable Boolean hibpCheckEnabled;
         private @Nullable Double lockoutBackoffMultiplier;
         private @Nullable Long lockoutDurationSecs;
@@ -151,6 +171,50 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets dcr_allowed_redirect_hosts.
+         *
+         * @param dcrAllowedRedirectHosts the value to send
+         * @return this builder
+         */
+        public Builder dcrAllowedRedirectHosts(List<String> dcrAllowedRedirectHosts) {
+            this.dcrAllowedRedirectHosts = dcrAllowedRedirectHosts;
+            return this;
+        }
+
+        /**
+         * Sets dcr_allowed_scopes.
+         *
+         * @param dcrAllowedScopes the value to send
+         * @return this builder
+         */
+        public Builder dcrAllowedScopes(List<String> dcrAllowedScopes) {
+            this.dcrAllowedScopes = dcrAllowedScopes;
+            return this;
+        }
+
+        /**
+         * Sets dcr_max_clients.
+         *
+         * @param dcrMaxClients the value to send
+         * @return this builder
+         */
+        public Builder dcrMaxClients(Integer dcrMaxClients) {
+            this.dcrMaxClients = dcrMaxClients;
+            return this;
+        }
+
+        /**
+         * Sets dcr_unused_client_ttl_days.
+         *
+         * @param dcrUnusedClientTtlDays the value to send
+         * @return this builder
+         */
+        public Builder dcrUnusedClientTtlDays(Integer dcrUnusedClientTtlDays) {
+            this.dcrUnusedClientTtlDays = dcrUnusedClientTtlDays;
+            return this;
+        }
+
+        /**
          * Sets default_cert_validity_days.
          *
          * @param defaultCertValidityDays the value to send
@@ -184,6 +248,17 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets dynamic_registration.
+         *
+         * @param dynamicRegistration the value to send
+         * @return this builder
+         */
+        public Builder dynamicRegistration(String dynamicRegistration) {
+            this.dynamicRegistration = dynamicRegistration;
+            return this;
+        }
+
+        /**
          * Sets email_verification_grace_period_hours.
          *
          * @param emailVerificationGracePeriodHours the value to send
@@ -202,6 +277,17 @@ public record TenantSettingsOverride(
          */
         public Builder emailVerificationRequired(Boolean emailVerificationRequired) {
             this.emailVerificationRequired = emailVerificationRequired;
+            return this;
+        }
+
+        /**
+         * Sets external_client_allowed_resources.
+         *
+         * @param externalClientAllowedResources the value to send
+         * @return this builder
+         */
+        public Builder externalClientAllowedResources(List<String> externalClientAllowedResources) {
+            this.externalClientAllowedResources = externalClientAllowedResources;
             return this;
         }
 
@@ -431,7 +517,7 @@ public record TenantSettingsOverride(
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, emailVerificationGracePeriodHours, emailVerificationRequired, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, webauthnUserVerification);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, webauthnUserVerification);
         }
     }
 }
