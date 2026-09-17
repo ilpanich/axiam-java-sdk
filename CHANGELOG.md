@@ -50,7 +50,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONTRACT.md`, `openapi.json` and `proto/` re-vendored from the `axiam`
   repository's `claude_dev/mcp-authorization-server-plan.md` branch (contract
   1.48) — ahead of `axiam` `main` until that phase lands; `proto/` is
-  byte-identical to the previous vendored copy.
+  byte-identical to the previous vendored copy. **Superseded in part by
+  F-28-01 below**: re-syncing from a phase branch is what contract 1.49 now
+  forbids, and both artefacts are re-synced once, from `main`, after Phase 21
+  lands.
+
+### Changed
+
+- **`Rule8CallerCredentialTest`'s dependency-surface pin is tightened again**
+  (CONTRACT.md §10.1 rule 8 / SEC-085, §28.11 row R-12, T21.9 T9d). §28's
+  `resourceMetadataUrl` overload had widened the pin from "exactly one public
+  constructor with these two parameters" to "every public constructor takes
+  only a `JwksVerifier` and `String`s". That still refuses every
+  **object**-shaped credential — which is what SEC-085 was, and what the
+  existing field type-scan enumerates — but it would admit a **String**-shaped
+  one: a parameter carrying a client secret or a bearer token satisfies "a
+  verifier and Strings", and a `String` field holding it passes the type scan
+  too. The cross-SDK review judged that a real, narrow weakening of a
+  security-invariant test. The repair **adds** an assertion and relaxes none:
+  the filter's declared instance fields are now pinned to a name allow-list, so
+  any new field of any type fails the test until someone adds it deliberately.
+  A credential has to be stored somewhere to be reachable, and a name
+  allow-list catches it whatever its type. No production code changes.
+
+- **Contract conformance statement corrected** (CONTRACT.md Closing Notes,
+  §28.11 row R-3, T21.9 T9d). The README claimed *contract 1.38* and did not
+  name §28, while the vendored `CONTRACT.md` was already at 1.48 and this
+  SDK's §28 support shipped with it. The statement follows the code, which is
+  the contract's own rule; it now reads *contract 1.48* and names §28.
+
+### Deferred
+
+- **F-28-01 — the vendored `openapi.json` and `CONTRACT.md` re-sync.** This
+  repository's copies were re-synced above from a **phase branch**, which kept
+  moving afterwards; they match neither `ilpanich/axiam`'s current tree nor the
+  four SDK repositories that declined the `openapi.json` re-sync. Across the
+  eleven SDKs the T9d review found five distinct byte-states of `CONTRACT.md`
+  and two of `openapi.json`, all calling themselves contract 1.48
+  (CONTRACT.md §28.11 row R-1). Contract **1.49** states the rule that was
+  missing: a vendored artefact is re-synced from a **merged** `main`, never a
+  phase branch. Both artefacts are therefore re-synced here **once**, as
+  F-28-01, after AXIAM Phase 21 lands on `main`, together with a regeneration
+  of the §27 management surface in the same commit. F-28-01 is recorded
+  identically in all eleven SDK repositories so that it cannot be lost.
 
 ## [1.0.0-beta15] - 2026-09-15
 
