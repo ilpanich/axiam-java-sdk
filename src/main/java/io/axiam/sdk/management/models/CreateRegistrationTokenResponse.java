@@ -7,17 +7,20 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import io.axiam.sdk.Sensitive;
+
 /**
  * The one response that carries the handle.
  *
  * @param initialAccessToken The plaintext handle, shown exactly once. Presented by the registering
- *     client as {@code Authorization: Bearer &lt;this&gt;}.
+ *     client as {@code Authorization: Bearer &lt;this&gt;}. -- SECRET: redacted from toString and from
+ *     every JSON rendering except the one request body it is sent in
  * @param token The token's metadata.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateRegistrationTokenResponse(
-        @JsonProperty("initial_access_token") String initialAccessToken,
+        @JsonProperty("initial_access_token") Sensitive initialAccessToken,
         @JsonProperty("token") RegistrationTokenResponse token
 ) {
 }

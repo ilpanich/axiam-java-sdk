@@ -164,6 +164,10 @@ public final class Oauth2ClientsApi {
     /**
      * Issues POST /api/v1/oauth2-clients/registration-tokens.
      *
+     * <p>Returns secret material, once. initial_access_token is returned by this call and by no
+     * other; no later get will return it again, and the get projection has no field where it was.
+     * Discarding the result destroys the credential (§27.5 rule 3).
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
