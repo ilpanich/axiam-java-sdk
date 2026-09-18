@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.48**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.49**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §22, §23, §24, §25, §26, §27, §28 — including §6.1 mTLS (client-certificate
 authentication), the §1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum
 local-verification set, the §12 OIDC/SSO relying-party helpers, the §13
@@ -32,7 +32,7 @@ webhook-signature verifier, the §20 UMA 2.0 Protection API and ticket grant, th
 reactor runtime, the §23 OPAQUE (RFC 9807) login path, the §24 WebAuthn
 relying-party layer with its §24.6a JSON bridge, the §25 account-lifecycle and
 MFA-enrolment operations, §26 Pushed Authorization Requests (RFC 9126), the §27
-Management API — all 158 operations across 24 namespaces, with the §27.6
+Management API — all 162 operations across 24 namespaces, with the §27.6
 declarative layer — and the §28 MCP resource-server helpers.
 
 §12.7, §14, §15, §20, §22, §23, §24, §25, §26, §27 and §28 are named rather than

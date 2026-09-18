@@ -46,6 +46,10 @@ import java.util.List;
  * <p>One cross-field interlock spans both groups and is checked on the resolved policy rather than
  * on either input: see [{@code validate_dcr_policy}].
  *
+ * @param cimd T21.5 — whether a URL-shaped {@code client_id} is resolved by fetching the document
+ *     it names, and on what terms. See [{@code CimdPolicy}]; off unless somebody turns it on (I1).
+ *     Nested, and therefore inherited or overridden **whole**: the fields are terms of one decision,
+ *     and a half-merged posture is one neither the organization nor the tenant wrote.
  * @param dcrAllowedRedirectHosts T21.4 — hosts a self-registered client's {@code redirect_uris}
  *     may point at, as globs ({@code *.example.com}, or {@code *} for any). The loopback hosts ({@code
  *     127.0.0.1}, {@code [::1]}, {@code localhost}) are always allowed whatever this says, because RFC
@@ -56,11 +60,23 @@ import java.util.List;
  *     means a self-registered client gets no scopes at all, which is the honest default for a tenant
  *     that has turned registration on without deciding what it grants. May not contain {@code address}
  *     or {@code phone} — see this module's [{@code sensitive_scope_in_dcr_list}].
- * @param dcrMaxClients T21.4 — how many {@code managed_by: dcr} clients this tenant may hold. See
- *     [{@code DEFAULT_DCR_MAX_CLIENTS}].
- * @param dcrUnusedClientTtlDays T21.4 — how long a {@code managed_by: dcr} client survives without
- *     being authorized. See [{@code DEFAULT_DCR_UNUSED_CLIENT_TTL_DAYS}]. {@code 0} disables the sweep
- *     for this tenant, which an operator who prunes out of band may legitimately want.
+ * @param dcrMaxClients T21.4 — how many externally registered clients this tenant may hold. See
+ *     [{@code DEFAULT_DCR_MAX_CLIENTS}]. **Counted once per mechanism, against the same number**
+ *     (T21.8): {@code managed_by: dcr} rows and {@code managed_by: cimd} rows each have this many. So
+ *     a tenant running both cannot have shadow rows materialised from documents exhaust the allowance
+ *     for self-registration, or the reverse. The CIMD count is checked *before* the document is
+ *     fetched, so a tenant at its ceiling is not an outbound amplifier either. It keeps its {@code
+ *     dcr_} name because dynamic registration defined it, on the same precedent as [{@code
+ *     Self::dcr_allowed_scopes}].
+ * @param dcrUnusedClientTtlDays T21.4 — how long an externally registered client survives without
+ *     being used. See [{@code DEFAULT_DCR_UNUSED_CLIENT_TTL_DAYS}]. {@code 0} disables the sweep for
+ *     this tenant, which an operator who prunes out of band may legitimately want. **Two sweeps read
+ *     it, over different clocks** (T21.8). A {@code managed_by: dcr} row is measured from its last
+ *     authorization, falling back to when it was registered. A {@code managed_by: cimd} row is
+ *     measured from the last time its document was *presented*, which every authorize, token and PAR
+ *     request moves — so a document in daily use is never swept however old its registration is, and
+ *     one nobody has presented since the window is, and re-materialises on the next request if it is
+ *     still published. Like the ceiling, it keeps its {@code dcr_} name.
  * @param defaultLocale The BCP 47 tag the sign-in page falls back to when the relying party's
  *     {@code ui_locales} selects nothing (W5's chain, plan §4.6). {@code None} means "no tenant
  *     preference", which lands on the deployment default ({@code en}) — the behaviour every deployment
@@ -93,6 +109,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OidcPolicy(
+        @JsonProperty("cimd") @Nullable CimdPolicy cimd,
         @JsonProperty("dcr_allowed_redirect_hosts") @Nullable List<String> dcrAllowedRedirectHosts,
         @JsonProperty("dcr_allowed_scopes") @Nullable List<String> dcrAllowedScopes,
         @JsonProperty("dcr_max_clients") @Nullable Integer dcrMaxClients,

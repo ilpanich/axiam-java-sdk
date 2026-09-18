@@ -19,6 +19,9 @@ import java.util.List;
  *
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
+ * @param cimd T21.5 — defaulted, so an API client written before this task lands on {@code
+ *     enabled: false}, which is what every deployment did before client ID metadata documents existed
+ *     (I1).
  * @param dcrAllowedRedirectHosts the server's dcr_allowed_redirect_hosts field
  * @param dcrAllowedScopes the server's dcr_allowed_scopes field
  * @param dcrMaxClients the server's dcr_max_clients field
@@ -57,6 +60,7 @@ import java.util.List;
 public record SetOrgSettings(
         @JsonProperty("access_token_lifetime_secs") Long accessTokenLifetimeSecs,
         @JsonProperty("admin_notifications_enabled") Boolean adminNotificationsEnabled,
+        @JsonProperty("cimd") @Nullable CimdPolicy cimd,
         @JsonProperty("dcr_allowed_redirect_hosts") @Nullable List<String> dcrAllowedRedirectHosts,
         @JsonProperty("dcr_allowed_scopes") @Nullable List<String> dcrAllowedScopes,
         @JsonProperty("dcr_max_clients") @Nullable Integer dcrMaxClients,

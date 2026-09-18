@@ -10,6 +10,7 @@ import io.axiam.sdk.Sensitive;
 import io.axiam.sdk.internal.ManagementTransport;
 import io.axiam.sdk.management.models.ApiProviderConfig;
 import io.axiam.sdk.management.models.AuthnRequestParamsMode;
+import io.axiam.sdk.management.models.CimdPolicy;
 import io.axiam.sdk.management.models.ClientAuthMethod;
 import io.axiam.sdk.management.models.ClientProfile;
 import io.axiam.sdk.management.models.EmailConfigOverride;
@@ -76,6 +77,44 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(ApiProviderConfig.builder().build());
     }
 
+    /** §27.4 rule 5 for CimdPolicy: each setter sets exactly its own key. */
+    @Test
+    void cimdPolicySendsOnlyWhatWasSet() throws Exception {
+        assertKeys(CimdPolicy.builder()
+                .allowHttp(true).build(), "allow_http");
+        assertKeys(CimdPolicy.builder()
+                .confidentialOnly(true).build(), "confidential_only");
+        assertKeys(CimdPolicy.builder()
+                .enabled(true).build(), "enabled");
+        assertKeys(CimdPolicy.builder()
+                .maxCacheSecs(1L).build(), "max_cache_secs");
+        assertKeys(CimdPolicy.builder()
+                .maxMetadataBytes(1L).build(), "max_metadata_bytes");
+        assertKeys(CimdPolicy.builder()
+                .minCacheSecs(1L).build(), "min_cache_secs");
+        assertKeys(CimdPolicy.builder()
+                .restrictSameDomain(true).build(), "restrict_same_domain");
+        assertKeys(CimdPolicy.builder()
+                .trustedClientIdDomains(java.util.List.of()).build(), "trusted_client_id_domains");
+        assertKeys(CimdPolicy.builder()
+                .trustedRedirectDomains(java.util.List.of()).build(), "trusted_redirect_domains");
+        assertKeys(CimdPolicy.builder()
+                .allowHttp(true)
+                .confidentialOnly(true)
+                .enabled(true)
+                .maxCacheSecs(1L)
+                .maxMetadataBytes(1L)
+                .minCacheSecs(1L)
+                .restrictSameDomain(true)
+                .trustedClientIdDomains(java.util.List.of())
+                .trustedRedirectDomains(java.util.List.of())
+                .build(),
+                "allow_http", "confidential_only", "enabled", "max_cache_secs",
+                "max_metadata_bytes", "min_cache_secs", "restrict_same_domain",
+                "trusted_client_id_domains", "trusted_redirect_domains");
+        assertKeys(CimdPolicy.builder().build());
+    }
+
     /** §27.4 rule 5 for EmailConfigOverride: each setter sets exactly its own key. */
     @Test
     void emailConfigOverrideSendsOnlyWhatWasSet() throws Exception {
@@ -107,6 +146,8 @@ class ManagementSparseBodiesGeneratedTest {
                 .accessTokenLifetimeSecs(1L).build(), "access_token_lifetime_secs");
         assertKeys(TenantSettingsOverride.builder()
                 .adminNotificationsEnabled(true).build(), "admin_notifications_enabled");
+        assertKeys(TenantSettingsOverride.builder()
+                .cimd(new CimdPolicy(null, null, null, null, null, null, null, null, null)).build(), "cimd");
         assertKeys(TenantSettingsOverride.builder()
                 .dcrAllowedRedirectHosts(java.util.List.of()).build(), "dcr_allowed_redirect_hosts");
         assertKeys(TenantSettingsOverride.builder()
@@ -172,6 +213,7 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .accessTokenLifetimeSecs(1L)
                 .adminNotificationsEnabled(true)
+                .cimd(new CimdPolicy(null, null, null, null, null, null, null, null, null))
                 .dcrAllowedRedirectHosts(java.util.List.of())
                 .dcrAllowedScopes(java.util.List.of())
                 .dcrMaxClients(1)
@@ -204,10 +246,10 @@ class ManagementSparseBodiesGeneratedTest {
                 .sensitiveScopesEnabled(true)
                 .webauthnUserVerification("example")
                 .build(),
-                "access_token_lifetime_secs", "admin_notifications_enabled", "dcr_allowed_redirect_hosts",
-                "dcr_allowed_scopes", "dcr_max_clients", "dcr_unused_client_ttl_days",
-                "default_cert_validity_days", "default_locale", "deletion_grace_period_days",
-                "dynamic_registration", "email_verification_grace_period_hours",
+                "access_token_lifetime_secs", "admin_notifications_enabled", "cimd",
+                "dcr_allowed_redirect_hosts", "dcr_allowed_scopes", "dcr_max_clients",
+                "dcr_unused_client_ttl_days", "default_cert_validity_days", "default_locale",
+                "deletion_grace_period_days", "dynamic_registration", "email_verification_grace_period_hours",
                 "email_verification_required", "external_client_allowed_resources",
                 "hibp_check_enabled", "lockout_backoff_multiplier", "lockout_duration_secs",
                 "max_cert_validity_days", "max_failed_login_attempts", "max_lockout_duration_secs",
@@ -653,7 +695,7 @@ class ManagementSparseBodiesGeneratedTest {
     void everySparseBodyIsCovered() {
         long cases = java.util.Arrays.stream(ManagementSparseBodiesGeneratedTest.class.getDeclaredMethods())
                 .filter(m -> m.getName().endsWith("SendsOnlyWhatWasSet")).count();
-        assertEquals(18L, cases,
+        assertEquals(19L, cases,
                 "one case per sparse body the schema closure declares");
     }
 

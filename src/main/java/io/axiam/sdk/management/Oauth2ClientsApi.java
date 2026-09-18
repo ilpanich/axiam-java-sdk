@@ -161,4 +161,46 @@ public final class Oauth2ClientsApi {
                 "/api/v1/oauth2-clients/{id}", "/api/v1/oauth2-clients/" + id + "", query, null);
     }
 
+    /**
+     * Issues POST /api/v1/oauth2-clients/registration-tokens.
+     *
+     * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
+     * once, including the ones that look idempotent.
+     *
+     * @param body the request body
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public io.axiam.sdk.management.models.CreateRegistrationTokenResponse createRegistrationToken(io.axiam.sdk.management.models.CreateRegistrationTokenRequest body) {
+        final String operation = "oauth2_clients.create_registration_token";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "POST",
+                "/api/v1/oauth2-clients/registration-tokens", "/api/v1/oauth2-clients/registration-tokens", query, body);
+        return ManagementSupport.convert(node, io.axiam.sdk.management.models.CreateRegistrationTokenResponse.class, operation);
+    }
+
+    /**
+     * Issues GET /api/v1/oauth2-clients/registration-tokens.
+     *
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.AuthError if there is no active session (§27.4 rule 1)
+     * @throws io.axiam.sdk.errors.NotFoundError if the server answers 404
+     * @throws io.axiam.sdk.errors.ConflictError if the server answers 409
+     * @throws io.axiam.sdk.errors.ValidationError if the server answers 400 or 422
+     * @throws io.axiam.sdk.errors.NetworkError on a transport failure or any other unsuccessful
+     *     status
+     */
+    public java.util.List<io.axiam.sdk.management.models.RegistrationTokenResponse> listRegistrationTokens() {
+        final String operation = "oauth2_clients.list_registration_tokens";
+        Map<String, @Nullable String> query = new LinkedHashMap<>();
+        JsonNode node = transport.send(operation, "GET",
+                "/api/v1/oauth2-clients/registration-tokens", "/api/v1/oauth2-clients/registration-tokens", query, null);
+        return ManagementSupport.convertList(node, io.axiam.sdk.management.models.RegistrationTokenResponse.class, operation);
+    }
+
 }

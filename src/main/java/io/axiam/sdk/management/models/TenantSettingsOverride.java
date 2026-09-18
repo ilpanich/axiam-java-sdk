@@ -19,6 +19,7 @@ import java.util.List;
  *
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
+ * @param cimd the server's cimd field
  * @param dcrAllowedRedirectHosts the server's dcr_allowed_redirect_hosts field
  * @param dcrAllowedScopes the server's dcr_allowed_scopes field
  * @param dcrMaxClients the server's dcr_max_clients field
@@ -58,6 +59,7 @@ import java.util.List;
 public record TenantSettingsOverride(
         @JsonProperty("access_token_lifetime_secs") @Nullable Long accessTokenLifetimeSecs,
         @JsonProperty("admin_notifications_enabled") @Nullable Boolean adminNotificationsEnabled,
+        @JsonProperty("cimd") @Nullable CimdPolicy cimd,
         @JsonProperty("dcr_allowed_redirect_hosts") @Nullable List<String> dcrAllowedRedirectHosts,
         @JsonProperty("dcr_allowed_scopes") @Nullable List<String> dcrAllowedScopes,
         @JsonProperty("dcr_max_clients") @Nullable Integer dcrMaxClients,
@@ -116,6 +118,7 @@ public record TenantSettingsOverride(
 
         private @Nullable Long accessTokenLifetimeSecs;
         private @Nullable Boolean adminNotificationsEnabled;
+        private @Nullable CimdPolicy cimd;
         private @Nullable List<String> dcrAllowedRedirectHosts;
         private @Nullable List<String> dcrAllowedScopes;
         private @Nullable Integer dcrMaxClients;
@@ -167,6 +170,17 @@ public record TenantSettingsOverride(
          */
         public Builder adminNotificationsEnabled(Boolean adminNotificationsEnabled) {
             this.adminNotificationsEnabled = adminNotificationsEnabled;
+            return this;
+        }
+
+        /**
+         * Sets cimd.
+         *
+         * @param cimd the value to send
+         * @return this builder
+         */
+        public Builder cimd(CimdPolicy cimd) {
+            this.cimd = cimd;
             return this;
         }
 
@@ -517,7 +531,7 @@ public record TenantSettingsOverride(
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, webauthnUserVerification);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, webauthnUserVerification);
         }
     }
 }
