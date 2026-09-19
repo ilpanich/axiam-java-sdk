@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.49**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.50**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §22, §23, §24, §25, §26, §27, §28 — including §6.1 mTLS (client-certificate
 authentication), the §1.1 gRPC-only `getUserInfo` operation, the §10.1 minimum
 local-verification set, the §12 OIDC/SSO relying-party helpers, the §13
