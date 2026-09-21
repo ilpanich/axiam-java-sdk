@@ -96,12 +96,12 @@
     <dependency>
       <groupId>com.rabbitmq</groupId>
       <artifactId>amqp-client</artifactId>
-      <version>5.35.0</version>
+      <version>5.36.0</version>
     </dependency>
     <dependency>
       <groupId>com.nimbusds</groupId>
       <artifactId>nimbus-jose-jwt</artifactId>
-      <version>10.9.1</version>
+      <version>10.10</version>
     </dependency>
     <dependency>
       <groupId>com.google.crypto.tink</groupId>
@@ -117,7 +117,7 @@
            alternative and is not one. -->
       <groupId>org.bouncycastle</groupId>
       <artifactId>bcprov-jdk18on</artifactId>
-      <version>1.85.2</version>
+      <version>1.86</version>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
