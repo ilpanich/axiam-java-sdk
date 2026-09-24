@@ -128,6 +128,45 @@ class DeviceAuthTest {
         }
     }
 
+    /**
+     * CONTRACT 1.52 N4.1 (C-12): "The device POST carries nothing of a prior
+     * session: no Cookie, no Authorization." A client that already holds a
+     * bearer/cookie session from a prior {@code login()} must not let that
+     * session's access token ride along as {@code Authorization: Bearer} on
+     * the device login call itself — the device call authenticates by mTLS
+     * alone.
+     */
+    @Test
+    void deviceLoginItselfWithholdsAPriorBearerToken() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .addHeader("Set-Cookie",
+                            "axiam_access=" + OidcTestTokens.unsignedAccessToken() + "; Path=/; HttpOnly")
+                    .setBody("{\"mfa_required\":false,\"user\":{\"id\":\"11111111-1111-4111-8111-"
+                            + "111111111111\",\"email\":\"a@b.test\",\"username\":\"a\"}}"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"access_token\":\"device-token-after-login\",\"token_type\":\"Bearer\","
+                            + "\"expires_in\":900}"));
+            server.start();
+
+            try (AxiamClient client = builderWithCert(server.url("/").toString()).build()) {
+                client.login("a@b.test", "password");
+                server.takeRequest(); // consume the login request
+
+                client.authenticateDevice();
+                RecordedRequest deviceRequest = server.takeRequest();
+                assertNull(deviceRequest.getHeader("Authorization"),
+                        "the device login call must not carry a prior session's bearer token");
+                assertNull(deviceRequest.getHeader("Cookie"),
+                        "the device login call itself must carry no stale cookie");
+            }
+        }
+    }
+
     /** Rule 6/8: a 401 on the login itself is AuthError, verbatim, no refresh attempt. */
     @Test
     void a401OnTheLoginItselfIsAuthErrorWithNoRefreshAttempt() throws Exception {

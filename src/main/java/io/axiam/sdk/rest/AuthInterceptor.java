@@ -89,6 +89,16 @@ public final class AuthInterceptor implements Interceptor {
         // isRefreshCall is excluded from the proactive-refresh branch.
         boolean isSessionlessSetupCall = SessionState.isWebauthnSetupRegisterPath(encodedPath);
 
+        // CONTRACT 1.52 N4.1 (C-12): the device POST itself carries nothing of a
+        // prior session — no Cookie, no Authorization — even when this client
+        // already held a cookie-session or bearer credential before calling
+        // authenticateDevice(). Declared here (not just at the cookie-jar swap
+        // below) so it also gates the Authorization-attaching branch and the
+        // proactive near-expiry refresh below: neither may act on a PRIOR
+        // credential to build or refresh-ahead-of the request that authenticates
+        // as the device instead.
+        boolean isDeviceAuthCall = SessionState.isDeviceAuthPath(encodedPath);
+
         // Host-isolation (3A): only same-origin requests receive the bearer
         // token and CSRF token. A request built against an absolute
         // third-party URL (or a redirect resolved off-origin) is left
@@ -123,6 +133,7 @@ public final class AuthInterceptor implements Interceptor {
         // Non-blocking read — never session/guard.lock() synchronously here.
         String access = session.cachedAccessToken();
         if (sameHost && !isRefreshCall && !isSessionlessSetupCall && !hasAdoptedDeviceToken
+                && !isDeviceAuthCall
                 && access != null && session.isNearExpiry(access, NEAR_EXPIRY_BUFFER_MILLIS)) {
             UUID proactiveActingTenant = actingTenant == null ? null : actingTenant.tenantId();
             access = guard.refreshIfNeeded(access, () -> session.doHttpRefresh(proactiveActingTenant))
@@ -137,11 +148,15 @@ public final class AuthInterceptor implements Interceptor {
             builder.header("X-Axiam-Tenant", actingTenant.tenantId().toString());
         }
         if (sameHost) {
-            if (access != null && !isSessionlessSetupCall) {
+            // N4.1: the device POST authenticates by mTLS alone — a bearer token
+            // (or CSRF token) left over from an earlier cookie/bearer session must
+            // not ride along on the very call that means to replace it.
+            if (access != null && !isSessionlessSetupCall && !isDeviceAuthCall) {
                 builder.header("Authorization", "Bearer " + access);
             }
             String csrf = session.csrfToken();
-            if (csrf != null && !isSessionlessSetupCall && STATE_CHANGING_METHODS.contains(original.method())) {
+            if (csrf != null && !isSessionlessSetupCall && !isDeviceAuthCall
+                    && STATE_CHANGING_METHODS.contains(original.method())) {
                 builder.header("X-CSRF-Token", csrf);
             }
         }
@@ -162,7 +177,6 @@ public final class AuthInterceptor implements Interceptor {
         // — this authenticates by mTLS alone and a stale cookie must not ride
         // along either) AND on every later same-host request for as long as a
         // device token is adopted, not only the call that adopted it.
-        boolean isDeviceAuthCall = SessionState.isDeviceAuthPath(encodedPath);
         Chain effectiveChain = (isSessionlessSetupCall || isDeviceAuthCall
                 || (sameHost && hasAdoptedDeviceToken))
                 ? chain.withCookieJar(new LoadSuppressedCookieJar(chain.getCookieJar()))
