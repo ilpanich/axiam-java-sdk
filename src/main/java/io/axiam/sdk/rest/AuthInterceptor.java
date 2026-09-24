@@ -1,5 +1,6 @@
 package io.axiam.sdk.rest;
 
+import io.axiam.sdk.internal.ActingTenantTag;
 import io.axiam.sdk.internal.RefreshGuard;
 import io.axiam.sdk.internal.SessionState;
 
@@ -101,9 +102,16 @@ public final class AuthInterceptor implements Interceptor {
         // weaken 3A's host-isolation guarantee for those two.
         boolean tenantHeaderEligible = sameHost || SessionState.isOauth2Path(encodedPath);
 
+        // CONTRACT.md §6.1 rule 6 (contract 1.51): a device token has no refresh
+        // token at all, so the proactive near-expiry check below must never fire
+        // for one — there is nothing for the §9 guard to spend, and attempting a
+        // refresh would be a wire call this rule forbids. A later 401 on this
+        // token is AuthAuthenticator's to leave alone, not this interceptor's.
+        boolean hasAdoptedDeviceToken = session.hasAdoptedAccessToken();
+
         // Non-blocking read — never session/guard.lock() synchronously here.
         String access = session.cachedAccessToken();
-        if (sameHost && !isRefreshCall && !isSessionlessSetupCall
+        if (sameHost && !isRefreshCall && !isSessionlessSetupCall && !hasAdoptedDeviceToken
                 && access != null && session.isNearExpiry(access, NEAR_EXPIRY_BUFFER_MILLIS)) {
             access = guard.refreshIfNeeded(access, session::doHttpRefresh).access();
         }
@@ -111,6 +119,15 @@ public final class AuthInterceptor implements Interceptor {
         Request.Builder builder = original.newBuilder();
         if (tenantHeaderEligible) {
             builder.header("X-Tenant-Id", session.tenantId());
+        }
+        // CONTRACT.md §5.2 rule 1 (contract 1.51): X-Axiam-Tenant, sent ONLY when the
+        // specific call site that built this request tagged it — never unconditionally,
+        // and never derived from session.tenantId(), which is the constructor tenant and
+        // a different thing entirely (the §5 callout this section's own javadoc already
+        // makes about X-Tenant-Id). REST-only: no gRPC twin exists anywhere in this SDK.
+        ActingTenantTag actingTenant = original.tag(ActingTenantTag.class);
+        if (actingTenant != null && sameHost) {
+            builder.header("X-Axiam-Tenant", actingTenant.tenantId().toString());
         }
         if (sameHost) {
             if (access != null && !isSessionlessSetupCall) {
@@ -131,7 +148,16 @@ public final class AuthInterceptor implements Interceptor {
         // still delegates to the real jar so a successful
         // setup/register/finish's Set-Cookie response is captured exactly as
         // it would be through the normal jar (§24.8's adoption test).
-        Chain effectiveChain = isSessionlessSetupCall
+        // CONTRACT.md §6.1 rule 6: the server reads axiam_access BEFORE
+        // Authorization, so a cookie left over from an earlier session would
+        // otherwise silently outrank the device token this request means to
+        // authenticate as. Withheld on the login call itself (isDeviceAuthPath
+        // — this authenticates by mTLS alone and a stale cookie must not ride
+        // along either) AND on every later same-host request for as long as a
+        // device token is adopted, not only the call that adopted it.
+        boolean isDeviceAuthCall = SessionState.isDeviceAuthPath(encodedPath);
+        Chain effectiveChain = (isSessionlessSetupCall || isDeviceAuthCall
+                || (sameHost && hasAdoptedDeviceToken))
                 ? chain.withCookieJar(new LoadSuppressedCookieJar(chain.getCookieJar()))
                 : chain;
 

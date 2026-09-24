@@ -81,10 +81,39 @@ public final class SessionState {
     private final @Nullable UUID configuredOrgId;
 
     private final AtomicReference<String> csrfToken = new AtomicReference<>();
+    // CONTRACT.md §6.1 rules 6-10 (contract 1.51): the mTLS device login's
+    // token. Unlike every other credential this session holds, it never
+    // arrives as a Set-Cookie — adopting it means AuthInterceptor sends it as
+    // Authorization: Bearer AND an explicit empty Cookie header, so a stale
+    // axiam_access left in the jar from an earlier session cannot silently
+    // win (the server reads the cookie BEFORE the header). null means "no
+    // device token adopted" — the ordinary cookie-jar-backed path applies.
+    private final AtomicReference<@Nullable String> adoptedAccessToken = new AtomicReference<>();
     // Set once, right after AxiamClient finishes building its OkHttpClient —
     // this session's own HTTP calls (the refresh POST) run through that same
     // client so they pick up the shared cookie jar + tenant header injection.
     private final AtomicReference<OkHttpClient> httpClient = new AtomicReference<>();
+
+    // CONTRACT.md §5.2 rule 1 (contract 1.51): what the acting-tenant gate on
+    // AxiamClient.actingTenant(UUID) knows about the principal behind THIS
+    // session — shared across every handle over it, exactly as the access
+    // token itself is. null means "no login result held": the on-client
+    // rebind cannot gate on anything and sends the header as asked, letting
+    // the server's 403 answer. Non-null is set only where the SDK actually
+    // read organization_level/reachable_tenant_ids off a completed login.
+    private final AtomicReference<@Nullable PrincipalScopeState> principalScope = new AtomicReference<>();
+
+    /**
+     * What is known, session-wide, about the signed-in principal's reach.
+     *
+     * @param organizationLevel {@code LoginResult#organizationLevel()} off the response
+     *                          that recorded this state
+     * @param reachableTenantIds {@code PrincipalScope#reachableTenantIds()} off the same
+     *                            response, or {@code null} when the reach is unrestricted
+     */
+    public record PrincipalScopeState(
+            boolean organizationLevel, @Nullable List<UUID> reachableTenantIds) {
+    }
 
     /**
      * Creates the session state for one {@code AxiamClient}.
@@ -199,6 +228,25 @@ public final class SessionState {
             "/api/v1/auth/webauthn/setup/register/finish";
 
     /**
+     * {@code POST /api/v1/auth/device} — the &sect;6.1 mTLS device login
+     * (CONTRACT.md &sect;6.1 rules 6-10, contract 1.51). Special-cased by
+     * {@code AuthAuthenticator} for the same reason as {@link #REFRESH_PATH}:
+     * this call's own 401 is the terminal answer, never something to retry
+     * after a refresh this credential has no token for.
+     */
+    public static final String DEVICE_AUTH_PATH = "/api/v1/auth/device";
+
+    /**
+     * Checks whether {@code encodedPath} is {@link #DEVICE_AUTH_PATH}.
+     *
+     * @param encodedPath a request URL's encoded path
+     * @return {@code true} if {@code encodedPath} is {@link #DEVICE_AUTH_PATH}
+     */
+    public static boolean isDeviceAuthPath(String encodedPath) {
+        return DEVICE_AUTH_PATH.equals(encodedPath);
+    }
+
+    /**
      * Checks whether {@code encodedPath} is one of the two session-less
      * {@code webauthn/setup/register/*} endpoints (CONTRACT.md &sect;24.1,
      * contract 1.45): the setup token is the only credential this pair
@@ -258,15 +306,59 @@ public final class SessionState {
     }
 
     /**
-     * Non-blocking read of the current access token, sourced from the shared
-     * cookie jar — never acquires {@link RefreshGuard}'s lock. Safe to call
-     * from the {@code AuthInterceptor}/{@code AuthAuthenticator} hot path.
+     * Non-blocking read of the current access token: the adopted &sect;6.1 device
+     * token when one is set, else the shared cookie jar's {@code axiam_access}
+     * value — never acquires {@link RefreshGuard}'s lock. Safe to call from the
+     * {@code AuthInterceptor}/{@code AuthAuthenticator} hot path.
      *
-     * @return the current {@code axiam_access} cookie value, or {@code null} if
-     *         no session cookie is present in the shared {@link CookieManager}
+     * @return the adopted device token, the current {@code axiam_access} cookie
+     *         value, or {@code null} if neither is present
      */
     public @Nullable String cachedAccessToken() {
-        return cookieValue(ACCESS_COOKIE);
+        String adopted = adoptedAccessToken.get();
+        return adopted != null ? adopted : cookieValue(ACCESS_COOKIE);
+    }
+
+    /**
+     * Adopts a &sect;6.1 device token as this session's credential (CONTRACT.md
+     * &sect;6.1 rule 6), exactly as a completed login adopts its token —
+     * except the server sets no cookie for this route, so this is the only way
+     * a device token becomes the credential subsequent calls use.
+     *
+     * @param accessToken the device token's compact-serialized value
+     */
+    public void adoptAccessToken(String accessToken) {
+        adoptedAccessToken.set(accessToken);
+    }
+
+    /**
+     * Whether this session currently holds an adopted &sect;6.1 device token
+     * rather than (or in place of) a cookie-jar-backed one.
+     *
+     * <p>{@code AuthInterceptor} reads this to withhold the {@code Cookie}
+     * header entirely on every request while a device token is adopted — the
+     * server reads {@code axiam_access} BEFORE {@code Authorization}, so a
+     * cookie left over from an earlier session would otherwise silently win
+     * and the request would run as that session's principal, not the device's.
+     * {@code AuthAuthenticator} reads it to skip the &sect;9 refresh guard on a
+     * device token's 401: there is no refresh token for it (&sect;6.1 rule 6),
+     * so attempting one would be a wire call to a guard that has nothing to
+     * spend.
+     *
+     * @return {@code true} while a device token is adopted
+     */
+    public boolean hasAdoptedAccessToken() {
+        return adoptedAccessToken.get() != null;
+    }
+
+    /**
+     * Drops a previously-adopted &sect;6.1 device token, if any, WITHOUT touching
+     * the CSRF token or acting-tenant gate {@link #clear()} also resets — the
+     * narrower reset {@code onCredentialChange} needs before adopting a
+     * <em>different</em> credential of any kind, device token or not.
+     */
+    public void clearAdoptedAccessToken() {
+        adoptedAccessToken.set(null);
     }
 
     /**
@@ -297,6 +389,47 @@ public final class SessionState {
      * headers, captured automatically by the shared {@link CookieManager}. */
     public void clear() {
         csrfToken.set(null);
+        principalScope.set(null);
+        adoptedAccessToken.set(null);
+    }
+
+    /**
+     * Records what a just-completed login reported about the principal's reach
+     * (CONTRACT.md &sect;5.2 rule 1). Read by {@code AxiamClient.actingTenant(UUID)}
+     * to decide, client-side, whether a tenant switch is even worth asking the
+     * server about.
+     *
+     * @param organizationLevel {@code LoginResult#organizationLevel()} off the
+     *                          response that just completed
+     * @param reachableTenantIds {@code PrincipalScope#reachableTenantIds()} off
+     *                            the same response, or {@code null} when the
+     *                            reach is unrestricted (or the server predates
+     *                            contract 1.35)
+     */
+    public void recordPrincipalScope(
+            boolean organizationLevel, @Nullable List<UUID> reachableTenantIds) {
+        principalScope.set(new PrincipalScopeState(organizationLevel, reachableTenantIds));
+    }
+
+    /**
+     * Forgets what was known about the principal's reach (CONTRACT.md &sect;5.2
+     * rule 1). Every session-establishing path that does not report
+     * {@code organization_level}/{@code reachable_tenant_ids} in the same shape a
+     * password login does MUST call this rather than let a previous login's
+     * scope silently keep gating a different principal.
+     */
+    public void resetPrincipalScope() {
+        principalScope.set(null);
+    }
+
+    /**
+     * What is currently known about the signed-in principal's reach, or
+     * {@code null} when this session holds no login result to gate on.
+     *
+     * @return the last-recorded scope, or {@code null}
+     */
+    public @Nullable PrincipalScopeState principalScope() {
+        return principalScope.get();
     }
 
     /**
