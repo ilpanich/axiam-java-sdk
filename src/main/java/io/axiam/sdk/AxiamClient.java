@@ -863,9 +863,24 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * afterward on the paths that have one to report.
      */
     private void onCredentialChange() {
+        resetDecisionMemoAndScope();
+        session.clearAdoptedAccessToken();
+    }
+
+    /**
+     * The subset of {@link #onCredentialChange()} that {@link #refresh()} uses
+     * (CONTRACT 1.52 N4.4, C-12): drops memoized decisions and resets the
+     * &sect;5.2 acting-tenant gate exactly as a full credential change does, but
+     * WITHOUT dropping an adopted &sect;6.1 device token — {@code refresh()}
+     * never establishes a different credential, so it must never release one
+     * held by a device login. (N5.5 leaves the gate reset here as a SHOULD, not
+     * a MUST: this SDK's settled choice is to still reset it, matching every
+     * other credential-changing call, rather than let a stale scope answer for
+     * whatever {@code refresh()} turns out to renew.)
+     */
+    private void resetDecisionMemoAndScope() {
         decisionMemo.clear();
         session.resetPrincipalScope();
-        session.clearAdoptedAccessToken();
     }
 
     // ------------------------------------------------------------------
@@ -1470,7 +1485,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public void refresh() {
         ensureOpen();
-        onCredentialChange();
+        // N4.4 (C-12): NOT the full onCredentialChange() — refresh() renews the
+        // credential this session already holds, it never establishes a
+        // different one, so an adopted device token must survive this call.
+        resetDecisionMemoAndScope();
         String observedAccess = session.cachedAccessToken();
         if (observedAccess == null) {
             throw new AuthError("no access token to refresh — call login() first");
@@ -3215,16 +3233,18 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                             + "calling it (CONTRACT.md §6.1 rule 7); refusing client-side rather "
                             + "than making a request the server would only 401 for the same reason");
         }
-        // §6.1 rules 6/9: this call changes the subject (from whatever this
-        // session held, if anything, to the device) exactly as login() does.
-        onCredentialChange();
-
         Request request = new Request.Builder()
                 .url(baseUrl + io.axiam.sdk.internal.SessionState.DEVICE_AUTH_PATH)
                 .post(RequestBody.create(new byte[0], JSON))
                 .build();
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
+                // CONTRACT 1.52 N4.2 (C-12): a refused device login changes NO
+                // client state — the previous credential (of any kind), the
+                // §17 decision memo and the §5.2 acting-tenant gate are all
+                // left exactly as they were. onCredentialChange() therefore
+                // runs only below, after this response is known successful,
+                // never before the request like this used to.
                 // Rule 8: every refusal is a 401, mapped to AuthError like any
                 // other; §16's 429 is not an authentication failure and
                 // ErrorMapper already keeps the two apart.
@@ -3233,6 +3253,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             }
             JsonNode wire = readJson(response);
             String accessToken = wire.path("access_token").asText();
+            // §6.1 rules 6/9: this call changes the subject (from whatever this
+            // session held, if anything, to the device) exactly as login() does
+            // — but only now that the server has actually confirmed it (N4.2).
+            onCredentialChange();
             session.adoptAccessToken(accessToken);
             return new DeviceToken(
                     Sensitive.of(accessToken),
