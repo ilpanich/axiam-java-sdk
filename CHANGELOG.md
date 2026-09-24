@@ -13,17 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `56fbe44`** (contract 1.51). `CONTRACT.md` byte-matches that commit (sha256
   `0ac7fd75f83c…`); `proto/` was already identical. The §27 surface is regenerated
   at 162 operations across 24 namespaces.
-- **The acting tenant, `X-Axiam-Tenant` (CONTRACT.md §5.2 rule 1).**
+- **The acting tenant, `X-Axiam-Tenant` (CONTRACT.md §5.2 rule 1 / §5.2.2 rule 4).**
   `AxiamClient.Builder.withActingTenant(UUID)` at construction;
   `AxiamClient.actingTenant(UUID)` / `clearActingTenant()` on a built client, each
   returning a NEW handle over the same session rather than mutating the caller's —
   two handles acting on two tenants cannot race to overwrite each other's header.
-  Carries through `management()` and `checkAccess`/`batchCheck`. Gated client-side,
-  with zero wire calls, on `organizationLevel`/`reachableTenantIds` when this
-  session holds a login result; sent as asked, letting the server's `403` answer,
-  when it does not. REST-only — no gRPC metadata twin. The §17 decision memo's key
-  now includes the acting tenant, so a memoized answer for one tenant can no longer
-  be returned for another within the TTL.
+  Carries through **every** `/api/v1` POST this client sends once set: `management()`,
+  `checkAccess`/`batchCheck`, `refresh()`, `logout()`, and the self-service and
+  WebAuthn POSTs (MFA enroll/confirm/setup enroll/confirm, resend-verification,
+  password reset, WebAuthn register/authenticate/discoverable start and finish) —
+  §5.2.2 rule 4 requires the header be sent "as normal" on the self-service calls
+  too, never cleared or rewritten to route around it. The one exception is
+  `webauthnSetupRegisterStart`/`Finish`, which §24.1 separately forbids from
+  carrying any of this client's session state at all. Gated client-side, with zero
+  wire calls, on `organizationLevel`/`reachableTenantIds` when this session holds a
+  login result; sent as asked, letting the server's `403` answer, when it does not.
+  REST-only — no gRPC metadata twin. Which calls count as "holding a login result"
+  for this gate is enumerated precisely, and cross-checked against the server's own
+  wire shapes, in the README's "Which sessions gate `actingTenant()`" table — a
+  deliberate, verified divergence from axiam-rust-sdk for three of them
+  (`loginOpaque`, `mfaSetupConfirm`, `webauthnSetupRegisterFinish`), which read real
+  scope where the wire genuinely carries it rather than Rust's uniform "treat as
+  unknown" for all four session-establishing paths outside `login`/`verifyMfa`. The
+  §17 decision memo's key now includes the acting tenant, so a memoized answer for
+  one tenant can no longer be returned for another within the TTL — verified by
+  `theDecisionMemoDoesNotAnswerAcrossActingTenants`, which asks the same question
+  through two handles acting on two different tenants and checks both answers are
+  correct with two real wire calls, not one memoized one.
 - **`AxiamClient.authenticateDevice()` / `authenticateDeviceAsync()`** — the §6.1
   mTLS device login (CONTRACT.md §6.1 rules 6–10), distinct from the existing RFC
   8628 `deviceLogin`. Reachable only on a client built with `clientCertificate(...)`
@@ -123,9 +139,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Declines
 
-- The acting tenant on `refresh()`'s own POST and on the self-service-account/
-  WebAuthn POSTs beyond `logout()` — see the README's Contract 1.51 table for the
-  reason.
 - `webhooks` in the manifest (§27.6) — matches the Rust reference's own decline; no
   consumer has asked for it and the contract names it without specifying a shape.
 

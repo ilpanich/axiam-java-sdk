@@ -55,7 +55,7 @@ See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract
 
 | Item | Status |
 |---|---|
-| §5.2 rule 1 — the acting tenant, `X-Axiam-Tenant` | **Shipped**, for `management()` and `checkAccess`/`batchCheck` — `AxiamClient.Builder.withActingTenant(UUID)` at construction, `AxiamClient.actingTenant(UUID)`/`clearActingTenant()` on a built client. REST-only; gated client-side on a held login's `organizationLevel`/`reachableTenantIds` when one is held. Declined for `refresh()`/`logout()`/the self-service and WebAuthn POSTs beyond `logout()` itself — see Declines |
+| §5.2 rule 1 / §5.2.2 rule 4 — the acting tenant, `X-Axiam-Tenant` | **Shipped**, on every `/api/v1` POST this client sends once a login result is held — `management()`, `checkAccess`/`batchCheck`, `refresh()`, `logout()`, and the self-service and WebAuthn POSTs (MFA enroll/confirm/setup, resend-verification, password reset, WebAuthn register/authenticate/discoverable). `AxiamClient.Builder.withActingTenant(UUID)` at construction, `AxiamClient.actingTenant(UUID)`/`clearActingTenant()` on a built client. REST-only; gated client-side on a held login's `organizationLevel`/`reachableTenantIds` when one is held. §5.2.2 rule 4 forbids clearing or rewriting the header for self-service calls, so it is sent "as normal" there too, letting the server decide which tenant a call about the caller's own id belongs to. The one exception is `webauthnSetupRegisterStart`/`Finish`, which §24.1 forbids from carrying any of this client's session state at all |
 | §6.1 rules 6–10 — `authenticateDevice()` | **Shipped**. `AxiamClient.authenticateDevice()`/`authenticateDeviceAsync()`; reachable only on a client built with `clientCertificate(...)` (zero wire calls otherwise); adopts the token, withholding any stale `axiam_access` cookie; never enters the §9 refresh guard for this credential's own 401s |
 | §1.1.1/§10.3 — `validateToken`/`introspectToken` | **Shipped**. `GrpcAuthzClient.validateToken`/`introspectToken` (+ `Async` twins), sharing this client's existing gRPC channel and interceptor; `cnf` modelled as optional and distinct from a present-but-empty confirmation |
 | §10.1 rule 9 fix | **Shipped — a real defect, fixed.** See the callout below |
@@ -85,15 +85,39 @@ that previously accepted device tokens through the filter now answers `401` for 
 unless the servlet container's connector is configured for client-certificate
 authentication.
 
+### Which sessions gate `actingTenant()` (§5.2 rule 1, contract 1.51)
+
+`actingTenant(UUID)` refuses client-side only when this session **holds a login
+result** — `organizationLevel`/`reachableTenantIds` from a response this client
+actually parsed. What counts as one, verified against `openapi.json` and, for the
+one case its schema under-documents, against the server's own handler:
+
+| Call | Records real scope? | Why |
+|---|---|---|
+| `login`, `verifyMfa` | **Yes** | `LoginSuccessResponse` (has `user.organization_level`) |
+| `mfaSetupConfirm`, `webauthnSetupRegisterFinish` | **Yes** | Also typed as `LoginSuccessResponse` in `openapi.json` — the same schema as `login` |
+| `loginOpaque` (`/auth/opaque/login/finish`) | **Yes** | `openapi.json` omits a response schema for this route, but the server's handler (`opaque_login_finish`, `crates/axiam-api-rest/src/handlers/opaque.rs`) builds its success response through the **same** `cookie_response_from_output` helper `/auth/login` uses — verified against axiam's own source, not assumed. The field is genuinely on the wire even though the spec under-documents it |
+| `webauthnAuthenticateFinish`, `webauthnDiscoverableFinish` | **No — reset to unknown** | `WebauthnLoginResponse` has no `user` field at all (`access_token`/`refresh_token`/`session_id`/`expires_in` only) — there is nothing to read |
+| `ssoComplete`, `ssoCompleteOauth2`, `ssoCompleteHandoff` | **No — reset to unknown** | Explicit `session.resetPrincipalScope()` regardless of what the response carries — federation completion never reports `organization_level` today, and coupling this gate to a shape that could change under a different IdP integration is the wrong place to find that out |
+| `authenticateDevice` | **No — reset to unknown** | `DeviceAuthResponse` has no `user` field; a device holds no login result by design (§6.1) |
+
+**This is a deliberate divergence from axiam-rust-sdk**, which treats OPAQUE,
+WebAuthn, SSO and MFA-setup completion uniformly as holding no login result — it
+sends the header and lets the server's `403` answer for all four, rather than
+reading response shapes case by case. Rust's choice is simpler and equally
+conforming (CONTRACT.md leaves this open); this SDK reads real data where the wire
+genuinely carries it (`mfaSetupConfirm`, `webauthnSetupRegisterFinish`,
+`loginOpaque`) so `actingTenant()` can refuse an out-of-scope switch **before** a
+wire call for those three paths too, and falls back to Rust's same "unknown, let
+the server decide" answer exactly where the wire genuinely carries nothing
+(`webauthnAuthenticateFinish`/`Discoverable`, SSO, device login). Every credential
+change resets to unknown first (`onCredentialChange()`), so a stale scope from an
+*earlier* session never survives into a new one — the risk CONTRACT.md's own C-12
+discussion of this question warns about — regardless of which of the two policies
+above then applies.
+
 ### Declines (§8 rule 5, contract 1.51)
 
-- **The acting tenant on `refresh()`/`logout()`'s own POST, and on the self-service
-  account/WebAuthn POSTs beyond `logout()`.** `logout()` and `management()`/
-  `checkAccess`/`batchCheck` carry it; `refresh()` is triggered opportunistically by
-  the shared proactive/reactive refresh guard rather than by a specific handle, and
-  threading a per-handle value through that shared path is a larger change than this
-  port's scope. The `ActingTenantTag` request-tag mechanism `AuthInterceptor` reads
-  generalizes to more call sites without a redesign; a future pass can extend it.
 - **`webhooks` in the manifest** (§27.6) — the contract names it without specifying a
   shape, and no consumer has asked for it, matching the Rust reference's own decline.
 

@@ -14,6 +14,7 @@ import okhttp3.Response;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Proactive (near-expiry) refresh + header injection (CONTRACT.md
@@ -109,23 +110,29 @@ public final class AuthInterceptor implements Interceptor {
         // token is AuthAuthenticator's to leave alone, not this interceptor's.
         boolean hasAdoptedDeviceToken = session.hasAdoptedAccessToken();
 
+        // CONTRACT.md §5.2 rule 1 (contract 1.51): X-Axiam-Tenant, sent ONLY when the
+        // specific call site that built this request tagged it — never unconditionally,
+        // and never derived from session.tenantId(), which is the constructor tenant and
+        // a different thing entirely (the §5 callout this section's own javadoc already
+        // makes about X-Tenant-Id). REST-only: no gRPC twin exists anywhere in this SDK.
+        // Read here, before the proactive refresh below, so that refresh — itself an
+        // ordinary §5.2.2-rule-4 call — carries the SAME acting tenant as the request
+        // that triggered it, rather than none.
+        ActingTenantTag actingTenant = original.tag(ActingTenantTag.class);
+
         // Non-blocking read — never session/guard.lock() synchronously here.
         String access = session.cachedAccessToken();
         if (sameHost && !isRefreshCall && !isSessionlessSetupCall && !hasAdoptedDeviceToken
                 && access != null && session.isNearExpiry(access, NEAR_EXPIRY_BUFFER_MILLIS)) {
-            access = guard.refreshIfNeeded(access, session::doHttpRefresh).access();
+            UUID proactiveActingTenant = actingTenant == null ? null : actingTenant.tenantId();
+            access = guard.refreshIfNeeded(access, () -> session.doHttpRefresh(proactiveActingTenant))
+                    .access();
         }
 
         Request.Builder builder = original.newBuilder();
         if (tenantHeaderEligible) {
             builder.header("X-Tenant-Id", session.tenantId());
         }
-        // CONTRACT.md §5.2 rule 1 (contract 1.51): X-Axiam-Tenant, sent ONLY when the
-        // specific call site that built this request tagged it — never unconditionally,
-        // and never derived from session.tenantId(), which is the constructor tenant and
-        // a different thing entirely (the §5 callout this section's own javadoc already
-        // makes about X-Tenant-Id). REST-only: no gRPC twin exists anywhere in this SDK.
-        ActingTenantTag actingTenant = original.tag(ActingTenantTag.class);
         if (actingTenant != null && sameHost) {
             builder.header("X-Axiam-Tenant", actingTenant.tenantId().toString());
         }

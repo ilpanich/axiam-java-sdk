@@ -481,6 +481,20 @@ public final class SessionState {
      * @throws NetworkError on request encode/transport failure
      */
     public TokenPair doHttpRefresh() {
+        return doHttpRefresh(null);
+    }
+
+    /**
+     * As {@link #doHttpRefresh()}, additionally tagging the request with {@code
+     * actingTenant} when non-null (CONTRACT.md &sect;5.2 rule 1 / &sect;5.2.2 rule 4,
+     * contract 1.51) — {@code refresh()} carries {@code X-Axiam-Tenant} exactly as every
+     * other authenticated {@code /api/v1} call this client sends does, the header
+     * "sent as normal" rather than cleared for this call.
+     *
+     * @param actingTenant the tenant this handle acts on, or {@code null} for none
+     * @return the newly issued {@link TokenPair}
+     */
+    public TokenPair doHttpRefresh(@Nullable UUID actingTenant) {
         String observedAccess = cachedAccessToken();
         if (observedAccess == null) {
             throw new AuthError("no access token to refresh — call login() first");
@@ -507,10 +521,14 @@ public final class SessionState {
             throw new NetworkError("failed to encode refresh request: " + e.getMessage(), e);
         }
 
-        Request request = new Request.Builder()
+        Request.Builder requestBuilder = new Request.Builder()
                 .url(baseUrl + REFRESH_PATH)
-                .post(RequestBody.create(payload, JSON))
-                .build();
+                .post(RequestBody.create(payload, JSON));
+        if (actingTenant != null) {
+            requestBuilder.tag(io.axiam.sdk.internal.ActingTenantTag.class,
+                    new io.axiam.sdk.internal.ActingTenantTag(actingTenant));
+        }
+        Request request = requestBuilder.build();
 
         OkHttpClient client = httpClient.get();
         if (client == null) {

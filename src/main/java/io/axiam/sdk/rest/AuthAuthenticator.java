@@ -84,9 +84,16 @@ public final class AuthAuthenticator implements Authenticator {
             return null; // never authenticated — nothing to refresh
         }
 
+        // CONTRACT.md §5.2.2 rule 4: this reactive refresh carries the SAME
+        // acting tenant as the request whose 401 triggered it — the header is
+        // "sent as normal" on refresh(), whichever handle's request this is.
+        io.axiam.sdk.internal.ActingTenantTag actingTenantTag =
+                response.request().tag(io.axiam.sdk.internal.ActingTenantTag.class);
+        java.util.UUID actingTenant = actingTenantTag == null ? null : actingTenantTag.tenantId();
+
         TokenPair refreshed;
         try {
-            refreshed = guard.refreshIfNeeded(staleAccess, session::doHttpRefresh);
+            refreshed = guard.refreshIfNeeded(staleAccess, () -> session.doHttpRefresh(actingTenant));
         } catch (RuntimeException e) {
             // Refresh itself failed — surface the original 401, no retry (§9.3).
             return null;

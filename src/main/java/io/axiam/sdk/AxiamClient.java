@@ -1475,7 +1475,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (observedAccess == null) {
             throw new AuthError("no access token to refresh — call login() first");
         }
-        refreshGuard.refreshIfNeeded(observedAccess, session::doHttpRefresh);
+        // CONTRACT.md §5.2.2 rule 4: X-Axiam-Tenant is sent "as normal" on
+        // refresh(), like every other authenticated call — never cleared or
+        // rewritten to work around the header naming a different tenant.
+        refreshGuard.refreshIfNeeded(observedAccess, () -> session.doHttpRefresh(actingTenant));
     }
 
     /** {@code CompletableFuture} async twin of {@link #refresh}.
@@ -3855,8 +3858,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /**
      * As {@link #executeJsonPost(String, ObjectNode)}, additionally tagging the request
      * with this handle's acting tenant when {@code actingTenantEligible} — CONTRACT.md
-     * &sect;5.2 rule 1 (contract 1.51): {@code check_access}/{@code batch_check} and
-     * {@code logout} carry it; every other POST built here does not.
+     * &sect;5.2 rule 1 / &sect;5.2.2 rule 4 (contract 1.51): every {@code /api/v1} POST
+     * this client sends carries it once a login result — or an established, credential-
+     * bearing call such as a self-service action — is in play, <strong>including</strong>
+     * the self-service endpoints (&sect;5.2.2 rule 4: "An SDK MUST NOT work around that
+     * by clearing or rewriting X-Axiam-Tenant for those calls … Send the header as
+     * normal; the server decides"). {@code false} is reserved for the small set of calls
+     * that establish a NEW credential and so have nothing yet to act on behalf of
+     * ({@code login}, {@code verifyMfa}, the OPAQUE and SSO/federation flows,
+     * {@code authenticateDevice}) and the one call &sect;24.1 forbids from carrying any
+     * of this client's session state at all ({@code webauthnSetupRegisterStart}/
+     * {@code Finish}).
      */
     private Response executeJsonPost(String path, ObjectNode body, boolean actingTenantEligible) {
         byte[] payload;
@@ -4216,7 +4228,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public WebauthnChallenge webauthnRegisterStart() {
         ensureOpen();
         requireWebauthnSession("webauthnRegisterStart");
-        return webauthnStart(WEBAUTHN_REGISTER_START_PATH, MAPPER.createObjectNode());
+        return webauthnStart(WEBAUTHN_REGISTER_START_PATH, MAPPER.createObjectNode(), true);
     }
 
     /** {@code CompletableFuture} async twin of {@link #webauthnRegisterStart}.
@@ -4258,7 +4270,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         body.put("credential_name", credentialName);
         body.set("response", parseAuthenticatorResponse(response, "webauthnRegisterFinish"));
 
-        try (Response http = executeJsonPost(WEBAUTHN_REGISTER_FINISH_PATH, body)) {
+        try (Response http = executeJsonPost(WEBAUTHN_REGISTER_FINISH_PATH, body, true)) {
             if (http.code() != 200 && http.code() != 201) {
                 throw registerFinishError(http, "webauthnRegisterFinish");
             }
@@ -4305,7 +4317,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ensureOpen();
         ObjectNode body = MAPPER.createObjectNode();
         body.put("challenge_token", challengeToken.expose());
-        return webauthnStart(WEBAUTHN_AUTH_START_PATH, body);
+        return webauthnStart(WEBAUTHN_AUTH_START_PATH, body, true);
     }
 
     /** {@code CompletableFuture} async twin of {@link #webauthnAuthenticateStart}.
@@ -4362,7 +4374,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public WebauthnChallenge webauthnDiscoverableStart(@Nullable WebauthnWorkspace workspace) {
         ensureOpen();
-        return webauthnStart(WEBAUTHN_DISCOVERABLE_START_PATH, webauthnWorkspaceBody(workspace));
+        return webauthnStart(WEBAUTHN_DISCOVERABLE_START_PATH, webauthnWorkspaceBody(workspace), true);
     }
 
     /** {@code CompletableFuture} async twin of {@link #webauthnDiscoverableStart}.
@@ -4435,7 +4447,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ensureOpen();
         ObjectNode body = MAPPER.createObjectNode();
         body.put("setup_token", setupToken.expose());
-        return webauthnStart(WEBAUTHN_SETUP_REGISTER_START_PATH, body);
+        // §5.2.2 rule 4 is about calls that carry a session; this one MUST NOT
+        // (its own doc above), and the acting-tenant header travels with the
+        // session concept, not independently of it — so it stays untagged,
+        // exactly as webauthnSetupRegisterFinish does.
+        return webauthnStart(WEBAUTHN_SETUP_REGISTER_START_PATH, body, false);
     }
 
     /** {@code CompletableFuture} async twin of {@link #webauthnSetupRegisterStart}.
@@ -4541,9 +4557,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return ErrorMapper.fromHttpStatus(http.code(), message, http);
     }
 
-    /** Run either {@code *_start} call and return the options untouched. */
-    private WebauthnChallenge webauthnStart(String path, ObjectNode body) {
-        try (Response http = executeJsonPost(path, body)) {
+    /**
+     * Run either {@code *_start} call and return the options untouched.
+     *
+     * @param actingTenantEligible whether this call carries {@code X-Axiam-Tenant} when this
+     *                             handle acts on a tenant (CONTRACT.md &sect;5.2.2 rule 4) —
+     *                             {@code true} for register/authenticate/discoverable, {@code
+     *                             false} for the sessionless setup form, which must not carry
+     *                             any of this client's session state
+     */
+    private WebauthnChallenge webauthnStart(String path, ObjectNode body, boolean actingTenantEligible) {
+        try (Response http = executeJsonPost(path, body, actingTenantEligible)) {
             if (http.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(http.code(), "webauthn start failed", http);
             }
@@ -4553,7 +4577,18 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
     }
 
-    /** The shared tail of both authentication ceremonies. */
+    /**
+     * The shared tail of both authentication ceremonies.
+     *
+     * <p>CONTRACT.md &sect;5.2 rule 1 (contract 1.51, For-C-12 question 5): {@code
+     * WebauthnLoginResponse} — what both callers parse — carries no {@code user}
+     * object and so no {@code organization_level}; {@code onCredentialChange()}'s
+     * reset below is therefore the LAST word on this session's principal scope
+     * after either ceremony, not a stale value from before it. A caller who needs
+     * {@code actingTenant(UUID)} to gate meaningfully after a WebAuthn sign-in has
+     * nothing more this SDK can read off the wire to gate it on — same as the
+     * reference's choice for this pair.
+     */
     private WebauthnLoginResult webauthnFinish(
             String path, Sensitive stateToken, String response, String operation) {
         ensureOpen();
@@ -4565,7 +4600,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         body.put("state_token", stateToken.expose());
         body.set("response", parseAuthenticatorResponse(response, operation));
 
-        try (Response http = executeJsonPost(path, body)) {
+        // §5.2.2 rule 4: sent "as normal" here too — both callers (the 2FA
+        // finish and the primary passwordless finish) carry a real session
+        // afterward, unlike the setup form.
+        try (Response http = executeJsonPost(path, body, true)) {
             if (http.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(http.code(), operation + " failed", http);
             }
@@ -4674,7 +4712,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public MfaEnrollment mfaEnroll() {
         ensureOpen();
-        try (Response http = executeJsonPost(MFA_ENROLL_PATH, MAPPER.createObjectNode())) {
+        // §5.2.2 rule 4: sent "as normal" — a self-service call about the
+        // caller's own id.
+        try (Response http = executeJsonPost(MFA_ENROLL_PATH, MAPPER.createObjectNode(), true)) {
             return readMfaEnrollment(http, "mfaEnroll");
         }
     }
@@ -4698,7 +4738,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ensureOpen();
         ObjectNode body = MAPPER.createObjectNode();
         body.put("totp_code", totpCode);
-        try (Response http = executeJsonPost(MFA_CONFIRM_PATH, body)) {
+        try (Response http = executeJsonPost(MFA_CONFIRM_PATH, body, true)) {
             if (http.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(http.code(), "mfaConfirm failed", http);
             }
@@ -4730,7 +4770,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ensureOpen();
         ObjectNode body = MAPPER.createObjectNode();
         body.put("setup_token", setupToken.expose());
-        try (Response http = executeJsonPost(MFA_SETUP_ENROLL_PATH, body)) {
+        // §5.2.2 rule 4: sent "as normal" here too, matching the reference —
+        // the setup token is the credential, not a session, but this shares
+        // the same self-service POST helper's policy.
+        try (Response http = executeJsonPost(MFA_SETUP_ENROLL_PATH, body, true)) {
             return readMfaEnrollment(http, "mfaSetupEnroll");
         }
     }
@@ -4762,7 +4805,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         body.put("setup_token", setupToken.expose());
         body.put("totp_code", totpCode);
 
-        try (Response http = executeJsonPost(MFA_SETUP_CONFIRM_PATH, body)) {
+        // §5.2.2 rule 4: sent "as normal" here too, matching the reference.
+        try (Response http = executeJsonPost(MFA_SETUP_CONFIRM_PATH, body, true)) {
             if (http.code() != 200) {
                 throw ErrorMapper.fromHttpStatus(http.code(), "mfaSetupConfirm failed", http);
             }
@@ -5011,8 +5055,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 Sensitive.of(wire.path("totp_uri").asText()));
     }
 
+    /**
+     * §5.2.2 rule 4 (contract 1.51): sent "as normal" on every self-service call this
+     * shares — {@code verifyEmail}, {@code resendVerification}, {@code
+     * resendOwnVerification}, {@code requestPasswordReset}, {@code confirmPasswordReset} —
+     * the server decides which tenant a call about the caller's own id belongs to, and an
+     * SDK MUST NOT clear or rewrite the header to work around it.
+     */
     private void postExpectingNoContent(String path, ObjectNode body, String operation) {
-        try (Response http = executeJsonPost(path, body)) {
+        try (Response http = executeJsonPost(path, body, true)) {
             int code = http.code();
             if (code != 200 && code != 202 && code != 204) {
                 throw ErrorMapper.fromHttpStatus(code, operation + " failed", http);
