@@ -66,27 +66,23 @@ final class ManifestValidation {
                 }
             }
         }
+        duplicates("service account", manifest.serviceAccounts().stream().map(
+                ManagementManifest.ServiceAccountSpec::key).toList(), problems);
+
         for (ManagementManifest.GroupSpec group : manifest.groups()) {
-            for (String role : group.roles()) {
-                if (!keys.roles().contains(role)) {
-                    problems.add("group '" + group.key() + "' is assigned role '" + role
-                            + "', which no role declares");
-                }
-            }
+            checkBindings("group '" + group.key() + "'", group.roles(), keys, problems);
         }
         for (ManagementManifest.UserSpec user : manifest.users()) {
-            for (String role : user.roles()) {
-                if (!keys.roles().contains(role)) {
-                    problems.add("user '" + user.key() + "' is assigned role '" + role
-                            + "', which no role declares");
-                }
-            }
+            checkBindings("user '" + user.key() + "'", user.roles(), keys, problems);
             for (String group : user.groups()) {
                 if (!keys.groups().contains(group)) {
                     problems.add("user '" + user.key() + "' is in group '" + group
                             + "', which no group declares");
                 }
             }
+        }
+        for (ManagementManifest.ServiceAccountSpec sa : manifest.serviceAccounts()) {
+            checkBindings("service account '" + sa.key() + "'", sa.roles(), keys, problems);
         }
 
         try {
@@ -106,6 +102,64 @@ final class ManifestValidation {
         for (String key : keys) {
             if (!seen.add(key)) {
                 problems.add(kind + " key '" + key + "' is declared more than once");
+            }
+        }
+    }
+
+    /**
+     * CONTRACT.md &sect;27.6.1 item 2 (contract 1.51) checks common to every subject's
+     * role bindings — group, user or service account. Every problem found is reported,
+     * never just the first.
+     *
+     * @param subject the subject naming these bindings, for the message ("group 'g'")
+     * @param bindings the subject's role bindings, plain or resource-scoped
+     * @param keys the manifest's key sets
+     * @param problems every problem found is appended here
+     */
+    private static void checkBindings(String subject, List<ManagementManifest.RoleBinding> bindings,
+            ManagementManifest.Keys keys, List<String> problems) {
+        Set<String> boundRoles = new HashSet<>();
+        for (ManagementManifest.RoleBinding binding : bindings) {
+            if (!keys.roles().contains(binding.role())) {
+                problems.add(subject + " is bound to role '" + binding.role()
+                        + "', which no role declares");
+            }
+            if (binding.resource() != null && !keys.resources().contains(binding.resource())) {
+                problems.add(subject + "'s binding of role '" + binding.role() + "' names resource '"
+                        + binding.resource() + "', which no resource declares");
+            }
+            if (binding.resource() == null && binding.inherit() != null) {
+                problems.add(subject + "'s binding of role '" + binding.role()
+                        + "' states inherit with no resource — inherit has nothing to stop at "
+                        + "without a resource-scoped binding");
+            }
+            if (Boolean.TRUE.equals(binding.inherit())) {
+                // §27.6.1 item 2: "An SDK MUST NOT send inherit: true explicitly." Send
+                // no inherit at all (RoleBinding.scoped(role, resource)) for the
+                // inheriting case; the server's own default is already true.
+                problems.add(subject + "'s binding of role '" + binding.role()
+                        + "' states inherit: true explicitly — omit inherit instead "
+                        + "(RoleBinding.scoped(role, resource) with no third argument)");
+            }
+            // §27.6.1 item 2, last bullet, C-12 item 6: a role the manifest itself
+            // declares is_global bound with inherit: false is refused by the server
+            // with 400 — a global role applies everywhere by definition, so there is
+            // no resource for a non-inheriting binding to stop at. Checked here,
+            // client-side, whenever the role is in this manifest to check it against.
+            if (Boolean.FALSE.equals(binding.inherit()) && keys.globalRoles().contains(binding.role())) {
+                problems.add(subject + "'s binding of role '" + binding.role()
+                        + "' states inherit: false, but that role is declared global in this "
+                        + "manifest — a global role applies everywhere and has no resource to "
+                        + "stop at (the server refuses this with 400)");
+            }
+            // §27.6.1: "A subject holds a role at most once" — has_role is
+            // UNIQUE(subject, role) with no resource component, so one role bound
+            // twice to one subject — at two resources, or once plain and once
+            // scoped — describes a state the server cannot hold.
+            if (!boundRoles.add(binding.role())) {
+                problems.add(subject + " is bound to role '" + binding.role()
+                        + "' more than once (has_role is UNIQUE(subject, role); a subject "
+                        + "holds a role at most once, regardless of resource scope)");
             }
         }
     }

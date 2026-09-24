@@ -1,5 +1,7 @@
 package io.axiam.sdk.management;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import io.axiam.sdk.Sensitive;
 import io.axiam.sdk.errors.NetworkError;
 import org.jspecify.annotations.Nullable;
@@ -9,6 +11,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -37,13 +40,16 @@ import java.util.Set;
  * @param roles roles and the permissions granted to them
  * @param groups groups and the roles their members inherit
  * @param users users, their role assignments and their group memberships
+ * @param serviceAccounts service accounts and the roles bound to them (CONTRACT.md
+ *                        &sect;27.6.1 item 3, contract 1.51)
  */
 public record ManagementManifest(
         List<ResourceSpec> resources,
         List<PermissionSpec> permissions,
         List<RoleSpec> roles,
         List<GroupSpec> groups,
-        List<UserSpec> users) {
+        List<UserSpec> users,
+        List<ServiceAccountSpec> serviceAccounts) {
 
     /**
      * Canonical constructor, defensively copying every list.
@@ -53,6 +59,7 @@ public record ManagementManifest(
      * @param roles roles and their grants
      * @param groups groups and their roles
      * @param users users and their bindings
+     * @param serviceAccounts service accounts and their role bindings
      */
     public ManagementManifest {
         resources = List.copyOf(resources);
@@ -60,6 +67,7 @@ public record ManagementManifest(
         roles = List.copyOf(roles);
         groups = List.copyOf(groups);
         users = List.copyOf(users);
+        serviceAccounts = List.copyOf(serviceAccounts);
     }
 
     /**
@@ -68,7 +76,8 @@ public record ManagementManifest(
      * @return a manifest with no specs of any kind
      */
     public static ManagementManifest empty() {
-        return new ManagementManifest(List.of(), List.of(), List.of(), List.of(), List.of());
+        return new ManagementManifest(
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     /**
@@ -103,9 +112,16 @@ public record ManagementManifest(
      * @param resourceType the server's resource_type discriminator
      * @param parent the key of this resource's parent, or {@code null} for a root
      * @param scopes scopes declared under this resource
+     * @param metadata an optional JSON object (CONTRACT.md &sect;27.6.1 item 1, contract
+     *                 1.51); {@code null} is silent — never sent, never compared. A stated
+     *                 value is sent on {@code Create} and, when it drifts, on {@code Update} —
+     *                 drift is JSON value equality of the <em>whole</em> object, never a
+     *                 key-by-key merge, so a stated empty object matches what the server
+     *                 returns for a resource created with none.
      */
     public record ResourceSpec(String key, String name, String resourceType,
-                               @Nullable String parent, List<ScopeSpec> scopes) {
+                               @Nullable String parent, List<ScopeSpec> scopes,
+                               @Nullable JsonNode metadata) {
         /**
          * Canonical constructor, defensively copying the scope list.
          *
@@ -114,9 +130,96 @@ public record ManagementManifest(
          * @param resourceType the server's resource_type discriminator
          * @param parent the parent's key, or {@code null}
          * @param scopes scopes declared under this resource
+         * @param metadata an optional JSON object, or {@code null} to say nothing about it
          */
         public ResourceSpec {
             scopes = List.copyOf(scopes);
+        }
+
+        /**
+         * The pre-1.51 four-argument shape, with no metadata stated.
+         *
+         * @param key manifest-local identifier
+         * @param name the resource's name
+         * @param resourceType the server's resource_type discriminator
+         * @param parent the parent's key, or {@code null}
+         * @param scopes scopes declared under this resource
+         */
+        public ResourceSpec(String key, String name, String resourceType,
+                            @Nullable String parent, List<ScopeSpec> scopes) {
+            this(key, name, resourceType, parent, scopes, null);
+        }
+    }
+
+    /**
+     * A role binding — either a bare role key (no resource scope, and so no
+     * inheritance question) or a resource-scoped binding with an explicit
+     * {@code inherit} (CONTRACT.md &sect;27.6.1 item 2, contract 1.51).
+     *
+     * <p>{@code resource} and {@code inherit} travel together: {@code inherit} is
+     * meaningless without a {@code resource} to stop at, so a binding with
+     * {@code inherit} set and {@code resource} {@code null} is rejected by
+     * manifest validation rejects it before any request, the same as the server
+     * would refuse it. {@code inherit} reaches the wire only as {@code false} —
+     * {@link #scoped(String, String)}'s two-argument form (inherit left
+     * {@code null}) is what keeps a resource-scoped binding's body byte-for-byte
+     * a pre-1.51 body when the caller did not ask for the non-inheriting form.
+     *
+     * @param role the role's manifest key
+     * @param resource the resource's manifest key, or {@code null} for a plain,
+     *                 tenant-wide binding
+     * @param inherit {@code false} to stop the binding at {@code resource}
+     *                rather than reaching its descendants; {@code null} (the
+     *                default) to say nothing and let the server's own default
+     *                (inheriting) apply — never sent as {@code true} explicitly
+     */
+    public record RoleBinding(String role, @Nullable String resource, @Nullable Boolean inherit) {
+
+        /** Validates that a role key was given. */
+        public RoleBinding {
+            Objects.requireNonNull(role, "role");
+        }
+
+        /**
+         * A plain, tenant-wide binding — the shape every manifest used before 1.51.
+         *
+         * @param roleKey the role's manifest key
+         * @return a binding naming no resource
+         */
+        public static RoleBinding role(String roleKey) {
+            return new RoleBinding(roleKey, null, null);
+        }
+
+        /**
+         * A resource-scoped binding that inherits to descendants (the server's default —
+         * {@code inherit} is not sent).
+         *
+         * @param roleKey the role's manifest key
+         * @param resourceKey the resource's manifest key
+         * @return a resource-scoped, inheriting binding
+         */
+        public static RoleBinding scoped(String roleKey, String resourceKey) {
+            return new RoleBinding(roleKey, Objects.requireNonNull(resourceKey, "resourceKey"), null);
+        }
+
+        /**
+         * A resource-scoped binding with an explicit {@code inherit}.
+         *
+         * @param roleKey the role's manifest key
+         * @param resourceKey the resource's manifest key
+         * @param inherit {@code false} to stop at {@code resourceKey}; {@code true} is
+         *                refused (&sect;27.6.1 item 2: an SDK
+         *                MUST NOT send {@code inherit: true} explicitly — omit it instead,
+         *                via {@link #scoped(String, String)})
+         * @return a resource-scoped binding carrying an explicit {@code inherit}
+         */
+        public static RoleBinding scoped(String roleKey, String resourceKey, boolean inherit) {
+            return new RoleBinding(roleKey, Objects.requireNonNull(resourceKey, "resourceKey"), inherit);
+        }
+
+        /** Whether this binding is resource-scoped. */
+        boolean isScoped() {
+            return resource != null;
         }
     }
 
@@ -188,16 +291,17 @@ public record ManagementManifest(
      * @param key manifest-local identifier, referred to by users
      * @param name the group's name — its natural key within the tenant
      * @param description human-readable description; the server requires one
-     * @param roles the keys of roles assigned to this group
+     * @param roles the roles assigned to this group, plain or resource-scoped
+     *              (contract 1.51)
      */
-    public record GroupSpec(String key, String name, String description, List<String> roles) {
+    public record GroupSpec(String key, String name, String description, List<RoleBinding> roles) {
         /**
          * Canonical constructor, defensively copying the role list.
          *
          * @param key manifest-local identifier
          * @param name the group's name
          * @param description human-readable description
-         * @param roles the keys of roles assigned to this group
+         * @param roles the roles assigned to this group
          */
         public GroupSpec {
             roles = List.copyOf(roles);
@@ -215,25 +319,61 @@ public record ManagementManifest(
      *                        exists: a manifest is a description of shape, and
      *                        silently resetting a live account's password because
      *                        a config file mentions one is not a shape change
-     * @param roles the keys of roles assigned directly to this user
+     * @param roles the roles assigned directly to this user, plain or resource-scoped
+     *              (contract 1.51)
      * @param groups the keys of groups this user belongs to
      */
     public record UserSpec(String key, String username, String email,
                            @Nullable Sensitive initialPassword,
-                           List<String> roles, List<String> groups) {
+                           List<RoleBinding> roles, List<String> groups) {
         /**
-         * Canonical constructor, defensively copying both key lists.
+         * Canonical constructor, defensively copying both lists.
          *
          * @param key manifest-local identifier
          * @param username the username
          * @param email the user's email address
          * @param initialPassword the create-only password, or {@code null}
-         * @param roles role keys assigned directly
+         * @param roles roles assigned directly
          * @param groups group keys this user belongs to
          */
         public UserSpec {
             roles = List.copyOf(roles);
             groups = List.copyOf(groups);
+        }
+    }
+
+    /**
+     * A service account and the roles bound to it (CONTRACT.md &sect;27.6.1 item 3,
+     * contract 1.51).
+     *
+     * <p>Reconciled by {@code name}, not by a server-enforced unique key: the server's
+     * only unique index on a service account is its {@code client_id}, so a tenant can
+     * hold two accounts sharing one name. Planning against a manifest naming an
+     * ambiguous one fails before any write — picking one would reconcile an account the
+     * manifest did not clearly identify.
+     *
+     * @param key manifest-local identifier, referred to by nothing else in this
+     *            manifest today — a service account owns no groups or resources
+     *            of its own in 1.51
+     * @param name the service account's name — its natural (but not server-unique)
+     *             key within the tenant
+     * @param description human-readable description; the only field {@code Update}
+     *                     reconciles. {@code null} says nothing about it — never
+     *                     sent, never compared
+     * @param roles the roles bound to this service account, plain or resource-scoped
+     */
+    public record ServiceAccountSpec(String key, String name, @Nullable String description,
+                                     List<RoleBinding> roles) {
+        /**
+         * Canonical constructor, defensively copying the role list.
+         *
+         * @param key manifest-local identifier
+         * @param name the service account's name
+         * @param description human-readable description, or {@code null}
+         * @param roles the roles bound to this service account
+         */
+        public ServiceAccountSpec {
+            roles = List.copyOf(roles);
         }
     }
 
@@ -252,16 +392,23 @@ public record ManagementManifest(
         private final List<RoleSpec> roles = new ArrayList<>();
         private final List<GroupSpec> groups = new ArrayList<>();
         private final List<UserSpec> users = new ArrayList<>();
+        private final List<ServiceAccountSpec> serviceAccounts = new ArrayList<>();
         private final List<String> problems = new ArrayList<>();
 
         /** Mutable scope lists, keyed by resource key, folded in at build time. */
         private final Map<String, List<ScopeSpec>> scopes = new LinkedHashMap<>();
+        /** Stated metadata, keyed by resource key, folded in at build time. */
+        private final Map<String, JsonNode> metadataByResource = new LinkedHashMap<>();
         /** Mutable grant lists, keyed by role key, folded in at build time. */
         private final Map<String, List<GrantSpec>> grants = new LinkedHashMap<>();
-        /** Mutable role-assignment lists, keyed by user key. */
-        private final Map<String, List<String>> userRoles = new LinkedHashMap<>();
+        /** Mutable role-binding lists, keyed by group key. */
+        private final Map<String, List<RoleBinding>> groupRoles = new LinkedHashMap<>();
+        /** Mutable role-binding lists, keyed by user key. */
+        private final Map<String, List<RoleBinding>> userRoles = new LinkedHashMap<>();
         /** Mutable group-membership lists, keyed by user key. */
         private final Map<String, List<String>> userGroups = new LinkedHashMap<>();
+        /** Mutable role-binding lists, keyed by service-account key. */
+        private final Map<String, List<RoleBinding>> serviceAccountRoles = new LinkedHashMap<>();
 
         Builder() {
         }
@@ -310,6 +457,30 @@ public record ManagementManifest(
             }
             scopes.computeIfAbsent(resourceKey, k -> new ArrayList<>())
                     .add(new ScopeSpec(key, name, description));
+            return this;
+        }
+
+        /**
+         * States the resource named by {@code resourceKey}'s metadata (CONTRACT.md
+         * &sect;27.6.1 item 1, contract 1.51).
+         *
+         * <p>Silent unless called: a resource with no {@code metadata(...)} call says
+         * nothing about it, and {@code plan}/{@code apply} never touch the field. A
+         * stated value — including {@code NullNode}/an empty object — is sent on
+         * {@code Create} and compared, as JSON value equality of the whole object,
+         * on every later {@code plan}.
+         *
+         * @param resourceKey the resource this metadata belongs to
+         * @param metadata the JSON object to state
+         * @return this builder
+         */
+        public Builder metadata(String resourceKey, JsonNode metadata) {
+            if (resources.stream().noneMatch(r -> r.key().equals(resourceKey))) {
+                problems.add("metadata names resource '" + resourceKey
+                        + "', which no resource(...) call has declared yet");
+                return this;
+            }
+            metadataByResource.put(resourceKey, metadata);
             return this;
         }
 
@@ -376,16 +547,42 @@ public record ManagementManifest(
         }
 
         /**
-         * Declares a group and the roles its members inherit.
+         * Declares a group and the plain (tenant-wide) roles its members inherit.
+         *
+         * <p>For a resource-scoped binding, declare the group with no roles here and
+         * call {@link #groupRole(String, RoleBinding)} instead — a {@code String}
+         * varargs list can only ever mean the plain shape.
          *
          * @param key manifest-local identifier
          * @param name the group's name
          * @param description human-readable description
-         * @param roleKeys the roles this group's members inherit
+         * @param roleKeys the roles this group's members inherit, tenant-wide
          * @return this builder
          */
         public Builder group(String key, String name, String description, String... roleKeys) {
-            groups.add(new GroupSpec(key, name, description, List.of(roleKeys)));
+            groups.add(new GroupSpec(key, name, description, List.of()));
+            for (String roleKey : roleKeys) {
+                groupRoles.computeIfAbsent(key, k -> new ArrayList<>()).add(RoleBinding.role(roleKey));
+            }
+            return this;
+        }
+
+        /**
+         * Binds a role to the group named by {@code groupKey}, plain or resource-scoped
+         * (CONTRACT.md &sect;27.6.1 item 2, contract 1.51).
+         *
+         * @param groupKey the group receiving the binding
+         * @param binding the role binding — {@link RoleBinding#role} or
+         *                {@link RoleBinding#scoped}
+         * @return this builder
+         */
+        public Builder groupRole(String groupKey, RoleBinding binding) {
+            if (groups.stream().noneMatch(g -> g.key().equals(groupKey))) {
+                problems.add("groupRole names group '" + groupKey
+                        + "', which no group(...) call has declared yet");
+                return this;
+            }
+            groupRoles.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(binding);
             return this;
         }
 
@@ -406,19 +603,32 @@ public record ManagementManifest(
         }
 
         /**
-         * Assigns a role directly to the user named by {@code userKey}.
+         * Assigns a plain, tenant-wide role directly to the user named by {@code userKey}.
          *
          * @param userKey the user receiving the role
          * @param roleKey the role being assigned
          * @return this builder
          */
         public Builder assignRole(String userKey, String roleKey) {
+            return assignRole(userKey, RoleBinding.role(roleKey));
+        }
+
+        /**
+         * Binds a role directly to the user named by {@code userKey}, plain or
+         * resource-scoped (CONTRACT.md &sect;27.6.1 item 2, contract 1.51).
+         *
+         * @param userKey the user receiving the binding
+         * @param binding the role binding — {@link RoleBinding#role} or
+         *                {@link RoleBinding#scoped}
+         * @return this builder
+         */
+        public Builder assignRole(String userKey, RoleBinding binding) {
             if (users.stream().noneMatch(u -> u.key().equals(userKey))) {
                 problems.add("assignRole names user '" + userKey
                         + "', which no user(...) call has declared yet");
                 return this;
             }
-            userRoles.computeIfAbsent(userKey, k -> new ArrayList<>()).add(roleKey);
+            userRoles.computeIfAbsent(userKey, k -> new ArrayList<>()).add(binding);
             return this;
         }
 
@@ -440,6 +650,40 @@ public record ManagementManifest(
         }
 
         /**
+         * Declares a service account (CONTRACT.md &sect;27.6.1 item 3, contract 1.51).
+         *
+         * @param key manifest-local identifier
+         * @param name the service account's name — reconciled by name, not uniquely
+         *             enforced by the server; see {@link ServiceAccountSpec}
+         * @param description human-readable description, or {@code null} to say
+         *                     nothing about it
+         * @return this builder
+         */
+        public Builder serviceAccount(String key, String name, @Nullable String description) {
+            serviceAccounts.add(new ServiceAccountSpec(key, name, description, List.of()));
+            return this;
+        }
+
+        /**
+         * Binds a role to the service account named by {@code serviceAccountKey}, plain
+         * or resource-scoped.
+         *
+         * @param serviceAccountKey the service account receiving the binding
+         * @param binding the role binding — {@link RoleBinding#role} or
+         *                {@link RoleBinding#scoped}
+         * @return this builder
+         */
+        public Builder assignServiceAccountRole(String serviceAccountKey, RoleBinding binding) {
+            if (serviceAccounts.stream().noneMatch(s -> s.key().equals(serviceAccountKey))) {
+                problems.add("assignServiceAccountRole names service account '" + serviceAccountKey
+                        + "', which no serviceAccount(...) call has declared yet");
+                return this;
+            }
+            serviceAccountRoles.computeIfAbsent(serviceAccountKey, k -> new ArrayList<>()).add(binding);
+            return this;
+        }
+
+        /**
          * Returns the assembled manifest, or throws with the reason it cannot be
          * reconciled.
          *
@@ -456,12 +700,17 @@ public record ManagementManifest(
             List<ResourceSpec> withScopes = new ArrayList<>();
             for (ResourceSpec r : resources) {
                 withScopes.add(new ResourceSpec(r.key(), r.name(), r.resourceType(), r.parent(),
-                        scopes.getOrDefault(r.key(), List.of())));
+                        scopes.getOrDefault(r.key(), List.of()), metadataByResource.get(r.key())));
             }
             List<RoleSpec> withGrants = new ArrayList<>();
             for (RoleSpec r : roles) {
                 withGrants.add(new RoleSpec(r.key(), r.name(), r.description(), r.global(),
                         grants.getOrDefault(r.key(), List.of())));
+            }
+            List<GroupSpec> withGroupRoles = new ArrayList<>();
+            for (GroupSpec g : groups) {
+                withGroupRoles.add(new GroupSpec(g.key(), g.name(), g.description(),
+                        groupRoles.getOrDefault(g.key(), List.of())));
             }
             List<UserSpec> withBindings = new ArrayList<>();
             for (UserSpec u : users) {
@@ -469,8 +718,13 @@ public record ManagementManifest(
                         u.initialPassword(), userRoles.getOrDefault(u.key(), List.of()),
                         userGroups.getOrDefault(u.key(), List.of())));
             }
-            ManagementManifest manifest = new ManagementManifest(
-                    withScopes, permissions, withGrants, groups, withBindings);
+            List<ServiceAccountSpec> withServiceAccountRoles = new ArrayList<>();
+            for (ServiceAccountSpec s : serviceAccounts) {
+                withServiceAccountRoles.add(new ServiceAccountSpec(s.key(), s.name(),
+                        s.description(), serviceAccountRoles.getOrDefault(s.key(), List.of())));
+            }
+            ManagementManifest manifest = new ManagementManifest(withScopes, permissions,
+                    withGrants, withGroupRoles, withBindings, withServiceAccountRoles);
             ManifestValidation.validate(manifest);
             return manifest;
         }
@@ -478,7 +732,8 @@ public record ManagementManifest(
 
     /** Key sets a validation pass needs, gathered once. */
     record Keys(Set<String> resources, Set<String> scopes, Set<String> permissions,
-                Set<String> roles, Set<String> groups) {
+                Set<String> roles, Set<String> groups, Set<String> serviceAccounts,
+                Set<String> globalRoles) {
         static Keys of(ManagementManifest m) {
             Set<String> resourceKeys = new HashSet<>();
             Set<String> scopeKeys = new HashSet<>();
@@ -493,14 +748,23 @@ public record ManagementManifest(
                 permissionKeys.add(p.key());
             }
             Set<String> roleKeys = new HashSet<>();
+            Set<String> globalRoleKeys = new HashSet<>();
             for (RoleSpec r : m.roles()) {
                 roleKeys.add(r.key());
+                if (r.global()) {
+                    globalRoleKeys.add(r.key());
+                }
             }
             Set<String> groupKeys = new HashSet<>();
             for (GroupSpec g : m.groups()) {
                 groupKeys.add(g.key());
             }
-            return new Keys(resourceKeys, scopeKeys, permissionKeys, roleKeys, groupKeys);
+            Set<String> serviceAccountKeys = new HashSet<>();
+            for (ServiceAccountSpec s : m.serviceAccounts()) {
+                serviceAccountKeys.add(s.key());
+            }
+            return new Keys(resourceKeys, scopeKeys, permissionKeys, roleKeys, groupKeys,
+                    serviceAccountKeys, globalRoleKeys);
         }
     }
 }

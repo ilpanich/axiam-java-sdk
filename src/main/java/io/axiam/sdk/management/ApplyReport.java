@@ -1,5 +1,6 @@
 package io.axiam.sdk.management;
 
+import io.axiam.sdk.management.models.ServiceAccountCreatedResponse;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
@@ -60,6 +61,25 @@ public record ApplyReport(List<AppliedStep> steps) {
                 .count();
     }
 
+    /**
+     * Every service account this apply created, with its one-time {@code client_secret}
+     * (CONTRACT.md &sect;27.5 rule 5, contract 1.51).
+     *
+     * <p>Carried on the step's outcome exactly as {@code create} returns it, even when a
+     * later action of this same apply failed — this is the only place the plaintext
+     * secret ever exists, so dropping it here would create an account nobody can
+     * authenticate as, and the next {@code apply} would report {@code NoChange}.
+     *
+     * @return the {@link ServiceAccountCreatedResponse} of every {@code CreateServiceAccount}
+     *         step that ran, in plan order
+     */
+    public List<ServiceAccountCreatedResponse> createdServiceAccounts() {
+        return steps.stream()
+                .map(s -> s.outcome().createdServiceAccount())
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
     /** What actually became of one planned step. */
     public enum Status {
         /** The step ran and the thing now exists. */
@@ -80,8 +100,33 @@ public record ApplyReport(List<AppliedStep> steps) {
      * @param status created, updated, unchanged, failed or not-attempted
      * @param message the error the server or transport gave, on a failed step
      *                only; {@code null} otherwise
+     * @param createdServiceAccount the one-time {@link ServiceAccountCreatedResponse},
+     *                              {@code client_secret} included, when this step created
+     *                              a service account (CONTRACT.md &sect;27.5 rule 5,
+     *                              contract 1.51); {@code null} for every other step,
+     *                              including one that merely bound a role to an
+     *                              already-existing account
+     * @param restored on a {@code BindingUpdateFailed} step only (CONTRACT.md
+     *                 &sect;27.6.1 item 2): {@code true} when the previous binding was
+     *                 successfully re-assigned after the new one failed to apply,
+     *                 {@code false} when the restoring re-assignment itself failed too
+     *                 (the subject is left holding neither), {@code null} for every
+     *                 other step
      */
-    public record StepOutcome(Status status, @Nullable String message) {
+    public record StepOutcome(Status status, @Nullable String message,
+                              @Nullable ServiceAccountCreatedResponse createdServiceAccount,
+                              @Nullable Boolean restored) {
+
+        /**
+         * The common case: no service-account secret, no rebind to report.
+         *
+         * @param status created, updated, unchanged, failed or not-attempted
+         * @param message the error the server or transport gave, on a failed step
+         *                only; {@code null} otherwise
+         */
+        public StepOutcome(Status status, @Nullable String message) {
+            this(status, message, null, null);
+        }
     }
 
     /**

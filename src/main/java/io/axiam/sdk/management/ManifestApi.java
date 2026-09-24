@@ -1,14 +1,19 @@
 package io.axiam.sdk.management;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import io.axiam.sdk.errors.NetworkError;
 import io.axiam.sdk.management.models.AddMemberRequest;
 import io.axiam.sdk.management.models.AssignRoleToGroupRequest;
+import io.axiam.sdk.management.models.AssignRoleToServiceAccountRequest;
 import io.axiam.sdk.management.models.AssignRoleToUserRequest;
 import io.axiam.sdk.management.models.CreateGroupRequest;
 import io.axiam.sdk.management.models.CreatePermissionRequest;
 import io.axiam.sdk.management.models.CreateResourceRequest;
 import io.axiam.sdk.management.models.CreateRoleRequest;
 import io.axiam.sdk.management.models.CreateScopeRequest;
+import io.axiam.sdk.management.models.CreateServiceAccountRequest;
 import io.axiam.sdk.management.models.CreateUserRequest;
 import io.axiam.sdk.management.models.Group;
 import io.axiam.sdk.management.models.GrantPermissionRequest;
@@ -16,11 +21,17 @@ import io.axiam.sdk.management.models.Permission;
 import io.axiam.sdk.management.models.PermissionEffect;
 import io.axiam.sdk.management.models.Resource;
 import io.axiam.sdk.management.models.Role;
+import io.axiam.sdk.management.models.RoleGroupAssignment;
+import io.axiam.sdk.management.models.RoleServiceAccountAssignment;
+import io.axiam.sdk.management.models.RoleUserAssignment;
 import io.axiam.sdk.management.models.Scope;
+import io.axiam.sdk.management.models.ServiceAccountCreatedResponse;
+import io.axiam.sdk.management.models.ServiceAccountResponse;
 import io.axiam.sdk.management.models.UpdateGroup;
 import io.axiam.sdk.management.models.UpdatePermissionRequest;
 import io.axiam.sdk.management.models.UpdateResourceRequest;
 import io.axiam.sdk.management.models.UpdateRole;
+import io.axiam.sdk.management.models.UpdateServiceAccount;
 import io.axiam.sdk.management.models.UpdateUserRequest;
 import io.axiam.sdk.management.models.UserResponse;
 import org.jspecify.annotations.Nullable;
@@ -106,9 +117,15 @@ public final class ManifestApi {
         private List<Role> roles = List.of();
         private List<Group> groups = List.of();
         private List<UserResponse> users = List.of();
+        private List<ServiceAccountResponse> serviceAccounts = List.of();
         private final Map<UUID, List<UUID>> roleGrants = new HashMap<>();
-        private final Map<UUID, List<UUID>> roleUsers = new HashMap<>();
-        private final Map<UUID, List<UUID>> roleGroups = new HashMap<>();
+        // Full assignment objects, not just subject ids: a role binding's UPDATE
+        // decision (contract 1.51, §27.6.1 item 2) needs the server's resourceId
+        // and inherits() too, and the restore-on-failed-rebind path needs the
+        // server's tenantScope.
+        private final Map<UUID, List<RoleUserAssignment>> roleUsers = new HashMap<>();
+        private final Map<UUID, List<RoleGroupAssignment>> roleGroups = new HashMap<>();
+        private final Map<UUID, List<RoleServiceAccountAssignment>> roleServiceAccounts = new HashMap<>();
         private final Map<UUID, List<UUID>> groupMembers = new HashMap<>();
     }
 
@@ -120,6 +137,20 @@ public final class ManifestApi {
         private final Map<String, UUID> roles = new HashMap<>();
         private final Map<String, UUID> groups = new HashMap<>();
         private final Map<String, UUID> users = new HashMap<>();
+        private final Map<String, UUID> serviceAccounts = new HashMap<>();
+    }
+
+    /**
+     * A binding actually present on the server for one (role, subject) pair —
+     * what an UPDATE step needs to restore if its rebind fails.
+     *
+     * @param resourceId the server's resource_id, or {@code null} for a plain binding
+     * @param tenantScope the server's tenant_scope, carried across a rebind unchanged
+     *                    (CONTRACT.md &sect;27.6.1 item 2: dropping it would silently
+     *                    widen an organization-level account's reach)
+     */
+    private record ExistingBinding(@Nullable UUID resourceId, boolean inherits,
+                                   @Nullable List<UUID> tenantScope) {
     }
 
     private Snapshot read(ManagementManifest manifest) {
@@ -129,6 +160,10 @@ public final class ManifestApi {
         snapshot.roles = api.roles().listAll(PLAN_PAGE);
         snapshot.groups = api.groups().listAll(PLAN_PAGE);
         snapshot.users = api.users().listAll(PLAN_PAGE);
+        // Only when the manifest names one (§27.6.1 item 3): a manifest with no
+        // service_accounts section makes no new request over what 1.50 already made.
+        snapshot.serviceAccounts = manifest.serviceAccounts().isEmpty()
+                ? List.of() : api.serviceAccounts().listAll(PLAN_PAGE);
 
         // Only the resources, roles and groups the manifest could match: a
         // tenant with a thousand resources should not cost a thousand scope
@@ -142,16 +177,18 @@ public final class ManifestApi {
         }
         List<String> wantedRoles = manifest.roles().stream()
                 .map(ManagementManifest.RoleSpec::name).toList();
+        boolean wantsServiceAccountRoles = !manifest.serviceAccounts().isEmpty();
         for (Role r : snapshot.roles) {
             if (!wantedRoles.contains(r.name())) {
                 continue;
             }
             snapshot.roleGrants.put(r.id(), api.roles().listPermissions(r.id()).stream()
                     .map(g -> g.permission().id()).toList());
-            snapshot.roleUsers.put(r.id(), api.roles().listUsers(r.id()).stream()
-                    .map(a -> a.user().id()).toList());
-            snapshot.roleGroups.put(r.id(), api.roles().listGroups(r.id()).stream()
-                    .map(a -> a.group().id()).toList());
+            snapshot.roleUsers.put(r.id(), api.roles().listUsers(r.id()));
+            snapshot.roleGroups.put(r.id(), api.roles().listGroups(r.id()));
+            if (wantsServiceAccountRoles) {
+                snapshot.roleServiceAccounts.put(r.id(), api.roles().listServiceAccounts(r.id()));
+            }
         }
         List<String> wantedGroups = manifest.groups().stream()
                 .map(ManagementManifest.GroupSpec::name).toList();
@@ -177,8 +214,25 @@ public final class ManifestApi {
     private enum Kind {
         NOOP, CREATE_RESOURCE, UPDATE_RESOURCE, CREATE_SCOPE, CREATE_PERMISSION,
         UPDATE_PERMISSION, CREATE_ROLE, UPDATE_ROLE, GRANT_PERMISSION, CREATE_GROUP,
-        UPDATE_GROUP, ASSIGN_ROLE_TO_GROUP, CREATE_USER, UPDATE_USER, ASSIGN_ROLE_TO_USER,
-        ADD_GROUP_MEMBER
+        UPDATE_GROUP, ASSIGN_ROLE_TO_GROUP, REBIND_ROLE_ON_GROUP, CREATE_USER, UPDATE_USER,
+        ASSIGN_ROLE_TO_USER, REBIND_ROLE_ON_USER, ADD_GROUP_MEMBER, CREATE_SERVICE_ACCOUNT,
+        UPDATE_SERVICE_ACCOUNT, ASSIGN_ROLE_TO_SERVICE_ACCOUNT, REBIND_ROLE_ON_SERVICE_ACCOUNT
+    }
+
+    /**
+     * The desired state of one role binding, resolved against manifest keys, plus
+     * enough of the server's existing assignment (when there is one) to restore it if
+     * a rebind's re-assign fails (CONTRACT.md &sect;27.6.1 item 2, contract 1.51).
+     *
+     * @param roleKey the role's manifest key
+     * @param resourceKey the resource's manifest key, or {@code null} for a plain binding
+     * @param inherit the stated {@code inherit}, or {@code null} to mean "inheriting,
+     *                say nothing"
+     * @param existing the server's current assignment for this (role, subject) pair,
+     *                 or {@code null} when there is none
+     */
+    private record BindingChange(String roleKey, @Nullable String resourceKey,
+                                 @Nullable Boolean inherit, @Nullable ExistingBinding existing) {
     }
 
     private static List<Step> compute(ManagementManifest m, Snapshot snap, Resolved res) {
@@ -200,7 +254,13 @@ public final class ManifestApi {
             String summary = "resource '" + spec.name() + "' (" + spec.resourceType() + ")";
             if (existing != null) {
                 res.resources.put(key, existing.id());
-                boolean drifted = !existing.resourceType().equals(spec.resourceType());
+                // §27.6.1 item 1 (contract 1.51): metadata is silent unless stated
+                // (rule 3), and drift is JSON value equality of the whole object —
+                // never a key-by-key merge, and never compared at all when the
+                // manifest said nothing about it.
+                boolean metadataDrifted = spec.metadata() != null
+                        && !metadataEquals(spec.metadata(), existing.metadata());
+                boolean drifted = !existing.resourceType().equals(spec.resourceType()) || metadataDrifted;
                 out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
                         ManagementPlan.Target.RESOURCE, key, summary,
                         drifted ? Kind.UPDATE_RESOURCE : Kind.NOOP, spec, null));
@@ -296,15 +356,13 @@ public final class ManifestApi {
         }
 
         for (ManagementManifest.GroupSpec group : m.groups()) {
-            for (String roleKey : group.roles()) {
-                String summary = "role '" + roleKey + "' on group '" + group.name() + "'";
-                UUID roleId = res.roles.get(roleKey);
-                UUID groupId = res.groups.get(group.key());
-                boolean already = roleId != null && groupId != null
-                        && snap.roleGroups.getOrDefault(roleId, List.of()).contains(groupId);
-                out.add(step(already ? ManagementPlan.Change.NO_CHANGE : ManagementPlan.Change.CREATE,
-                        ManagementPlan.Target.GROUP_ROLE, group.key(), summary,
-                        already ? Kind.NOOP : Kind.ASSIGN_ROLE_TO_GROUP, roleKey, group.key()));
+            for (ManagementManifest.RoleBinding binding : group.roles()) {
+                ExistingBinding existing = res.roles.containsKey(binding.role())
+                        ? findGroupBinding(snap, res.roles.get(binding.role()), res.groups.get(group.key()))
+                        : null;
+                addBindingStep(out, ManagementPlan.Target.GROUP_ROLE, group.key(),
+                        "on group '" + group.name() + "'", binding, existing, res,
+                        Kind.ASSIGN_ROLE_TO_GROUP, Kind.REBIND_ROLE_ON_GROUP);
             }
         }
 
@@ -325,15 +383,13 @@ public final class ManifestApi {
         }
 
         for (ManagementManifest.UserSpec user : m.users()) {
-            for (String roleKey : user.roles()) {
-                String summary = "role '" + roleKey + "' on user '" + user.username() + "'";
-                UUID roleId = res.roles.get(roleKey);
-                UUID userId = res.users.get(user.key());
-                boolean already = roleId != null && userId != null
-                        && snap.roleUsers.getOrDefault(roleId, List.of()).contains(userId);
-                out.add(step(already ? ManagementPlan.Change.NO_CHANGE : ManagementPlan.Change.CREATE,
-                        ManagementPlan.Target.USER_ROLE, user.key(), summary,
-                        already ? Kind.NOOP : Kind.ASSIGN_ROLE_TO_USER, roleKey, user.key()));
+            for (ManagementManifest.RoleBinding binding : user.roles()) {
+                ExistingBinding existing = res.roles.containsKey(binding.role())
+                        ? findUserBinding(snap, res.roles.get(binding.role()), res.users.get(user.key()))
+                        : null;
+                addBindingStep(out, ManagementPlan.Target.USER_ROLE, user.key(),
+                        "on user '" + user.username() + "'", binding, existing, res,
+                        Kind.ASSIGN_ROLE_TO_USER, Kind.REBIND_ROLE_ON_USER);
             }
         }
 
@@ -349,8 +405,130 @@ public final class ManifestApi {
                         already ? Kind.NOOP : Kind.ADD_GROUP_MEMBER, groupKey, user.key()));
             }
         }
+
+        // §27.6 rule 5: accounts and their bindings are ordered last. §27.6.1 item 3:
+        // read only when the manifest names one (read() above already made that call).
+        for (ManagementManifest.ServiceAccountSpec spec : m.serviceAccounts()) {
+            List<ServiceAccountResponse> matches = snap.serviceAccounts.stream()
+                    .filter(a -> a.name().equals(spec.name())).toList();
+            if (matches.size() > 1) {
+                // §27.6.1 item 3: the server's only unique index is client_id, so a
+                // stated name matching more than one existing account is refused
+                // before any write — picking one would reconcile an account the
+                // manifest did not clearly identify.
+                throw new NetworkError("manifest names service account '" + spec.key()
+                        + "' (name '" + spec.name() + "'), which matches " + matches.size()
+                        + " existing service accounts — plan cannot pick one");
+            }
+            String summary = "service account '" + spec.name() + "'";
+            ServiceAccountResponse found = matches.isEmpty() ? null : matches.get(0);
+            if (found != null) {
+                res.serviceAccounts.put(spec.key(), found.id());
+                boolean drifted = spec.description() != null
+                        && !spec.description().equals(found.description());
+                out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
+                        ManagementPlan.Target.SERVICE_ACCOUNT, spec.key(), summary,
+                        drifted ? Kind.UPDATE_SERVICE_ACCOUNT : Kind.NOOP, spec, null));
+            } else {
+                out.add(step(ManagementPlan.Change.CREATE, ManagementPlan.Target.SERVICE_ACCOUNT,
+                        spec.key(), summary, Kind.CREATE_SERVICE_ACCOUNT, spec, null));
+            }
+        }
+
+        for (ManagementManifest.ServiceAccountSpec sa : m.serviceAccounts()) {
+            for (ManagementManifest.RoleBinding binding : sa.roles()) {
+                ExistingBinding existing = res.roles.containsKey(binding.role())
+                        ? findServiceAccountBinding(
+                                snap, res.roles.get(binding.role()), res.serviceAccounts.get(sa.key()))
+                        : null;
+                addBindingStep(out, ManagementPlan.Target.SERVICE_ACCOUNT_ROLE, sa.key(),
+                        "on service account '" + sa.name() + "'", binding, existing, res,
+                        Kind.ASSIGN_ROLE_TO_SERVICE_ACCOUNT, Kind.REBIND_ROLE_ON_SERVICE_ACCOUNT);
+            }
+        }
         return out;
     }
+
+    /** The server's existing binding of {@code roleId} to {@code groupId}, or {@code null}. */
+    private static @Nullable ExistingBinding findGroupBinding(
+            Snapshot snap, @Nullable UUID roleId, @Nullable UUID groupId) {
+        if (roleId == null || groupId == null) {
+            return null;
+        }
+        return snap.roleGroups.getOrDefault(roleId, List.of()).stream()
+                .filter(a -> a.group().id().equals(groupId)).findFirst()
+                .map(a -> new ExistingBinding(a.resourceId(), a.inherits(), a.tenantScope())).orElse(null);
+    }
+
+    /** The server's existing binding of {@code roleId} to {@code userId}, or {@code null}. */
+    private static @Nullable ExistingBinding findUserBinding(
+            Snapshot snap, @Nullable UUID roleId, @Nullable UUID userId) {
+        if (roleId == null || userId == null) {
+            return null;
+        }
+        return snap.roleUsers.getOrDefault(roleId, List.of()).stream()
+                .filter(a -> a.user().id().equals(userId)).findFirst()
+                .map(a -> new ExistingBinding(a.resourceId(), a.inherits(), a.tenantScope())).orElse(null);
+    }
+
+    /** The server's existing binding of {@code roleId} to {@code serviceAccountId}, or {@code null}. */
+    private static @Nullable ExistingBinding findServiceAccountBinding(
+            Snapshot snap, @Nullable UUID roleId, @Nullable UUID serviceAccountId) {
+        if (roleId == null || serviceAccountId == null) {
+            return null;
+        }
+        return snap.roleServiceAccounts.getOrDefault(roleId, List.of()).stream()
+                .filter(a -> a.serviceAccount().id().equals(serviceAccountId)).findFirst()
+                .map(a -> new ExistingBinding(a.resourceId(), a.inherits(), a.tenantScope())).orElse(null);
+    }
+
+    /**
+     * Emits the Create/Update/NoChange step for one role binding, common to groups,
+     * users and service accounts (CONTRACT.md &sect;27.6.1 item 2, contract 1.51).
+     *
+     * @param out the step list to append to
+     * @param target which kind of binding this is, for the plan's summary
+     * @param subjectKey the subject's manifest key
+     * @param onWhat "on group 'g'" / "on user 'u'" / "on service account 's'", for the summary
+     * @param binding the desired binding
+     * @param existing the server's current binding of this (role, subject) pair, or
+     *                 {@code null} when there is none
+     * @param res manifest keys resolved so far, to name the resource in the summary
+     * @param createKind the Kind that assigns a fresh binding
+     * @param rebindKind the Kind that unassigns then re-assigns a drifted one
+     */
+    private static void addBindingStep(List<Step> out, ManagementPlan.Target target, String subjectKey,
+            String onWhat, ManagementManifest.RoleBinding binding, @Nullable ExistingBinding existing,
+            Resolved res, Kind createKind, Kind rebindKind) {
+        String summary = "role '" + binding.role() + "' " + onWhat;
+        BindingChange change = new BindingChange(binding.role(), binding.resource(),
+                binding.inherit(), existing);
+        if (existing == null) {
+            out.add(step(ManagementPlan.Change.CREATE, target, subjectKey, summary,
+                    createKind, change, subjectKey));
+            return;
+        }
+        UUID desiredResourceId = binding.resource() == null ? null : res.resources.get(binding.resource());
+        boolean desiredInherit = binding.inherit() == null || binding.inherit();
+        boolean sameResource = Objects.equals(existing.resourceId(), desiredResourceId);
+        boolean sameInherit = existing.inherits() == desiredInherit;
+        if (sameResource && sameInherit) {
+            out.add(step(ManagementPlan.Change.NO_CHANGE, target, subjectKey, summary,
+                    Kind.NOOP, change, subjectKey));
+        } else {
+            out.add(step(ManagementPlan.Change.UPDATE, target, subjectKey, summary,
+                    rebindKind, change, subjectKey));
+        }
+    }
+
+    /** JSON value equality of a stated metadata object against the server's own (never {@code null}). */
+    private static boolean metadataEquals(JsonNode stated, @Nullable JsonNode serverSide) {
+        JsonNode server = serverSide == null || serverSide.isNull() ? EMPTY_OBJECT : serverSide;
+        return stated.equals(server);
+    }
+
+    private static final ObjectNode EMPTY_OBJECT = com.fasterxml.jackson.databind.node.JsonNodeFactory
+            .instance.objectNode();
 
     private static Step step(ManagementPlan.Change change, ManagementPlan.Target target,
                              String key, String summary, Kind kind, @Nullable Object spec,
@@ -400,35 +578,78 @@ public final class ManifestApi {
                         new ApplyReport.StepOutcome(ApplyReport.Status.UNCHANGED, null)));
                 continue;
             }
+            RunOutcome outcome;
             try {
-                run(s, res);
+                outcome = run(s, res);
+            } catch (BindingRebindFailedException e) {
+                // CONTRACT.md §27.6.1 item 2: unassign-then-assign is not atomic. The
+                // restore (re-assigning the PREVIOUS binding) has already been
+                // attempted inside run(); e.restored() says whether it held.
+                applied.add(new ApplyReport.AppliedStep(s.action(),
+                        new ApplyReport.StepOutcome(ApplyReport.Status.FAILED, e.getMessage(),
+                                null, e.restored())));
+                stopped = true;
+                continue;
             } catch (RuntimeException e) {
                 applied.add(new ApplyReport.AppliedStep(s.action(),
                         new ApplyReport.StepOutcome(ApplyReport.Status.FAILED, e.getMessage())));
                 stopped = true;
                 continue;
             }
+            // §27.5 rule 5: the created service account's one-time secret is carried
+            // on THIS step's outcome, even if a later step of the same apply fails —
+            // execute() only marks LATER steps NOT_ATTEMPTED, never this one.
             ApplyReport.Status status = s.kind().name().startsWith("UPDATE")
+                    || s.kind().name().startsWith("REBIND")
                     ? ApplyReport.Status.UPDATED : ApplyReport.Status.CREATED;
             applied.add(new ApplyReport.AppliedStep(s.action(),
-                    new ApplyReport.StepOutcome(status, null)));
+                    new ApplyReport.StepOutcome(status, null, outcome.createdServiceAccount(), null)));
         }
         return new ApplyReport(applied);
     }
 
-    private void run(Step s, Resolved res) {
+    /** What {@link #run} produced, beyond "it did not throw". */
+    private record RunOutcome(@Nullable ServiceAccountCreatedResponse createdServiceAccount) {
+        static final RunOutcome NONE = new RunOutcome(null);
+    }
+
+    /**
+     * Marks a rebind (unassign-then-assign) whose assign half failed, carrying whether
+     * the best-effort restore of the previous binding held.
+     */
+    private static final class BindingRebindFailedException extends RuntimeException {
+        private final boolean restored;
+
+        BindingRebindFailedException(String message, boolean restored) {
+            super(message);
+            this.restored = restored;
+        }
+
+        boolean restored() {
+            return restored;
+        }
+    }
+
+    private RunOutcome run(Step s, Resolved res) {
         switch (s.kind()) {
             case CREATE_RESOURCE -> {
                 ManagementManifest.ResourceSpec spec = (ManagementManifest.ResourceSpec) s.spec();
                 UUID parent = spec.parent() == null ? null : res.resources.get(spec.parent());
                 Resource created = api.resources().create(new CreateResourceRequest(
-                        null, spec.name(), parent, spec.resourceType()));
+                        spec.metadata(), spec.name(), parent, spec.resourceType()));
                 res.resources.put(s.key(), created.id());
             }
             case UPDATE_RESOURCE -> {
                 ManagementManifest.ResourceSpec spec = (ManagementManifest.ResourceSpec) s.spec();
-                api.resources().update(res.resources.get(s.key()),
-                        UpdateResourceRequest.builder().resourceType(spec.resourceType()).build());
+                UpdateResourceRequest.Builder update =
+                        UpdateResourceRequest.builder().resourceType(spec.resourceType());
+                if (spec.metadata() != null) {
+                    // §27.6.1 item 1: stated, so carried — whether or not metadata
+                    // itself was the field that drifted, exactly as resourceType
+                    // above is carried whenever THIS step fires at all.
+                    update.metadata(spec.metadata());
+                }
+                api.resources().update(res.resources.get(s.key()), update.build());
             }
             case CREATE_SCOPE -> {
                 ManagementManifest.ScopeSpec spec = (ManagementManifest.ScopeSpec) s.spec();
@@ -478,13 +699,32 @@ public final class ManifestApi {
                 api.groups().update(res.groups.get(s.key()),
                         UpdateGroup.builder().description(spec.description()).build());
             }
-            // CONTRACT.md §5.2.3: a manifest has no syntax for naming tenants on
-            // an assignment, so every one it applies is unrestricted — which is
-            // exactly what the manifests written before the field existed
-            // already meant, and keeps `apply` idempotent against them.
-            case ASSIGN_ROLE_TO_GROUP -> api.roles().assignToGroup(
-                    res.roles.get((String) s.spec()),
-                    new AssignRoleToGroupRequest(res.groups.get(s.related()), null, null));
+            // CONTRACT.md §5.2.3: a manifest has no syntax for naming tenants on a
+            // FRESH assignment, so every one it creates is unrestricted — which is
+            // exactly what the manifests written before the field existed already
+            // meant, and keeps `apply` idempotent against them. A REBIND (below)
+            // carries the server's existing tenant_scope across instead.
+            case ASSIGN_ROLE_TO_GROUP -> {
+                BindingChange c = (BindingChange) s.spec();
+                api.roles().assignToGroup(res.roles.get(c.roleKey()),
+                        new AssignRoleToGroupRequest(res.groups.get(s.related()), c.inherit(),
+                                c.resourceKey() == null ? null : res.resources.get(c.resourceKey()), null));
+            }
+            case REBIND_ROLE_ON_GROUP -> {
+                BindingChange c = (BindingChange) s.spec();
+                UUID roleId = res.roles.get(c.roleKey());
+                UUID groupId = res.groups.get(s.related());
+                rebind(
+                        () -> api.roles().unassignFromGroup(roleId, groupId,
+                                strOrNull(c.existing().resourceId())),
+                        () -> api.roles().assignToGroup(roleId, new AssignRoleToGroupRequest(
+                                groupId, c.inherit(),
+                                c.resourceKey() == null ? null : res.resources.get(c.resourceKey()),
+                                c.existing().tenantScope())),
+                        () -> api.roles().assignToGroup(roleId, new AssignRoleToGroupRequest(
+                                groupId, c.existing().inherits() ? null : false,
+                                c.existing().resourceId(), c.existing().tenantScope())));
+            }
             case CREATE_USER -> {
                 ManagementManifest.UserSpec spec = (ManagementManifest.UserSpec) s.spec();
                 UserResponse created = api.users().create(new CreateUserRequest(
@@ -497,16 +737,105 @@ public final class ManifestApi {
                         UpdateUserRequest.builder().email(spec.email()).build());
             }
             // §5.2.3 — see ASSIGN_ROLE_TO_GROUP above.
-            case ASSIGN_ROLE_TO_USER -> api.roles().assignToUser(
-                    res.roles.get((String) s.spec()),
-                    new AssignRoleToUserRequest(null, null, res.users.get(s.related())));
+            case ASSIGN_ROLE_TO_USER -> {
+                BindingChange c = (BindingChange) s.spec();
+                api.roles().assignToUser(res.roles.get(c.roleKey()),
+                        new AssignRoleToUserRequest(c.inherit(),
+                                c.resourceKey() == null ? null : res.resources.get(c.resourceKey()),
+                                null, res.users.get(s.related())));
+            }
+            case REBIND_ROLE_ON_USER -> {
+                BindingChange c = (BindingChange) s.spec();
+                UUID roleId = res.roles.get(c.roleKey());
+                UUID userId = res.users.get(s.related());
+                rebind(
+                        () -> api.roles().unassignFromUser(roleId, userId,
+                                strOrNull(c.existing().resourceId())),
+                        () -> api.roles().assignToUser(roleId, new AssignRoleToUserRequest(
+                                c.inherit(),
+                                c.resourceKey() == null ? null : res.resources.get(c.resourceKey()),
+                                c.existing().tenantScope(), userId)),
+                        () -> api.roles().assignToUser(roleId, new AssignRoleToUserRequest(
+                                c.existing().inherits() ? null : false,
+                                c.existing().resourceId(), c.existing().tenantScope(), userId)));
+            }
             case ADD_GROUP_MEMBER -> api.groups().addMember(
                     res.groups.get((String) s.spec()),
                     new AddMemberRequest(res.users.get(s.related())));
+            case CREATE_SERVICE_ACCOUNT -> {
+                ManagementManifest.ServiceAccountSpec spec = (ManagementManifest.ServiceAccountSpec) s.spec();
+                ServiceAccountCreatedResponse created = api.serviceAccounts().create(
+                        new CreateServiceAccountRequest(spec.description(), spec.name()));
+                res.serviceAccounts.put(s.key(), created.id());
+                return new RunOutcome(created);
+            }
+            case UPDATE_SERVICE_ACCOUNT -> {
+                ManagementManifest.ServiceAccountSpec spec = (ManagementManifest.ServiceAccountSpec) s.spec();
+                // §27.6.1 item 3: description is the only field Update reconciles;
+                // status is not a manifest field in 1.51 (never sent from here).
+                api.serviceAccounts().update(res.serviceAccounts.get(s.key()),
+                        UpdateServiceAccount.builder().description(spec.description()).build());
+            }
+            case ASSIGN_ROLE_TO_SERVICE_ACCOUNT -> {
+                BindingChange c = (BindingChange) s.spec();
+                api.roles().assignToServiceAccount(res.roles.get(c.roleKey()),
+                        new AssignRoleToServiceAccountRequest(c.inherit(),
+                                c.resourceKey() == null ? null : res.resources.get(c.resourceKey()),
+                                res.serviceAccounts.get(s.related()), null));
+            }
+            case REBIND_ROLE_ON_SERVICE_ACCOUNT -> {
+                BindingChange c = (BindingChange) s.spec();
+                UUID roleId = res.roles.get(c.roleKey());
+                UUID saId = res.serviceAccounts.get(s.related());
+                rebind(
+                        () -> api.roles().unassignFromServiceAccount(roleId, saId,
+                                strOrNull(c.existing().resourceId())),
+                        () -> api.roles().assignToServiceAccount(roleId,
+                                new AssignRoleToServiceAccountRequest(c.inherit(),
+                                        c.resourceKey() == null ? null : res.resources.get(c.resourceKey()),
+                                        saId, c.existing().tenantScope())),
+                        () -> api.roles().assignToServiceAccount(roleId,
+                                new AssignRoleToServiceAccountRequest(
+                                        c.existing().inherits() ? null : false,
+                                        c.existing().resourceId(), saId, c.existing().tenantScope())));
+            }
             case NOOP -> {
                 // Never reached: execute() short-circuits a no-op before here.
             }
             default -> throw new NetworkError("unknown manifest step " + s.kind());
         }
+        return RunOutcome.NONE;
+    }
+
+    /**
+     * Reconciles one drifted role binding as unassign-then-assign (CONTRACT.md
+     * &sect;27.6.1 item 2, contract 1.51). Not atomic: if {@code assignNew} fails after
+     * {@code unassign} succeeded, {@code restore} re-applies the previous binding on a
+     * best-effort basis before the failure propagates.
+     *
+     * @param unassign removes the server's current binding
+     * @param assignNew applies the manifest's desired binding
+     * @param restore re-applies the previous binding, tried only if {@code assignNew} failed
+     * @throws BindingRebindFailedException wrapping {@code assignNew}'s failure, naming
+     *                                       whether {@code restore} held
+     */
+    private static void rebind(Runnable unassign, Runnable assignNew, Runnable restore) {
+        unassign.run();
+        try {
+            assignNew.run();
+        } catch (RuntimeException assignFailure) {
+            boolean restored;
+            try {
+                restore.run();
+                restored = true;
+            } catch (RuntimeException restoreFailure) {
+                restored = false;
+            }
+            throw new BindingRebindFailedException(assignFailure.getMessage(), restored);
+        }
+    }
+
+    private static @Nullable String strOrNull(@Nullable UUID id) {
+        return id == null ? null : id.toString();
     }
 }
