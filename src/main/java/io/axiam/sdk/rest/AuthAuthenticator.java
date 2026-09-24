@@ -59,9 +59,23 @@ public final class AuthAuthenticator implements Authenticator {
         // says an SDK MUST NOT attach to these two, the moment the server
         // rejects the setup token — the one scenario the request-side
         // exclusion alone would miss.
+        // CONTRACT.md §6.1 rule 6 (contract 1.51): the device login's OWN 401 is
+        // the terminal answer this operation defines — never a session expiry to
+        // refresh past. Excluded here rather than only via
+        // hasAdoptedAccessToken() below, because the login call ITSELF runs
+        // before any token is adopted.
         if (SessionState.isRefreshPath(encodedPath) || SessionState.isOauth2SkipRefreshPath(encodedPath)
                 || SessionState.isWebauthnSetupRegisterPath(encodedPath)
+                || SessionState.isDeviceAuthPath(encodedPath)
                 || responseCount(response) >= 2) {
+            return null;
+        }
+
+        // CONTRACT.md §6.1 rule 6 (contract 1.51): a device token has no
+        // refresh token. A later 401 on it is surfaced as AuthError verbatim,
+        // never sent through this guard — there is nothing to spend, and the
+        // recovery is calling authenticateDevice() again, not a retry here.
+        if (session.hasAdoptedAccessToken()) {
             return null;
         }
 
