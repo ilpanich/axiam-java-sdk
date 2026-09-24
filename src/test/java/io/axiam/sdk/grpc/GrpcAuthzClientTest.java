@@ -137,6 +137,58 @@ class GrpcAuthzClientTest {
         }
     }
 
+    /**
+     * CONTRACT 1.52 N4.5 (C-12): "Never refreshed, on either transport." An
+     * {@code UNAUTHENTICATED} on an adopted &sect;6.1 device credential must
+     * be terminal, exactly like the REST 401 for the same credential — no
+     * refresh call, no retry.
+     */
+    @Test
+    void deviceCredentialUnauthenticatedNeverTriggersARefresh() throws Exception {
+        RefreshGuard guard = new RefreshGuard();
+        SessionState session = newSession(newCookieManager(), null);
+        session.adoptAccessToken(fakeAccessToken(SUBJECT_ID, TENANT_ID, ORG_ID, 900));
+
+        FakeAuthorizationService service = FakeAuthorizationService.terminalError(
+                Status.UNAUTHENTICATED.withDescription("device credential expired"));
+        try (GrpcAuthzClient client = buildClient(service, guard, session, new CopyOnWriteArrayList<>())) {
+            io.axiam.sdk.errors.AuthError error = assertThrows(io.axiam.sdk.errors.AuthError.class,
+                    () -> client.checkAccess("users:get", RESOURCE_ID));
+            assertTrue(error.getMessage().contains("device credential expired"),
+                    "the device credential's own UNAUTHENTICATED must surface verbatim, "
+                            + "not a refresh-guard failure: " + error.getMessage());
+        }
+        assertEquals(1, service.callCount(),
+                "N4.5: no refresh, no retry — a device credential's UNAUTHENTICATED is terminal");
+    }
+
+    /**
+     * CONTRACT 1.52 N4.3 (C-12), "gRPC device credential": once a device token
+     * is adopted, gRPC must send IT — not a token the shared {@link RefreshGuard}
+     * cached from a refresh that happened before adoption.
+     */
+    @Test
+    void deviceCredentialShadowsAStalePreAdoptionRefreshGuardCache() throws Exception {
+        RefreshGuard guard = new RefreshGuard();
+        SessionState session = newSession(newCookieManager(), null);
+        // A refresh that happened BEFORE the device login — the guard's cache
+        // now holds a prior session's token.
+        seedValidToken(guard, 900);
+        String deviceToken = fakeAccessToken(SUBJECT_ID, TENANT_ID, ORG_ID, 800);
+        session.adoptAccessToken(deviceToken);
+
+        List<Metadata> captured = new CopyOnWriteArrayList<>();
+        try (GrpcAuthzClient client = buildClient(FakeAuthorizationService.alwaysAllow(), guard, session, captured)) {
+            client.checkAccess(SUBJECT_ID, "users:get", RESOURCE_ID, null);
+        }
+
+        assertEquals(1, captured.size());
+        Metadata.Key<String> authKey = Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
+        assertEquals("Bearer " + deviceToken, captured.get(0).get(authKey),
+                "gRPC must send the adopted device credential, not a stale RefreshGuard cache "
+                        + "entry from before adoption");
+    }
+
     @Test
     void permissionDeniedMapsToAuthzErrorAndUnavailableMapsToNetworkError() throws Exception {
         RefreshGuard guard1 = new RefreshGuard();
