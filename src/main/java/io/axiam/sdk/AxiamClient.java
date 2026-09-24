@@ -865,6 +865,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private void onCredentialChange() {
         decisionMemo.clear();
         session.resetPrincipalScope();
+        session.clearAdoptedAccessToken();
     }
 
     // ------------------------------------------------------------------
@@ -3148,6 +3149,103 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public DeviceAuthorization deviceAuthorize() {
         return deviceAuthorize(null, null, null);
+    }
+
+    /**
+     * {@code POST /api/v1/auth/device} — the mTLS device login (CONTRACT.md
+     * &sect;6.1 rules 6-10, contract 1.51). Not to be confused with
+     * {@link #deviceLogin} (RFC 8628's device AUTHORIZATION grant, an unrelated
+     * flow with its own polling loop) — this is the single-call login a device
+     * makes once it already holds the client certificate {@link Builder#clientCertificate}
+     * configured.
+     *
+     * <p><strong>Rule 7 — reachable only with a certificate.</strong> On a
+     * client built without {@link Builder#clientCertificate}, this refuses
+     * client-side, with <strong>zero wire calls</strong>: going to the wire
+     * would only earn the server's own {@code 401} for the same reason, so this
+     * turns a configuration mistake into an immediate, local one instead of an
+     * authentication failure a caller has to interpret.
+     *
+     * <p><strong>Adoption (rule 6).</strong> The returned {@link DeviceToken#accessToken()}
+     * is adopted as this client's credential exactly as a completed login's is —
+     * every subsequent same-host request carries it as {@code Authorization:
+     * Bearer}. The server sets no cookie on this route, and this SDK has
+     * otherwise always authenticated through the cookie jar, so every such
+     * request ALSO carries an explicit empty {@code Cookie} header: the server
+     * reads {@code axiam_access} before {@code Authorization}, and a cookie left
+     * over from an earlier session would otherwise silently outrank the device
+     * token this call means to authenticate as. The previous credential (of any
+     * kind) is cleared first, the &sect;17 decision memo is dropped, and the
+     * &sect;5.2 acting-tenant gate resets to "no login result held" — a device
+     * holds none.
+     *
+     * <p><strong>Rules 6 and 8 — never the refresh guard.</strong> There is no
+     * refresh token for this credential. A {@code 401} on THIS call, and a
+     * later {@code 401} on the token it returns, are both surfaced as
+     * {@link AuthError} verbatim, with no refresh attempt — the caller's
+     * recovery is calling this method again. A {@code 429} is not an
+     * authentication failure (&sect;16).
+     *
+     * <p>Every refusal from the server is a {@code 401} (&sect;6.1 rule 8): an
+     * unknown, untrusted, expired, revoked or unbound certificate, and a
+     * {@code Server}-type certificate, all answer this way — the message
+     * differs by case and this SDK surfaces it verbatim.
+     *
+     * <p><strong>The returned token is certificate-bound</strong> (&sect;10.1
+     * rule 9): a resource server accepting it must verify the sender
+     * constraint against the SAME connection's certificate, e.g. via
+     * {@code JwksVerifier#verifySenderConstrained} — accepting it through a
+     * plain {@code verifyAccessToken} call is refused by design (the contract
+     * 1.51 fix this SDK ships).
+     *
+     * @return the device token, already adopted as this client's credential
+     * @throws AuthError if this client was built with no client certificate
+     *                    (zero wire calls), or if the server refused the
+     *                    certificate presented (rule 8)
+     */
+    public DeviceToken authenticateDevice() {
+        ensureOpen();
+        if (!presentsClientCertificate) {
+            throw new AuthError(
+                    "authenticateDevice() requires a client certificate — configure one via "
+                            + "AxiamClient.builder(...).clientCertificate(certPem, keyPem) before "
+                            + "calling it (CONTRACT.md §6.1 rule 7); refusing client-side rather "
+                            + "than making a request the server would only 401 for the same reason");
+        }
+        // §6.1 rules 6/9: this call changes the subject (from whatever this
+        // session held, if anything, to the device) exactly as login() does.
+        onCredentialChange();
+
+        Request request = new Request.Builder()
+                .url(baseUrl + io.axiam.sdk.internal.SessionState.DEVICE_AUTH_PATH)
+                .post(RequestBody.create(new byte[0], JSON))
+                .build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                // Rule 8: every refusal is a 401, mapped to AuthError like any
+                // other; §16's 429 is not an authentication failure and
+                // ErrorMapper already keeps the two apart.
+                throw ErrorMapper.fromHttpStatus(
+                        response.code(), "authenticateDevice failed", response);
+            }
+            JsonNode wire = readJson(response);
+            String accessToken = wire.path("access_token").asText();
+            session.adoptAccessToken(accessToken);
+            return new DeviceToken(
+                    Sensitive.of(accessToken),
+                    wire.path("token_type").asText("Bearer"),
+                    wire.path("expires_in").asLong(900));
+        } catch (IOException e) {
+            throw new NetworkError("authenticateDevice request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #authenticateDevice()}.
+     *
+     * @return a future resolving to the device token
+     */
+    public CompletableFuture<DeviceToken> authenticateDeviceAsync() {
+        return CompletableFuture.supplyAsync(this::authenticateDevice);
     }
 
     @Override
