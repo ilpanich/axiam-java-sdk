@@ -179,6 +179,38 @@ class ManifestAdditionsTest extends ManagementTestBase {
                 "an inheriting binding's inherit key must be entirely absent (never sent as true)");
     }
 
+    /**
+     * CONTRACT 1.52 N6.2 (C-12): "A stated {@code inherit: true} is accepted
+     * and planned like an omitted one; it is never sent." This used to be
+     * refused client-side, before any request — the very manifest below used
+     * to fail at {@code build()}.
+     */
+    @Test
+    void aStatedInheritTrueIsAcceptedAndReachesTheWireAsNoInheritKey() throws Exception {
+        mountEmptyTenant();
+        mount("GET", "/api/v1/resources", 200, pageOf(resourceBody(RESOURCE_ID, "documents", metadata("{}"))));
+        mount("GET", "/api/v1/resources/" + RESOURCE_ID + "/scopes", 200, pageOf(null));
+        mount("GET", "/api/v1/roles", 200, pageOf(roleBody(ROLE_ID, "Editor", "Edits")));
+        for (String sub : List.of("permissions", "users", "groups")) {
+            mount("GET", "/api/v1/roles/" + ROLE_ID + "/" + sub, 200, "[]");
+        }
+        mount("GET", "/api/v1/users", 200, pageOf(userBody(0)));
+        Route assign = mount("POST", "/api/v1/roles/" + ROLE_ID + "/users", 204, "");
+
+        ManagementManifest manifest = ManagementManifest.builder()
+                .resource("docs", "documents", "collection")
+                .role("editor", "Editor", "Edits")
+                .user("alice", "user0", "user0@example.test", null)
+                .assignRole("alice", ManagementManifest.RoleBinding.scoped("editor", "docs", true))
+                .build();
+
+        client.management().manifest().apply(manifest);
+
+        assertFalse(assign.last().keys().contains("inherit"),
+                "a stated inherit:true is planned like an omitted one and MUST NEVER be sent "
+                        + "as a literal true (N6.2)");
+    }
+
     /** §27.6.1: a subject holds a role at most once — plain-and-scoped included. */
     @Test
     void bindingOneRoleTwiceToOneSubjectIsRejectedWithZeroWireCalls() throws Exception {

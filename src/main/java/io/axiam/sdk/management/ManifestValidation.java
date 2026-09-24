@@ -133,14 +133,12 @@ final class ManifestValidation {
                         + "' states inherit with no resource — inherit has nothing to stop at "
                         + "without a resource-scoped binding");
             }
-            if (Boolean.TRUE.equals(binding.inherit())) {
-                // §27.6.1 item 2: "An SDK MUST NOT send inherit: true explicitly." Send
-                // no inherit at all (RoleBinding.scoped(role, resource)) for the
-                // inheriting case; the server's own default is already true.
-                problems.add(subject + "'s binding of role '" + binding.role()
-                        + "' states inherit: true explicitly — omit inherit instead "
-                        + "(RoleBinding.scoped(role, resource) with no third argument)");
-            }
+            // CONTRACT 1.52 N6.2 (C-12): a stated `inherit: true` is ACCEPTED and
+            // planned like an omitted one — it is the wire-sending side
+            // (ManifestApi's BindingChange construction) that must never let it
+            // reach the wire as a literal `true`, not this client-side refusal.
+            // This validation used to reject a stated true outright, which
+            // refused a value the contract requires this SDK to accept.
             // §27.6.1 item 2, last bullet, C-12 item 6: a role the manifest itself
             // declares is_global bound with inherit: false is refused by the server
             // with 400 — a global role applies everywhere by definition, so there is
