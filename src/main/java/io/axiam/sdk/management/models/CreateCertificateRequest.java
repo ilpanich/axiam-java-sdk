@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -19,6 +20,11 @@ import java.util.UUID;
  * @param keyAlgorithm the server's key_algorithm field
  * @param metadata the server's metadata field
  * @param subject the server's subject field
+ * @param subjectAltNames The names a {@code Server} certificate is issued for, as {@code [{"dns":
+ *     "api.lakeside.internal"}, {"ip": "10.0.0.5"}]}. Required for {@code cert_type: Server} and
+ *     refused for every other type. Each name, and the common name, must be admitted by the tenant's
+ *     effective {@code server_cert_allowed_names}, which is empty — refusing every {@code Server}
+ *     request — until an organization administrator lists names.
  * @param validityDays Validity duration in days.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -29,6 +35,7 @@ public record CreateCertificateRequest(
         @JsonProperty("key_algorithm") KeyAlgorithm keyAlgorithm,
         @JsonProperty("metadata") @Nullable JsonNode metadata,
         @JsonProperty("subject") String subject,
+        @JsonProperty("subject_alt_names") @Nullable List<SubjectAltName> subjectAltNames,
         @JsonProperty("validity_days") Integer validityDays
 ) {
 }

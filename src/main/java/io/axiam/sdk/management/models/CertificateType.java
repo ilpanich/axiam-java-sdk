@@ -20,6 +20,8 @@ public enum CertificateType {
     SERVICE("Service"),
     /** The server's 'Device' value. */
     DEVICE("Device"),
+    /** The server's 'Server' value. */
+    SERVER("Server"),
     /**
      * A value this SDK's copy of the spec does not list.
      *

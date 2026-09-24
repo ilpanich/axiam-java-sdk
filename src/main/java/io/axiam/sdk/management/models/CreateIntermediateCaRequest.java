@@ -14,7 +14,9 @@ import java.util.UUID;
  *
  * @param keyAlgorithm the server's key_algorithm field
  * @param parentCaId The organization CA that signs it.
- * @param subject Subject for the signing CA, e.g. {@code CN=ACME R&amp;D Signing CA}.
+ * @param subject The signing CA's common name, e.g. {@code ACME R&amp;D Signing CA}. A **common
+ *     name**, not a distinguished name. A single {@code CN=} prefix is accepted and stripped; anything
+ *     else containing {@code =} is refused with {@code 400}.
  * @param validityDays Validity duration in days, capped to the parent's own expiry.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)

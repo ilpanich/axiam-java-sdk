@@ -6,17 +6,29 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
+
+import java.util.List;
 
 /**
  * Certificate issuance constraints.
  *
  * @param defaultCertValidityDays the server's default_cert_validity_days field
  * @param maxCertValidityDays the server's max_cert_validity_days field
+ * @param serverCertAllowedNames The names a {@code Server} certificate may be issued for (S-7,
+ *     DF-001): DNS suffixes ({@code .lakeside.internal}, strictly below), exact hosts ({@code
+ *     lakeside.internal}) and IP prefixes ({@code 10.0.0.0/8}, {@code fd00::/8}). See [{@code
+ *     crate::models::server_names}] for the matching rules. **Empty by default, and empty refuses
+ *     every {@code Server} request** (I1). A certificate for a name, signed under the organization
+ *     root, is trusted by every relying party that trusts that root, so the list is written where the
+ *     root is owned. A tenant override may only remove an entry or narrow one; when the baseline later
+ *     shrinks, the tenant's effective list is the intersection of the two.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CertificatePolicy(
         @JsonProperty("default_cert_validity_days") Integer defaultCertValidityDays,
-        @JsonProperty("max_cert_validity_days") Integer maxCertValidityDays
+        @JsonProperty("max_cert_validity_days") Integer maxCertValidityDays,
+        @JsonProperty("server_cert_allowed_names") @Nullable List<String> serverCertAllowedNames
 ) {
 }

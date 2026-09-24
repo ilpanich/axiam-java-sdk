@@ -348,6 +348,157 @@ def discriminated(schema: Any) -> tuple[str, list[tuple[str, Any]]] | None:
     return (tag or "", arms)
 
 
+def externally_tagged(schema: Any) -> list[tuple[str, Any]] | None:
+    """Detect an externally-tagged oneOf: ``{"dns": "..."} | {"ip": "..."}``.
+
+    Each arm is an object with exactly one REQUIRED property, and that
+    property's own name is the tag -- there is no sibling discriminator field
+    for :func:`discriminated` to find, which is exactly why it returns
+    ``None`` for this shape and this function exists. Returns
+    ``[(tag, propertySchema), ...]``, one per arm, or ``None`` if the schema
+    is not this shape (including a plain ``discriminated`` union, which is
+    tried first by the caller).
+    """
+    variants = schema.get("oneOf")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return None
+    arms: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for variant in variants:
+        resolved = resolve_ref(variant) if "$ref" in variant else variant
+        if resolved.get("type") not in (None, "object"):
+            return None
+        props = resolved.get("properties") or {}
+        required = set(resolved.get("required") or [])
+        if len(props) != 1 or required != set(props):
+            # Not "exactly one property, and it is required" -- either an
+            # internally-tagged shape discriminated() already owns, or
+            # something this generator does not yet model.
+            return None
+        (tag, prop_schema), = props.items()
+        if tag in seen:
+            return None
+        seen.add(tag)
+        arms.append((tag, prop_schema))
+    return arms
+
+
+def emit_externally_tagged_union(name: str, schema: Any, arms: list[tuple[str, Any]]) -> dict[str, str]:
+    """A sealed interface plus one single-field record per arm, wire-tagged by
+    which key is present -- CONTRACT.md §27.13 S-7 rule 1's ``SubjectAltName``
+    shape (``{"dns": "..."}`` / ``{"ip": "..."}``), never ``{}``.
+
+    Jackson's built-in polymorphism (``@JsonTypeInfo``/``@JsonSubTypes``,
+    which :func:`emit_union` uses) assumes a sibling or wrapping discriminator
+    field; this shape has none; the tag key itself is one of the value's own
+    field names. A hand-written serializer/deserializer pair is therefore
+    generated rather than annotations, and it is exactly as mechanical as the
+    annotations it replaces: try each arm's tag key in a fixed order, first
+    match wins on read, and the arm's own class decides what to write.
+    """
+    type_name = pascal(name)
+    arm_names = [f"{type_name}{pascal(tag)}" for tag, _ in arms]
+    files: dict[str, str] = {}
+
+    lines = [BANNER.rstrip("\n"), f"package {MODELS_PACKAGE};", "",
+             "import com.fasterxml.jackson.databind.annotation.JsonDeserialize;",
+             "import com.fasterxml.jackson.databind.annotation.JsonSerialize;", ""]
+    lines.extend(javadoc(
+        (schema.get("description") or f"A {type_name} value.")
+        + "\n\nExternally tagged: the wire shape names exactly one of the permitted "
+          "keys below, with that key's value directly beneath it -- never an empty "
+          "object, and never a wrapper field naming which arm this is. A closed set of "
+          "shapes, sealed so a switch over the permitted records is exhaustive and the "
+          "compiler says so."))
+    lines.append(f"@JsonSerialize(using = {type_name}.Serializer.class)")
+    lines.append(f"@JsonDeserialize(using = {type_name}.Deserializer.class)")
+    lines.append(f"public sealed interface {type_name} permits " + ", ".join(arm_names) + " {")
+    lines.append("")
+
+    # The serializer: one instanceof arm per case, writing {"<tag>": <value>}.
+    lines.append("    /** Writes the one field the matched arm names -- never {@code {}}. */")
+    lines.append(f"    final class Serializer extends com.fasterxml.jackson.databind.JsonSerializer<{type_name}> {{")
+    lines.append("        /** Constructs the serializer Jackson instantiates from the class-level annotation. */")
+    lines.append("        public Serializer() {")
+    lines.append("        }")
+    lines.append("")
+    lines.append("        @Override")
+    lines.append(f"        public void serialize({type_name} value, "
+                  "com.fasterxml.jackson.core.JsonGenerator gen, "
+                  "com.fasterxml.jackson.databind.SerializerProvider serializers)")
+    lines.append("                throws java.io.IOException {")
+    lines.append("            gen.writeStartObject();")
+    for (tag, _), arm in zip(arms, arm_names):
+        lines.append(f"            if (value instanceof {arm} v) {{")
+        lines.append(f'                gen.writeObjectField("{tag}", v.{member(tag)}());')
+        lines.append("            }")
+    lines.append("            gen.writeEndObject();")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("")
+
+    # The deserializer: first tag key present in the object wins.
+    lines.append("    /** Reads whichever one of the permitted keys is present; refuses neither/none. */")
+    lines.append(f"    final class Deserializer extends com.fasterxml.jackson.databind.JsonDeserializer<{type_name}> {{")
+    lines.append("        /** Constructs the deserializer Jackson instantiates from the class-level annotation. */")
+    lines.append("        public Deserializer() {")
+    lines.append("        }")
+    lines.append("")
+    lines.append("        @Override")
+    lines.append(f"        public {type_name} deserialize(com.fasterxml.jackson.core.JsonParser p, "
+                  "com.fasterxml.jackson.databind.DeserializationContext ctxt)")
+    lines.append("                throws java.io.IOException {")
+    lines.append("            com.fasterxml.jackson.databind.JsonNode node = p.getCodec().readTree(p);")
+    for (tag, prop_schema), arm in zip(arms, arm_names):
+        conv = _json_node_reader(prop_schema, "node.get(\"" + tag + "\")")
+        lines.append(f'            if (node.has("{tag}")) {{')
+        lines.append(f"                return new {arm}({conv});")
+        lines.append("            }")
+    names = ", ".join(tag for tag, _ in arms)
+    lines.append(f'            throw new java.io.IOException(')
+    lines.append(f'                    "{type_name} names none of the permitted keys: {names}");')
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("}")
+    files[f"{MODELS_DIR}/{type_name}.java"] = "\n".join(lines) + "\n"
+
+    for (tag, prop_schema), arm in zip(arms, arm_names):
+        jtype = java_type(prop_schema)
+        arm_lines: list[str] = []
+        arm_lines.extend(javadoc(
+            f"The {tag!r} arm of {type_name}.", "",
+            [f"@param {member(tag)} {escape(prop_schema.get('description') or 'the ' + tag + ' value')}"]))
+        arm_lines.append("@com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)")
+        arm_lines.append(f"public record {arm}({jtype} {member(tag)}) implements {type_name} {{")
+        arm_lines.append("}")
+        arm_body = "\n".join(arm_lines)
+        arm_header = [BANNER.rstrip("\n"), f"package {MODELS_PACKAGE};", ""]
+        arm_imports = model_imports(arm_body)
+        if arm_imports:
+            arm_header.extend(f"import {fqn};" for fqn in arm_imports)
+            arm_header.append("")
+        files[f"{MODELS_DIR}/{arm}.java"] = "\n".join(arm_header + [arm_body]) + "\n"
+    return files
+
+
+def _json_node_reader(schema: Any, expr: str) -> str:
+    """A Java expression reading a scalar leaf value out of a JsonNode ``expr``.
+
+    Every arm this generator has seen to date (§27.13 S-7's SubjectAltName) is
+    a bare string, so this covers string/number/boolean and falls back to
+    ``.asText()`` for anything else this contract has not needed yet -- a
+    schema this narrow does not earn a general-purpose JsonNode-to-Java walker.
+    """
+    kind = (schema or {}).get("type")
+    if kind == "integer":
+        return f"{expr}.asLong()" if schema.get("format") == "int64" else f"{expr}.asInt()"
+    if kind == "number":
+        return f"{expr}.asDouble()"
+    if kind == "boolean":
+        return f"{expr}.asBoolean()"
+    return f"{expr}.asText()"
+
+
 def sensitive_map() -> dict[str, set[str]]:
     """Which fields of which schemas carry a secret, per the registry."""
     out: dict[str, set[str]] = {}
@@ -605,7 +756,15 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
             "wire": wire,
             "name": member(wire),
             "type": "Sensitive" if wire in secrets else java_type(props[wire]),
-            "required": wire in required,
+            # DEFAULT_TRUE_WHEN_ABSENT overrides the schema's own "required":
+            # a server older than contract 1.51 omits `inherit` entirely, and
+            # §27.13 S-10 rule 3 defines that absence as `true`, not a decode
+            # failure. A required Java field would still deserialize (Jackson
+            # does not enforce presence by default), but as `null` — a value
+            # nothing downstream is told means `true`. Treating it as
+            # optional here, with the inherits() helper emit_record adds
+            # below, is what actually applies the rule.
+            "required": wire in required and wire not in DEFAULT_TRUE_WHEN_ABSENT,
             "doc": props[wire].get("description") or f"the server's {wire} field",
             "secret": wire in secrets,
         })
@@ -621,6 +780,17 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
 # inexpressible. Only CONTRACT.md §5.2.3's `tenant_scope` has a server that
 # reads `[]` as a contradiction and answers 400.
 OMIT_WHEN_EMPTY = {"tenantScope"}
+
+# CONTRACT.md §27.13 S-10 rule 3 (contract 1.51): `inherit` on the three
+# role-side assignment listings (RoleUserAssignment, RoleGroupAssignment,
+# RoleServiceAccountAssignment) is REQUIRED in the 1.51 schema, but a server
+# older than 1.51 omits it, and absence means `true` — the same meaning every
+# assignment has always had. field_list() above treats a name in this set as
+# optional regardless of the schema's own "required" list; emit_record()
+# below adds an inherits() accessor that reads the optional field the same
+# way. A wire name here, not a schema name: the field means the same thing
+# wherever it appears.
+DEFAULT_TRUE_WHEN_ABSENT = {"inherit"}
 
 
 def emit_omit_when_empty(type_name: str, fields: list[dict]) -> list[str]:
@@ -647,6 +817,31 @@ def emit_omit_when_empty(type_name: str, fields: list[dict]) -> list[str]:
         out.append(f"            {f['name']} = null;")
         out.append("        }")
     out.append("    }")
+    return out
+
+
+def emit_default_true_helpers(fields: list[dict]) -> list[str]:
+    """An ``inherits()`` accessor for each DEFAULT_TRUE_WHEN_ABSENT field.
+
+    CONTRACT.md §27.13 S-10 rule 3: absence means {@code true}. field_list()
+    already made the underlying component optional (a boxed {@code Boolean},
+    never a primitive {@code boolean} that would silently read absence as
+    {@code false}); this is the read side of that decision, so nothing
+    downstream has to repeat the {@code x == null || x} each time it asks.
+    """
+    targets = [f for f in fields if f["wire"] in DEFAULT_TRUE_WHEN_ABSENT]
+    out: list[str] = []
+    for f in targets:
+        out.append("")
+        out.extend(javadoc(
+            f"Whether this binding inherits to descendants, defaulting to `true` "
+            f"when the server omitted `{f['wire']}` (CONTRACT.md §27.13 S-10 rule "
+            f"3 — a server older than contract 1.51 never sends it, and absence means what "
+            f"every assignment has always meant).",
+            "    ", [f"@return {{@code {f['name']}}}, or {{@code true}} when it was absent"]))
+        out.append("    public boolean inherits() {")
+        out.append(f"        return {f['name']} == null || {f['name']};")
+        out.append("    }")
     return out
 
 
@@ -691,6 +886,7 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
         body.extend(component_lines(fields))
         body.append(") {")
         body.extend(emit_omit_when_empty(type_name, fields))
+        body.extend(emit_default_true_helpers(fields))
         if all_optional:
             body.extend(emit_builder(type_name, fields))
         body.append("}")
@@ -849,6 +1045,10 @@ def emit_models() -> dict[str, str]:
         union = discriminated(schema)
         if union:
             files.update(emit_union(name, schema, union[0], union[1]))
+            continue
+        tagged = externally_tagged(schema)
+        if tagged:
+            files.update(emit_externally_tagged_union(name, schema, tagged))
             continue
         files[f"{MODELS_DIR}/{pascal(name)}.java"] = emit_record(
             name, secrets.get(name, set()), name in replacements)

@@ -53,6 +53,8 @@ import java.util.List;
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
  * @param sensitiveScopesEnabled the server's sensitive_scopes_enabled field
+ * @param serverCertAllowedNames S-7 — defaulted to empty, so an API client written before the
+ *     field lands on "no {@code Server} certificate is issued" (I1).
  * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -91,6 +93,7 @@ public record SetOrgSettings(
         @JsonProperty("require_symbols") Boolean requireSymbols,
         @JsonProperty("require_uppercase") Boolean requireUppercase,
         @JsonProperty("sensitive_scopes_enabled") @Nullable Boolean sensitiveScopesEnabled,
+        @JsonProperty("server_cert_allowed_names") @Nullable List<String> serverCertAllowedNames,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 }
