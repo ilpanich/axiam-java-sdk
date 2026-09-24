@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Re-vendored CONTRACT.md, openapi.json and management-registry.json from axiam
+  `56fbe44`** (contract 1.51). `CONTRACT.md` byte-matches that commit (sha256
+  `0ac7fd75f83c…`); `proto/` was already identical. The §27 surface is regenerated
+  at 162 operations across 24 namespaces.
+- **The acting tenant, `X-Axiam-Tenant` (CONTRACT.md §5.2 rule 1).**
+  `AxiamClient.Builder.withActingTenant(UUID)` at construction;
+  `AxiamClient.actingTenant(UUID)` / `clearActingTenant()` on a built client, each
+  returning a NEW handle over the same session rather than mutating the caller's —
+  two handles acting on two tenants cannot race to overwrite each other's header.
+  Carries through `management()` and `checkAccess`/`batchCheck`. Gated client-side,
+  with zero wire calls, on `organizationLevel`/`reachableTenantIds` when this
+  session holds a login result; sent as asked, letting the server's `403` answer,
+  when it does not. REST-only — no gRPC metadata twin. The §17 decision memo's key
+  now includes the acting tenant, so a memoized answer for one tenant can no longer
+  be returned for another within the TTL.
+- **`AxiamClient.authenticateDevice()` / `authenticateDeviceAsync()`** — the §6.1
+  mTLS device login (CONTRACT.md §6.1 rules 6–10), distinct from the existing RFC
+  8628 `deviceLogin`. Reachable only on a client built with `clientCertificate(...)`
+  (zero wire calls otherwise). Adopts the returned token as this client's
+  credential; because the server sets no cookie on this route, every subsequent
+  request also carries an explicit empty `Cookie` header so a stale `axiam_access`
+  cookie from an earlier session cannot silently outrank the device token. Never
+  enters the §9 refresh guard for this credential's own 401s — there is no refresh
+  token for it.
+- **`GrpcAuthzClient.validateToken`/`introspectToken` (+ `Async` twins)**
+  (CONTRACT.md §1.1.1, §10.3) — the gRPC-only `TokenService` wrappers, sharing this
+  client's existing channel and interceptor. The caller's own token authenticates
+  the call; the inspected token travels only in the request message and is never
+  defaulted from the caller's. `cnf` is modelled as optional and a present-but-empty
+  confirmation stays distinct from an absent one.
+- **Manifest: `resources[].metadata`** (CONTRACT.md §27.6.1 item 1) —
+  `ManagementManifest.Builder.metadata(resourceKey, JsonNode)`. Sent on `Create`
+  and, when stated, on `Update`; drift is JSON value equality of the whole object,
+  never a key-by-key merge.
+- **Manifest: the two-shape role binding** (CONTRACT.md §27.6.1 item 2) —
+  `ManagementManifest.RoleBinding.role(key)` (plain, tenant-wide) and
+  `.scoped(role, resource[, inherit])` (resource-scoped), on groups, users and
+  service accounts. `inherit` reaches the wire only as `false`. A subject bound to
+  one role twice — plain and scoped included — is refused before any request, as is
+  a manifest-declared global role bound with `inherit: false`. A drifted binding is
+  reconciled as unassign-then-assign, carrying the server's `tenant_scope` across;
+  a failed assign re-assigns the previous binding, and `ApplyReport.StepOutcome`
+  gains a `restored` field reporting whether that held.
+- **Manifest: `service_accounts`** (CONTRACT.md §27.6.1 item 3) —
+  `ManagementManifest.Builder.serviceAccount(key, name, description)` and
+  `.assignServiceAccountRole(key, binding)`. Reconciled by name, which the server
+  does not uniquely enforce: a stated name matching more than one existing account
+  fails `plan` before any write. `description` is the only field `Update`
+  reconciles. A `Create`'s one-time `client_secret` is on
+  `ApplyReport.createdServiceAccounts()`, survives a later action of the same
+  `apply` failing, and `apply` never calls `rotate_secret` to reconcile anything.
+- `ApplyReport.StepOutcome` gains `createdServiceAccount` and `restored` components
+  (a new canonical constructor; the pre-1.51 two-argument constructor still
+  compiles unchanged) and `ApplyReport.createdServiceAccounts()`.
+- `scripts/gen_management.py`: an externally-tagged-`oneOf` emitter (a sealed
+  interface plus a hand-written `JsonSerializer`/`JsonDeserializer` pair) and a
+  `DEFAULT_TRUE_WHEN_ABSENT` name list with an `inherits()` accessor, fixing the two
+  generator defects the contract 1.51 re-vendor exposed (see Fixed).
+
+### Changed
+
+- `AxiamClient` gained an internal rebind constructor and an `isPrimaryHandle` flag:
+  `close()` on a handle returned by `actingTenant`/`clearActingTenant` now flips
+  only that handle's own closed flag and leaves the shared `OkHttpClient`
+  (connection pool, dispatcher) running for every other handle over the same
+  session — previously undefined/unsafe, since every handle shared one transport.
+
+### Fixed
+
+- **`scripts/gen_management.py`: `SubjectAltName` is an externally tagged `oneOf`**
+  (`{"dns": …}` / `{"ip": …}`). The generator recognised neither that shape nor any
+  `oneOf` without a common discriminator field, and emitted an empty record that
+  serialized as `{}` — which the server refuses. It is now a sealed interface
+  (`SubjectAltName` / `SubjectAltNameDns` / `SubjectAltNameIp`) with a hand-written
+  serializer/deserializer pair.
+- **`scripts/gen_management.py`: a required `inherit` on the three role-side
+  listings** (`RoleUserAssignment`/`RoleGroupAssignment`/`RoleServiceAccountAssignment`)
+  is now decoded as optional and defaults to `true` when the server omits it (a
+  server older than contract 1.51 always does), via an `inherits()` accessor —
+  CONTRACT.md §27.13 S-10 rule 3. Previously the field was still decodable (Jackson
+  does not enforce "required" by default, unlike languages whose codegen would fail
+  the whole response), but nothing gave a caller the correct default, and a boxed
+  `Boolean` read as absent was one accessor call away from being misread as `false`.
+- `CertificateType` already decoded an unrecognised value (including the new
+  `"Server"`) openly rather than failing the response — CONTRACT.md §27.13 S-7 rule
+  2 needed a test, not a code change; see `Contract151ModelsTest`.
+
+### Breaking
+
+- **`JwksVerifier.verifyAccessToken` now enforces CONTRACT.md §10.1 rule 9 — a real
+  defect, fixed.** This is the entry point `AxiamAuthenticationFilter` (the SDK's
+  default servlet-container guard, reachable via `AxiamAutoConfiguration`) calls for
+  every request, and it used to return a token's claims without ever checking
+  `cnf`. A certificate-bound token — exactly what the new `authenticateDevice()`
+  mints by default — was therefore accepted as an ordinary bearer token by every
+  route this SDK guards; a device token lifted off a device, or replayed on any
+  other connection, opened anything `AxiamAuthenticationFilter` protected.
+  `verifyAccessToken` now refuses any token carrying `cnf` unconditionally, since it
+  has no transport evidence to offer. A resource server that intends to accept
+  device tokens must call `verifySenderConstrained(token, tenantId,
+  presentedThumbprint)` instead, with the thumbprint read from the connection
+  (`AxiamAuthenticationFilter` now does exactly this, from the standard
+  `jakarta.servlet.request.X509Certificate` request attribute a servlet container
+  populates for a TLS client-auth handshake — never a header) — a resource server
+  that upgrades and does not configure client-certificate authentication on its
+  connector will see `401` for a device token it previously accepted.
+- **A resource-scoped role binding drift now reconciles as `Update`.** Before 1.51
+  the manifest compared only presence of a binding; a plain manifest binding over a
+  server assignment that was actually scoped to a resource read as `NoChange`. It is
+  now correctly an `Update` (rebind), matching CONTRACT.md §27.6.1's definition of
+  the plain shape as "no resource".
+
+### Declines
+
+- The acting tenant on `refresh()`'s own POST and on the self-service-account/
+  WebAuthn POSTs beyond `logout()` — see the README's Contract 1.51 table for the
+  reason.
+- `webhooks` in the manifest (§27.6) — matches the Rust reference's own decline; no
+  consumer has asked for it and the contract names it without specifying a shape.
+
 ## [1.0.0-beta16] - 2026-09-19
 
 ### Added
