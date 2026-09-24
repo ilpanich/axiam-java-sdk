@@ -638,21 +638,28 @@ class JwksVerifierLocalVerificationSetTest {
     }
 
     /**
-     * {@code verifyAccessToken} deliberately does not apply rule 9 — it has no transport to
-     * ask for a peer certificate. Asserted so the split cannot be collapsed by accident.
+     * The contract 1.51 fix (SEC-071/SEC-080-class defect, closed here): {@code
+     * verifyAccessToken} used to accept a bound token unchecked, on the grounds that "it
+     * has no transport to ask for a peer certificate". That reasoning is exactly backwards
+     * — no evidence means the "none presented" row of the rule 9 table, which is a REJECT
+     * for a bound token, not a pass. This is the inverted form of that defect's pinning
+     * test: it used to assert {@code verifyAccessToken} let a certificate-bound token
+     * through with its binding unchecked; it now asserts the opposite, and a caller that
+     * reverts the fix turns this red.
      */
     @Test
-    void rule9VerifyAccessTokenDoesNotApplyIt() throws Exception {
+    void rule9VerifyAccessTokenRefusesABoundTokenItHasNoEvidenceFor() throws Exception {
         OctetKeyPair keyPair = generateEd25519KeyPair();
         try (MockWebServer server = startJwksServer(keyPair)) {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
-            String token = signEdDsa(keyPair, boundClaims(THUMBPRINT));
+            String bound = signEdDsa(keyPair, boundClaims(THUMBPRINT));
+            String unbound = signEdDsa(keyPair, validClaims().build());
 
-            JWTClaimsSet claims = verifier.verifyAccessToken(token, TENANT);
+            AuthError e = assertThrows(AuthError.class, () -> verifier.verifyAccessToken(bound, TENANT));
+            assertTrue(e.getMessage().contains("cannot be accepted by this entry point"), e.getMessage());
 
-            assertDoesNotThrow(() -> JwksVerifier.verifyCertificateBinding(claims, THUMBPRINT));
-            assertThrows(
-                    AuthError.class, () -> JwksVerifier.verifyCertificateBinding(claims, null));
+            // The I4 twin: an ordinary, unbound token is completely unaffected by the fix.
+            assertDoesNotThrow(() -> verifier.verifyAccessToken(unbound, TENANT));
         }
     }
 

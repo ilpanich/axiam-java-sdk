@@ -14,6 +14,8 @@ import java.util.UUID;
 /**
  * A user together with the resource scope of their assignment of this role.
  *
+ * @param inherit Whether the assignment also reaches the descendants of {@code resource_id}
+ *     ({@code true}, the default) or applies at that resource only ({@code false}).
  * @param resourceId {@code None} means the role was assigned globally (no resource scope).
  * @param tenantScope The tenants this assignment reaches, or omitted for "wherever the role does".
  *     Shown next to the assignment so an operator can tell a deliberately narrowed grant from an
@@ -23,6 +25,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RoleUserAssignment(
+        @JsonProperty("inherit") @Nullable Boolean inherit,
         @JsonProperty("resource_id") @Nullable UUID resourceId,
         @JsonProperty("tenant_scope") @Nullable List<UUID> tenantScope,
         @JsonProperty("user") UserResponse user
@@ -40,5 +43,16 @@ public record RoleUserAssignment(
         if (tenantScope != null && tenantScope.isEmpty()) {
             tenantScope = null;
         }
+    }
+
+    /**
+     * Whether this binding inherits to descendants, defaulting to {@code true} when the server
+     * omitted {@code inherit} (CONTRACT.md §27.13 S-10 rule 3 — a server older than contract 1.51
+     * never sends it, and absence means what every assignment has always meant).
+     *
+     * @return {@code inherit}, or {@code true} when it was absent
+     */
+    public boolean inherits() {
+        return inherit == null || inherit;
     }
 }

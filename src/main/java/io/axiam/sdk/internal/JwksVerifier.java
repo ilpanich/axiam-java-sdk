@@ -376,6 +376,42 @@ public final class JwksVerifier {
      *                    callers map to HTTP 401 (CONTRACT.md &sect;2/&sect;10)
      */
     public JWTClaimsSet verifyAccessToken(String token, @Nullable String expectedTenantId) {
+        JWTClaimsSet claims = verifyRules1Through8AndRevocation(token, expectedTenantId);
+
+        // Rule 9 (contract 1.51 fix — CONTRACT.md §10.1 rule 9): this entry point has
+        // no transport to ask for a peer certificate or a verified DPoP proof, so it
+        // has no evidence for ANY sender constraint. A token carrying cnf is refused
+        // here unconditionally — the rule 9 table's "a different certificate, or
+        // none" row, applied with "none" always true at this call. Before this fix,
+        // this method ignored cnf entirely, and it is what AxiamAuthenticationFilter,
+        // the §11 macros and the §28 MCP guard all reach: a certificate-bound token
+        // — which is what every §6.1 device login mints by default — was therefore
+        // accepted as an ordinary bearer token by every route guard this SDK ships.
+        // A token lifted off a device, or replayed off the wire without the device's
+        // key, opened any AxiamUser-guarded route. Callers with evidence to offer use
+        // {@link #verifySenderConstrained} or {@link #verifyTokenBinding} instead,
+        // which apply the full table rather than always answering "none".
+        if (claims.getClaim("cnf") != null) {
+            throw new AuthError(
+                    "token carries a cnf confirmation and cannot be accepted by this entry "
+                            + "point, which has no transport evidence for any sender constraint "
+                            + "(CONTRACT.md §10.1 rule 9) — use verifySenderConstrained or "
+                            + "verifyTokenBinding with evidence from the connection");
+        }
+        return claims;
+    }
+
+    /**
+     * CONTRACT.md &sect;10.1 rules 1-8, plus the &sect;10.4 revocation check — every
+     * rule except rule 9 (the sender constraint), which needs transport evidence this
+     * shared helper does not take. {@link #verifyAccessToken} applies rule 9 with no
+     * evidence (refusing any bound token); {@link #verifySenderConstrained} applies it
+     * against a presented certificate thumbprint. Neither calls the other's public
+     * method, so rule 9 is applied exactly once per entry point, never twice and never
+     * skipped.
+     */
+    private JWTClaimsSet verifyRules1Through8AndRevocation(
+            String token, @Nullable String expectedTenantId) {
         if (expectedTenantId == null || expectedTenantId.isBlank()) {
             // Rule 4, fail-closed half: no configured tenant means there is
             // nothing to assert the token against, which is a rejection, not
@@ -542,7 +578,11 @@ public final class JwksVerifier {
      */
     public JWTClaimsSet verifySenderConstrained(
             String token, @Nullable String expectedTenantId, @Nullable String presentedThumbprint) {
-        JWTClaimsSet claims = verifyAccessToken(token, expectedTenantId);
+        // Rules 1-8 only — NOT the public verifyAccessToken, which (as of the
+        // contract 1.51 fix) refuses every bound token unconditionally because IT
+        // has no evidence to offer. This entry point has evidence: presentedThumbprint,
+        // applied immediately below via verifyCertificateBinding, is rule 9's evidence.
+        JWTClaimsSet claims = verifyRules1Through8AndRevocation(token, expectedTenantId);
         verifyCertificateBinding(claims, presentedThumbprint);
         return claims;
     }

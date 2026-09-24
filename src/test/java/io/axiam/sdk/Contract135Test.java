@@ -294,10 +294,11 @@ class Contract135Test {
         // `[]` is refused with 400, and `List.of()` is the natural thing to
         // pass for "no tenants named", so both spellings of absent must travel
         // the same way: by not appearing.
-        assertNull(new AssignRoleToUserRequest(null, List.of(), UUID.randomUUID()).tenantScope());
-        assertNull(new AssignRoleToGroupRequest(UUID.randomUUID(), null, List.of()).tenantScope());
+        assertNull(new AssignRoleToUserRequest(null, null, List.of(), UUID.randomUUID()).tenantScope());
+        assertNull(new AssignRoleToGroupRequest(
+                UUID.randomUUID(), null, null, List.of()).tenantScope());
         assertNull(new AssignRoleToServiceAccountRequest(
-                null, UUID.randomUUID(), List.of()).tenantScope());
+                null, null, UUID.randomUUID(), List.of()).tenantScope());
     }
 
     @Test
@@ -306,7 +307,7 @@ class Contract135Test {
         // Dropping a scope the caller *did* name would turn a refusal they need
         // to see into a success that silently applied no restriction.
         UUID scoped = UUID.randomUUID();
-        var body = new AssignRoleToUserRequest(null, List.of(scoped), UUID.randomUUID());
+        var body = new AssignRoleToUserRequest(null, null, List.of(scoped), UUID.randomUUID());
 
         assertEquals(List.of(scoped), body.tenantScope());
         assertTrue(MAPPER.writeValueAsString(body).contains(scoped.toString()));

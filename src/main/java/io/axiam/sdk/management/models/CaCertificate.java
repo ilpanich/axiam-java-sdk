@@ -56,7 +56,9 @@ import java.util.UUID;
  * @param publicCertPem PEM-encoded public certificate. The certificate that *signs*, which under
  *     {@code vault_pki} custody is the intermediate rather than the root beneath which it was created.
  * @param status the server's status field
- * @param subject The certificate subject (e.g., {@code CN=ACME Corp Root CA}).
+ * @param subject The CA's common name, e.g. {@code ACME Corp Root CA}. The normalised value: a
+ *     {@code CN=} prefix in the request is understood and stripped, so this always says what the
+ *     certificate's subject DN says (DF-023).
  * @param tenantId The tenant this CA signs for, when it is a tenant signing CA. {@code None} for
  *     an organization-level CA — the trust anchor, and the only kind that existed before tenant
  *     signing CAs. {@code Some} for an intermediate created under one, which exists so a tenant's

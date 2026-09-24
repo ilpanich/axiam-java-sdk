@@ -36,7 +36,9 @@ import io.axiam.sdk.Sensitive;
  *     from toString and from every JSON rendering except the one request body it is sent in
  * @param publicCertPem PEM-encoded public certificate.
  * @param status the server's status field
- * @param subject The certificate subject (e.g., {@code CN=device-001}).
+ * @param subject The certificate's common name, e.g. {@code device-001}. The normalised value: a
+ *     {@code CN=} prefix in the request is understood and stripped, so this always says what the
+ *     certificate's subject DN says (DF-023).
  * @param tenantId The tenant this certificate belongs to.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)

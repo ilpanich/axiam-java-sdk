@@ -100,7 +100,7 @@ class ManagementManifestTest extends ManagementTestBase {
         ManagementManifest manifest = new ManagementManifest(List.of(), List.of(),
                 List.of(new ManagementManifest.RoleSpec("editor", "Editor", "Edits", false,
                         List.of(new ManagementManifest.GrantSpec("nope", null, List.of())))),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
 
         NetworkError thrown = assertThrows(NetworkError.class,
                 () -> client.management().manifest().plan(manifest));
@@ -115,7 +115,7 @@ class ManagementManifestTest extends ManagementTestBase {
         ManagementManifest manifest = new ManagementManifest(
                 List.of(new ManagementManifest.ResourceSpec("a", "a", "c", "b", List.of()),
                         new ManagementManifest.ResourceSpec("b", "b", "c", "a", List.of())),
-                List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of());
         NetworkError thrown = assertThrows(NetworkError.class,
                 () -> client.management().manifest().plan(manifest));
         assertTrue(thrown.getMessage().contains("cycle"));
@@ -128,8 +128,9 @@ class ManagementManifestTest extends ManagementTestBase {
         ManagementManifest manifest = new ManagementManifest(List.of(), List.of(),
                 List.of(new ManagementManifest.RoleSpec("r", "R", "R", false,
                         List.of(new ManagementManifest.GrantSpec("missing", null, List.of("nope"))))),
-                List.of(new ManagementManifest.GroupSpec("g", "G", "G", List.of("absent"))),
-                List.of());
+                List.of(new ManagementManifest.GroupSpec("g", "G", "G",
+                        List.of(ManagementManifest.RoleBinding.role("absent")))),
+                List.of(), List.of());
         NetworkError thrown = assertThrows(NetworkError.class,
                 () -> client.management().manifest().plan(manifest));
         assertTrue(thrown.getMessage().contains("3 problem(s)"),
@@ -142,7 +143,8 @@ class ManagementManifestTest extends ManagementTestBase {
         mountEmptyTenant();
         ManagementManifest manifest = new ManagementManifest(List.of(), List.of(), List.of(),
                 List.of(), List.of(new ManagementManifest.UserSpec(
-                        "bob", "bob", "bob@example.test", null, List.of(), List.of())));
+                        "bob", "bob", "bob@example.test", null, List.of(), List.of())),
+                List.of());
         NetworkError thrown = assertThrows(NetworkError.class,
                 () -> client.management().manifest().plan(manifest));
         assertTrue(thrown.getMessage().contains("no initialPassword"));
@@ -205,7 +207,7 @@ class ManagementManifestTest extends ManagementTestBase {
             List.of(), List.of(),
             List.of(new ManagementManifest.RoleSpec("editor", "Editor", "Edits documents",
                     false, List.of())),
-            List.of(), List.of());
+            List.of(), List.of(), List.of());
 
     /** §27.6 rule 6: a converged tenant plans nothing. */
     @Test
@@ -334,7 +336,8 @@ class ManagementManifestTest extends ManagementTestBase {
         ApplyReport report = client.management().manifest().apply(new ManagementManifest(
                 List.of(), List.of(), List.of(), List.of(),
                 List.of(new ManagementManifest.UserSpec("alice", "alice", "alice@example.test",
-                        Sensitive.of("would-be-a-reset"), List.of(), List.of()))));
+                        Sensitive.of("would-be-a-reset"), List.of(), List.of())),
+                List.of()));
 
         assertEquals(0, created.calls());
         assertEquals(1, report.steps().size());

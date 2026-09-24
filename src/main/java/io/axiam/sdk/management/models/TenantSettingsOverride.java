@@ -52,6 +52,9 @@ import java.util.List;
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
  * @param sensitiveScopesEnabled the server's sensitive_scopes_enabled field
+ * @param serverCertAllowedNames S-7 — tighten-only: every entry must be covered by an organization
+ *     entry. An empty list means this tenant issues no {@code Server} certificate at all, which is
+ *     different from an absent field (inherit the organization's list).
  * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -90,6 +93,7 @@ public record TenantSettingsOverride(
         @JsonProperty("require_symbols") @Nullable Boolean requireSymbols,
         @JsonProperty("require_uppercase") @Nullable Boolean requireUppercase,
         @JsonProperty("sensitive_scopes_enabled") @Nullable Boolean sensitiveScopesEnabled,
+        @JsonProperty("server_cert_allowed_names") @Nullable List<String> serverCertAllowedNames,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 
@@ -149,6 +153,7 @@ public record TenantSettingsOverride(
         private @Nullable Boolean requireSymbols;
         private @Nullable Boolean requireUppercase;
         private @Nullable Boolean sensitiveScopesEnabled;
+        private @Nullable List<String> serverCertAllowedNames;
         private @Nullable String webauthnUserVerification;
 
         /**
@@ -515,6 +520,17 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets server_cert_allowed_names.
+         *
+         * @param serverCertAllowedNames the value to send
+         * @return this builder
+         */
+        public Builder serverCertAllowedNames(List<String> serverCertAllowedNames) {
+            this.serverCertAllowedNames = serverCertAllowedNames;
+            return this;
+        }
+
+        /**
          * Sets webauthn_user_verification.
          *
          * @param webauthnUserVerification the value to send
@@ -531,7 +547,7 @@ public record TenantSettingsOverride(
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, webauthnUserVerification);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, serverCertAllowedNames, webauthnUserVerification);
         }
     }
 }

@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.LongSupplier;
 import org.jspecify.annotations.Nullable;
 
@@ -122,7 +123,8 @@ public final class DecisionMemo<T> {
 
     /**
      * Builds the §17.1 rule 3 key: all four components, absent distinguished
-     * from present.
+     * from present. Equivalent to {@code key(subjectId, resourceId, action,
+     * scope, null)} — no acting tenant.
      *
      * @param subjectId  the subject, or null for this client's own session
      * @param resourceId the resource
@@ -132,10 +134,35 @@ public final class DecisionMemo<T> {
      */
     public static String key(@Nullable String subjectId, String resourceId, String action,
                              @Nullable String scope) {
+        return key(subjectId, resourceId, action, scope, null);
+    }
+
+    /**
+     * Builds the memo key, WIDENED by the acting tenant (CONTRACT.md &sect;17
+     * candidate amendment, contract 1.51 — C-1's "For C-12" item 2). §17.1
+     * rule 3 names four components; since &sect;5.2's acting-tenant helper, one
+     * session can ask the server the same question of two different tenants,
+     * and the server can answer differently for each. A memo keyed on the
+     * original four alone would return tenant A's answer for tenant B within
+     * the TTL — memoizing a lie rather than a stale truth. The acting tenant
+     * is therefore a fifth key component, absent distinguished from present
+     * exactly as the other four are.
+     *
+     * @param subjectId    the subject, or null for this client's own session
+     * @param resourceId   the resource
+     * @param action       the action
+     * @param scope        the sub-resource scope, or null
+     * @param actingTenant the acting tenant this call was made with, or null
+     *                     when none was set
+     * @return the memo key
+     */
+    public static String key(@Nullable String subjectId, String resourceId, String action,
+                             @Nullable String scope, @Nullable UUID actingTenant) {
         return (subjectId == null ? ABSENT : subjectId) + SEP
                 + resourceId + SEP
                 + action + SEP
-                + (scope == null ? ABSENT : scope);
+                + (scope == null ? ABSENT : scope) + SEP
+                + (actingTenant == null ? ABSENT : actingTenant);
     }
 
     /**

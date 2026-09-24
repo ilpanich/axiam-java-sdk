@@ -13,6 +13,18 @@ import axiam.v1.UserInfoServiceGrpc;
 import axiam.v1.UserInfoServiceGrpc.UserInfoServiceBlockingStub;
 import axiam.v1.UserInfoServiceGrpc.UserInfoServiceFutureStub;
 
+import axiam.v1.Token.CnfClaim;
+import axiam.v1.Token.IntrospectTokenRequest;
+import axiam.v1.Token.IntrospectTokenResponse;
+import axiam.v1.Token.RptPermission;
+import axiam.v1.Token.ValidateTokenRequest;
+import axiam.v1.Token.ValidateTokenResponse;
+import axiam.v1.TokenServiceGrpc;
+import axiam.v1.TokenServiceGrpc.TokenServiceBlockingStub;
+import axiam.v1.TokenServiceGrpc.TokenServiceFutureStub;
+
+import io.axiam.sdk.Sensitive;
+
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -74,6 +86,10 @@ public final class GrpcAuthzClient implements AutoCloseable {
     // authz stubs above — a second gRPC-only operation, never a second channel.
     private final UserInfoServiceBlockingStub userInfoBlockingStub;
     private final UserInfoServiceFutureStub userInfoFutureStub;
+    // TokenService (CONTRACT.md §1.1.1/§10.3, contract 1.51) — the SAME channel and
+    // interceptor as every other stub on this client, never a second connection.
+    private final TokenServiceBlockingStub tokenBlockingStub;
+    private final TokenServiceFutureStub tokenFutureStub;
 
     /**
      * Creates a gRPC authz client bound to {@code target}, sharing the given refresh
@@ -129,6 +145,8 @@ public final class GrpcAuthzClient implements AutoCloseable {
         this.futureStub = AuthorizationServiceGrpc.newFutureStub(channel);
         this.userInfoBlockingStub = UserInfoServiceGrpc.newBlockingStub(channel);
         this.userInfoFutureStub = UserInfoServiceGrpc.newFutureStub(channel);
+        this.tokenBlockingStub = TokenServiceGrpc.newBlockingStub(channel);
+        this.tokenFutureStub = TokenServiceGrpc.newFutureStub(channel);
     }
 
     /**
@@ -145,6 +163,8 @@ public final class GrpcAuthzClient implements AutoCloseable {
         this.futureStub = AuthorizationServiceGrpc.newFutureStub(channel);
         this.userInfoBlockingStub = UserInfoServiceGrpc.newBlockingStub(channel);
         this.userInfoFutureStub = UserInfoServiceGrpc.newFutureStub(channel);
+        this.tokenBlockingStub = TokenServiceGrpc.newBlockingStub(channel);
+        this.tokenFutureStub = TokenServiceGrpc.newFutureStub(channel);
     }
 
     // ------------------------------------------------------------------
@@ -404,6 +424,245 @@ public final class GrpcAuthzClient implements AutoCloseable {
                 resp.getOrgId(),
                 resp.hasEmail() ? Optional.of(resp.getEmail()) : Optional.empty(),
                 resp.hasPreferredUsername() ? Optional.of(resp.getPreferredUsername()) : Optional.empty());
+    }
+
+    // ------------------------------------------------------------------
+    // validateToken / introspectToken (blocking + async) — gRPC-only
+    // (CONTRACT.md §1.1.1/§10.3, contract 1.51)
+    // ------------------------------------------------------------------
+
+    /**
+     * A confirmation claim (RFC 7800), exactly as the wire carries it — no method named is an
+     * <strong>unverifiable</strong> constraint, never an absent one (CONTRACT.md &sect;10.1 rule
+     * 9 detail 3, &sect;10.3 rule 3).
+     *
+     * @param x5tS256 the RFC 8705 &sect;3.1 certificate-bound confirmation, or {@code null} when
+     *                this token does not name one
+     * @param jkt     the RFC 9449 &sect;6.1 DPoP-bound confirmation, or {@code null} when this
+     *                token does not name one
+     */
+    public record CnfConfirmation(@Nullable String x5tS256, @Nullable String jkt) {
+
+        /**
+         * Whether this confirmation names a method neither field above carries — present, but
+         * empty. That is not the same as no confirmation at all: an absent {@code cnf} (this
+         * record itself being {@code null} on the enclosing response) means unbound; a non-null
+         * {@code CnfConfirmation} with both fields {@code null} means bound by a method this
+         * response could not name, and CONTRACT.md &sect;10.1 rule 9's "present, but an empty
+         * object" row applies — reject, never read as unconstrained.
+         *
+         * @return {@code true} when neither {@link #x5tS256()} nor {@link #jkt()} is set
+         */
+        public boolean namesNoMethod() {
+            return x5tS256 == null && jkt == null;
+        }
+    }
+
+    /**
+     * {@code ValidateToken} (CONTRACT.md &sect;1.1.1) — the typed value every field of {@code
+     * ValidateTokenResponse} maps onto.
+     *
+     * <p><strong>{@code valid} is not "usable as presented"</strong> (&sect;10.3 rule 2): when
+     * {@link #cnf()} is present, this SDK does not — cannot, from this response alone — verify
+     * possession against the caller's own connection. Combine it with the evidence your own
+     * transport can offer (a peer certificate, a verified DPoP proof) the same way {@code
+     * JwksVerifier#verifyTokenBinding} does for a locally-verified token, per CONTRACT.md
+     * &sect;10.1 rule 9's table. {@link #tokenType()} MUST NOT be read as deciding boundness —
+     * a certificate-bound token still reports {@code "Bearer"} (&sect;1.1.1 rule 5).
+     *
+     * @param valid     whether the signature, expiry and tenant check out (NOT "usable as
+     *                  presented" — see above)
+     * @param subjectId the subject UUID, empty when {@code valid} is {@code false}
+     * @param tenantId  the tenant UUID, empty when {@code valid} is {@code false}
+     * @param orgId     the organization UUID, empty when {@code valid} is {@code false}
+     * @param exp       the expiry (Unix seconds), zero when {@code valid} is {@code false}
+     * @param cnf       the confirmation claim, or {@code null} when this token is unbound —
+     *                  distinct from a present-but-empty {@link CnfConfirmation}
+     * @param tokenType {@code "Bearer"} or {@code "DPoP"} (&sect;1.1.1 rule 5)
+     */
+    public record TokenValidation(boolean valid, String subjectId, String tenantId, String orgId,
+                                  long exp, @Nullable CnfConfirmation cnf, String tokenType) {
+    }
+
+    /**
+     * {@code IntrospectToken} (CONTRACT.md &sect;1.1.1) — the RFC 7662 set, plus &sect;10.3's
+     * parity fields. The same &sect;10.3 rule 2 caveat as {@link TokenValidation#valid()} applies
+     * to {@link #active()}.
+     *
+     * @param active          RFC 7662's active flag — see the {@link TokenValidation} javadoc's
+     *                        "not usable as presented" note; the same rule governs this field
+     * @param sub             the subject UUID
+     * @param tenantId        the tenant UUID
+     * @param orgId           the organization UUID
+     * @param iss             the issuer
+     * @param iat             issued-at (Unix seconds)
+     * @param exp             expiry (Unix seconds)
+     * @param jti             the token's unique id
+     * @param scope           space-separated granted scopes, or {@code null} when the token
+     *                        carries no scope claim
+     * @param clientId        the client the token was issued to, or {@code null}
+     * @param tokenType       {@code "Bearer"} or {@code "DPoP"} — never decides boundness alone
+     * @param cnf             the confirmation claim, or {@code null} when unbound
+     * @param permissions     UMA 2.0 permissions, present only on an RPT
+     * @param extExchangeIss  the foreign issuer whose subject token bought this one via RFC 8693
+     *                        cross-domain exchange, or {@code null}
+     */
+    public record TokenIntrospection(boolean active, String sub, String tenantId, String orgId,
+                                     String iss, long iat, long exp, String jti,
+                                     @Nullable String scope, @Nullable String clientId,
+                                     String tokenType, @Nullable CnfConfirmation cnf,
+                                     List<RptPermissionInfo> permissions,
+                                     @Nullable String extExchangeIss) {
+    }
+
+    /**
+     * One UMA 2.0 permission carried by an RPT (X2).
+     *
+     * @param resourceId the resource UUID
+     * @param resourceScopes the scopes granted on that resource
+     * @param exp the absolute expiry of THIS permission (Unix seconds)
+     */
+    public record RptPermissionInfo(String resourceId, List<String> resourceScopes, long exp) {
+    }
+
+    /**
+     * {@code TokenService/ValidateToken} (CONTRACT.md &sect;1.1.1, &sect;10.3). Two tokens are
+     * kept apart (rule 1): the CALLER's own bearer token authenticates this call through the
+     * interceptor exactly like every other RPC on this client, and {@code accessToken} — the
+     * token being inspected — travels only in the request message. The two are never the same
+     * parameter, and this method never defaults one to the other.
+     *
+     * <p>With no caller token this refuses client-side, with <strong>zero wire calls</strong>
+     * (rule 2), exactly as {@link #getUserInfo()} does.
+     *
+     * @param accessToken the token to validate — secret material, {@link Sensitive}
+     * @return every field the response carries, typed
+     * @throws AuthError if this client has no active session to authenticate the CALL itself
+     */
+    public TokenValidation validateToken(Sensitive accessToken) {
+        requireTokenPreflight();
+        ValidateTokenRequest wire = ValidateTokenRequest.newBuilder()
+                .setAccessToken(accessToken.expose())
+                .build();
+        TokenServiceBlockingStub stub = deadlinedTokenBlockingStub(AuthClientInterceptor.USER_INFO_DEADLINE);
+        return callWithRefreshRetry(() -> toTokenValidation(stub.validateToken(wire)));
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #validateToken(Sensitive)}.
+     *
+     * @param accessToken the token to validate — secret material, {@link Sensitive}
+     * @return a future resolving to every field the response carries
+     */
+    public CompletableFuture<TokenValidation> validateTokenAsync(Sensitive accessToken) {
+        try {
+            requireTokenPreflight();
+        } catch (RuntimeException preflightFailure) {
+            CompletableFuture<TokenValidation> failed = new CompletableFuture<>();
+            failed.completeExceptionally(preflightFailure);
+            return failed;
+        }
+        ValidateTokenRequest wire = ValidateTokenRequest.newBuilder()
+                .setAccessToken(accessToken.expose())
+                .build();
+        TokenServiceFutureStub stub = deadlinedTokenFutureStub(AuthClientInterceptor.USER_INFO_DEADLINE);
+        return callAsyncWithRefreshRetry(() -> stub.validateToken(wire)).thenApply(GrpcAuthzClient::toTokenValidation);
+    }
+
+    /**
+     * {@code TokenService/IntrospectToken} (CONTRACT.md &sect;1.1.1, &sect;10.3) — the RFC 7662
+     * counterpart of {@link #validateToken(Sensitive)}, with the same rules 1 and 2.
+     *
+     * @param accessToken the token to introspect — secret material, {@link Sensitive}
+     * @return every field the response carries, typed
+     * @throws AuthError if this client has no active session to authenticate the CALL itself
+     */
+    public TokenIntrospection introspectToken(Sensitive accessToken) {
+        requireTokenPreflight();
+        IntrospectTokenRequest wire = IntrospectTokenRequest.newBuilder()
+                .setAccessToken(accessToken.expose())
+                .build();
+        TokenServiceBlockingStub stub = deadlinedTokenBlockingStub(AuthClientInterceptor.USER_INFO_DEADLINE);
+        return callWithRefreshRetry(() -> toTokenIntrospection(stub.introspectToken(wire)));
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #introspectToken(Sensitive)}.
+     *
+     * @param accessToken the token to introspect — secret material, {@link Sensitive}
+     * @return a future resolving to every field the response carries
+     */
+    public CompletableFuture<TokenIntrospection> introspectTokenAsync(Sensitive accessToken) {
+        try {
+            requireTokenPreflight();
+        } catch (RuntimeException preflightFailure) {
+            CompletableFuture<TokenIntrospection> failed = new CompletableFuture<>();
+            failed.completeExceptionally(preflightFailure);
+            return failed;
+        }
+        IntrospectTokenRequest wire = IntrospectTokenRequest.newBuilder()
+                .setAccessToken(accessToken.expose())
+                .build();
+        TokenServiceFutureStub stub = deadlinedTokenFutureStub(AuthClientInterceptor.USER_INFO_DEADLINE);
+        return callAsyncWithRefreshRetry(() -> stub.introspectToken(wire))
+                .thenApply(GrpcAuthzClient::toTokenIntrospection);
+    }
+
+    private TokenServiceBlockingStub deadlinedTokenBlockingStub(java.time.Duration deadline) {
+        return tokenBlockingStub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private TokenServiceFutureStub deadlinedTokenFutureStub(java.time.Duration deadline) {
+        return tokenFutureStub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * proto3 delivers an EMPTY {@code CnfClaim} message for a token with no confirmation (there
+     * is no separate "absent" wire state for a nested message field short of {@code has_cnf}),
+     * so {@code hasCnf()} — not field defaults — is what distinguishes "unbound" from "bound by
+     * an empty confirmation" (CONTRACT.md &sect;10.3 rule 3). Field defaults inside a present
+     * {@code CnfClaim} (an empty string for {@code x5t_s256}/{@code jkt}) map to {@code null},
+     * exactly as {@link CnfConfirmation#namesNoMethod()} depends on.
+     */
+    private static @Nullable CnfConfirmation toCnfConfirmation(boolean hasCnf, CnfClaim claim) {
+        if (!hasCnf) {
+            return null;
+        }
+        String x5t = claim.getX5TS256().isEmpty() ? null : claim.getX5TS256();
+        String jkt = claim.getJkt().isEmpty() ? null : claim.getJkt();
+        return new CnfConfirmation(x5t, jkt);
+    }
+
+    private static TokenValidation toTokenValidation(ValidateTokenResponse resp) {
+        return new TokenValidation(
+                resp.getValid(),
+                resp.getSubjectId(),
+                resp.getTenantId(),
+                resp.getOrgId(),
+                resp.getExp(),
+                toCnfConfirmation(resp.hasCnf(), resp.getCnf()),
+                resp.getTokenType());
+    }
+
+    private static TokenIntrospection toTokenIntrospection(IntrospectTokenResponse resp) {
+        List<RptPermissionInfo> permissions = new ArrayList<>();
+        for (RptPermission p : resp.getPermissionsList()) {
+            permissions.add(new RptPermissionInfo(
+                    p.getResourceId(), List.copyOf(p.getResourceScopesList()), p.getExp()));
+        }
+        return new TokenIntrospection(
+                resp.getActive(),
+                resp.getSub(),
+                resp.getTenantId(),
+                resp.getOrgId(),
+                resp.getIss(),
+                resp.getIat(),
+                resp.getExp(),
+                resp.getJti(),
+                resp.getScope().isEmpty() ? null : resp.getScope(),
+                resp.getClientId().isEmpty() ? null : resp.getClientId(),
+                resp.getTokenType(),
+                toCnfConfirmation(resp.hasCnf(), resp.getCnf()),
+                List.copyOf(permissions),
+                resp.getExtExchangeIss().isEmpty() ? null : resp.getExtExchangeIss());
     }
 
     // ------------------------------------------------------------------

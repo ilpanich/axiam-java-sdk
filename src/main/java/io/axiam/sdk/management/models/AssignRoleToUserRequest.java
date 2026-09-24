@@ -14,6 +14,13 @@ import java.util.UUID;
 /**
  * The AssignRoleToUserRequest schema from the server's OpenAPI document.
  *
+ * @param inherit Whether the assignment also reaches the descendants of {@code resource_id}.
+ *     Omitted — the default — or {@code true} is today's behaviour: a resource-scoped assignment
+ *     applies at its resource and everywhere below it. {@code false} applies it at {@code resource_id}
+ *     only, "here and no further", for allow and deny grants alike. Refused with 400 when {@code
+ *     false} is sent with no {@code resource_id} (a tenant-wide assignment has no node to stop at) or
+ *     for a role with {@code is_global: true} (a global role applies everywhere by definition). The
+ *     flag is part of the assignment: to change it, unassign and assign again.
  * @param resourceId the server's resource_id field
  * @param tenantScope The tenants this assignment reaches. Only meaningful for an assignment made
  *     in an organization's scope, whose global roles otherwise reach every tenant of the organization;
@@ -26,6 +33,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AssignRoleToUserRequest(
+        @JsonProperty("inherit") @Nullable Boolean inherit,
         @JsonProperty("resource_id") @Nullable UUID resourceId,
         @JsonProperty("tenant_scope") @Nullable List<UUID> tenantScope,
         @JsonProperty("user_id") UUID userId
@@ -43,5 +51,16 @@ public record AssignRoleToUserRequest(
         if (tenantScope != null && tenantScope.isEmpty()) {
             tenantScope = null;
         }
+    }
+
+    /**
+     * Whether this binding inherits to descendants, defaulting to {@code true} when the server
+     * omitted {@code inherit} (CONTRACT.md §27.13 S-10 rule 3 — a server older than contract 1.51
+     * never sends it, and absence means what every assignment has always meant).
+     *
+     * @return {@code inherit}, or {@code true} when it was absent
+     */
+    public boolean inherits() {
+        return inherit == null || inherit;
     }
 }

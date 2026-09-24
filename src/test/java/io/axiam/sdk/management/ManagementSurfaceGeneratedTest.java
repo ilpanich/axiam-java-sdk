@@ -286,7 +286,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises roles.list_users. */
     @Test
     void rolesListUsers() throws Exception {
-        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/users", 200, "[{\"user\": {\"created_at\": \"2026-08-26T00:00:00Z\", \"email\": \"example\", \"email_verified\": true, \"failed_login_attempts\": 1, \"id\": \"11111111-1111-4111-8111-111111111111\", \"is_locked\": true, \"metadata\": null, \"mfa_enabled\": true, \"status\": \"Active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"username\": \"example\"}}]");
+        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/users", 200, "[{\"inherit\": true, \"user\": {\"created_at\": \"2026-08-26T00:00:00Z\", \"email\": \"example\", \"email_verified\": true, \"failed_login_attempts\": 1, \"id\": \"11111111-1111-4111-8111-111111111111\", \"is_locked\": true, \"metadata\": null, \"mfa_enabled\": true, \"status\": \"Active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"username\": \"example\"}}]");
         client.management().roles().listUsers(EXAMPLE_ID);
     }
 
@@ -294,7 +294,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void rolesAssignToUser() throws Exception {
         mount("POST", "/api/v1/roles/" + EXAMPLE_ID + "/users", 204, "");
-        client.management().roles().assignToUser(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToUserRequest(null, null, EXAMPLE_ID));
+        client.management().roles().assignToUser(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToUserRequest(null, null, null, EXAMPLE_ID));
     }
 
     /** Exercises roles.unassign_from_user. */
@@ -307,7 +307,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises roles.list_groups. */
     @Test
     void rolesListGroups() throws Exception {
-        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/groups", 200, "[{\"group\": {\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"metadata\": null, \"name\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}}]");
+        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/groups", 200, "[{\"group\": {\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"metadata\": null, \"name\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}, \"inherit\": true}]");
         client.management().roles().listGroups(EXAMPLE_ID);
     }
 
@@ -315,7 +315,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void rolesAssignToGroup() throws Exception {
         mount("POST", "/api/v1/roles/" + EXAMPLE_ID + "/groups", 204, "");
-        client.management().roles().assignToGroup(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToGroupRequest(EXAMPLE_ID, null, null));
+        client.management().roles().assignToGroup(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToGroupRequest(EXAMPLE_ID, null, null, null));
     }
 
     /** Exercises roles.unassign_from_group. */
@@ -349,7 +349,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises roles.list_service_accounts. */
     @Test
     void rolesListServiceAccounts() throws Exception {
-        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/service-accounts", 200, "[{\"service_account\": {\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"status\": \"Active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}}]");
+        mount("GET", "/api/v1/roles/" + EXAMPLE_ID + "/service-accounts", 200, "[{\"inherit\": true, \"service_account\": {\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"status\": \"Active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}}]");
         client.management().roles().listServiceAccounts(EXAMPLE_ID);
     }
 
@@ -357,7 +357,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void rolesAssignToServiceAccount() throws Exception {
         mount("POST", "/api/v1/roles/" + EXAMPLE_ID + "/service-accounts", 204, "");
-        client.management().roles().assignToServiceAccount(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToServiceAccountRequest(null, EXAMPLE_ID, null));
+        client.management().roles().assignToServiceAccount(EXAMPLE_ID, new io.axiam.sdk.management.models.AssignRoleToServiceAccountRequest(null, null, EXAMPLE_ID, null));
     }
 
     /** Exercises roles.unassign_from_service_account. */
@@ -564,14 +564,14 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void certificatesGenerate() throws Exception {
         mount("POST", "/api/v1/certificates", 201, "{\"cert_type\": \"User\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"key_algorithm\": \"Rsa4096\", \"metadata\": {}, \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"public_cert_pem\": \"example\", \"status\": \"Active\", \"subject\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"private_key_pem\": \"example\"}");
-        client.management().certificates().generate(new io.axiam.sdk.management.models.CreateCertificateRequest(io.axiam.sdk.management.models.CertificateType.USER, EXAMPLE_ID, io.axiam.sdk.management.models.KeyAlgorithm.RSA4096, null, "example", 1));
+        client.management().certificates().generate(new io.axiam.sdk.management.models.CreateCertificateRequest(io.axiam.sdk.management.models.CertificateType.USER, EXAMPLE_ID, io.axiam.sdk.management.models.KeyAlgorithm.RSA4096, null, "example", null, 1));
     }
 
     /** Exercises certificates.sign_csr. */
     @Test
     void certificatesSignCsr() throws Exception {
         mount("POST", "/api/v1/certificates/sign-csr", 201, "{\"cert_type\": \"User\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"key_algorithm\": \"Rsa4096\", \"metadata\": {}, \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"public_cert_pem\": \"example\", \"status\": \"Active\", \"subject\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}");
-        client.management().certificates().signCsr(new io.axiam.sdk.management.models.SignCertificateCsrRequest(io.axiam.sdk.management.models.CertificateType.USER, "example", EXAMPLE_ID, null, 1));
+        client.management().certificates().signCsr(new io.axiam.sdk.management.models.SignCertificateCsrRequest(io.axiam.sdk.management.models.CertificateType.USER, "example", EXAMPLE_ID, null, null, 1));
     }
 
     /** Exercises certificates.get. */
@@ -956,7 +956,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetOrg() throws Exception {
         mount("PUT", "/api/v1/organizations/" + ORG_ID + "/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
-        client.management().settings().setOrg(new io.axiam.sdk.management.models.SetOrgSettings(1L, true, null, null, null, null, null, 1, null, null, null, 1, true, null, true, 1.0, 1L, 1, 1, 1L, 1L, true, 1, null, null, null, 1, 1L, true, true, true, true, null, null));
+        client.management().settings().setOrg(new io.axiam.sdk.management.models.SetOrgSettings(1L, true, null, null, null, null, null, 1, null, null, null, 1, true, null, true, 1.0, 1L, 1, 1, 1L, 1L, true, 1, null, null, null, 1, 1L, true, true, true, true, null, null, null));
     }
 
     /** Exercises settings.get_effective. */
@@ -970,7 +970,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetEffective() throws Exception {
         mount("PUT", "/api/v1/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
-        client.management().settings().setEffective(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        client.management().settings().setEffective(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises settings.get_tenant_override. */
@@ -984,7 +984,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetTenantOverride() throws Exception {
         mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/settings", 200, "{}");
-        client.management().settings().setTenantOverride(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        client.management().settings().setTenantOverride(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises settings.delete_tenant_override. */

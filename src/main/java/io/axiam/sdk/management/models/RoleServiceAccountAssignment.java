@@ -14,6 +14,8 @@ import java.util.UUID;
 /**
  * A service account together with the resource scope of its assignment.
  *
+ * @param inherit Whether the assignment also reaches the descendants of {@code resource_id}
+ *     ({@code true}, the default) or applies at that resource only ({@code false}).
  * @param resourceId {@code None} means the role was assigned globally (no resource scope).
  * @param serviceAccount The assigned service account. Carries no secret — the client secret is
  *     returned once, at creation, and never again.
@@ -24,6 +26,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RoleServiceAccountAssignment(
+        @JsonProperty("inherit") @Nullable Boolean inherit,
         @JsonProperty("resource_id") @Nullable UUID resourceId,
         @JsonProperty("service_account") ServiceAccountResponse serviceAccount,
         @JsonProperty("tenant_scope") @Nullable List<UUID> tenantScope
@@ -41,5 +44,16 @@ public record RoleServiceAccountAssignment(
         if (tenantScope != null && tenantScope.isEmpty()) {
             tenantScope = null;
         }
+    }
+
+    /**
+     * Whether this binding inherits to descendants, defaulting to {@code true} when the server
+     * omitted {@code inherit} (CONTRACT.md §27.13 S-10 rule 3 — a server older than contract 1.51
+     * never sends it, and absence means what every assignment has always meant).
+     *
+     * @return {@code inherit}, or {@code true} when it was absent
+     */
+    public boolean inherits() {
+        return inherit == null || inherit;
     }
 }

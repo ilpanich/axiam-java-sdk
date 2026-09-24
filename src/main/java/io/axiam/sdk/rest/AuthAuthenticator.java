@@ -59,9 +59,23 @@ public final class AuthAuthenticator implements Authenticator {
         // says an SDK MUST NOT attach to these two, the moment the server
         // rejects the setup token — the one scenario the request-side
         // exclusion alone would miss.
+        // CONTRACT.md §6.1 rule 6 (contract 1.51): the device login's OWN 401 is
+        // the terminal answer this operation defines — never a session expiry to
+        // refresh past. Excluded here rather than only via
+        // hasAdoptedAccessToken() below, because the login call ITSELF runs
+        // before any token is adopted.
         if (SessionState.isRefreshPath(encodedPath) || SessionState.isOauth2SkipRefreshPath(encodedPath)
                 || SessionState.isWebauthnSetupRegisterPath(encodedPath)
+                || SessionState.isDeviceAuthPath(encodedPath)
                 || responseCount(response) >= 2) {
+            return null;
+        }
+
+        // CONTRACT.md §6.1 rule 6 (contract 1.51): a device token has no
+        // refresh token. A later 401 on it is surfaced as AuthError verbatim,
+        // never sent through this guard — there is nothing to spend, and the
+        // recovery is calling authenticateDevice() again, not a retry here.
+        if (session.hasAdoptedAccessToken()) {
             return null;
         }
 
@@ -70,9 +84,16 @@ public final class AuthAuthenticator implements Authenticator {
             return null; // never authenticated — nothing to refresh
         }
 
+        // CONTRACT.md §5.2.2 rule 4: this reactive refresh carries the SAME
+        // acting tenant as the request whose 401 triggered it — the header is
+        // "sent as normal" on refresh(), whichever handle's request this is.
+        io.axiam.sdk.internal.ActingTenantTag actingTenantTag =
+                response.request().tag(io.axiam.sdk.internal.ActingTenantTag.class);
+        java.util.UUID actingTenant = actingTenantTag == null ? null : actingTenantTag.tenantId();
+
         TokenPair refreshed;
         try {
-            refreshed = guard.refreshIfNeeded(staleAccess, session::doHttpRefresh);
+            refreshed = guard.refreshIfNeeded(staleAccess, () -> session.doHttpRefresh(actingTenant));
         } catch (RuntimeException e) {
             // Refresh itself failed — surface the original 401, no retry (§9.3).
             return null;

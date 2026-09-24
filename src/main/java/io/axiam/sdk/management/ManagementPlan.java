@@ -78,7 +78,11 @@ public record ManagementPlan(List<PlannedAction> actions) {
         /** A role assigned directly to a user. */
         USER_ROLE,
         /** A user's membership of a group. */
-        GROUP_MEMBER
+        GROUP_MEMBER,
+        /** A service account (CONTRACT.md &sect;27.6.1 item 3, contract 1.51). */
+        SERVICE_ACCOUNT,
+        /** A role bound to a service account (contract 1.51). */
+        SERVICE_ACCOUNT_ROLE
     }
 
     /**

@@ -209,6 +209,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .sensitiveScopesEnabled(true).build(), "sensitive_scopes_enabled");
         assertKeys(TenantSettingsOverride.builder()
+                .serverCertAllowedNames(java.util.List.of()).build(), "server_cert_allowed_names");
+        assertKeys(TenantSettingsOverride.builder()
                 .webauthnUserVerification("example").build(), "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder()
                 .accessTokenLifetimeSecs(1L)
@@ -244,6 +246,7 @@ class ManagementSparseBodiesGeneratedTest {
                 .requireSymbols(true)
                 .requireUppercase(true)
                 .sensitiveScopesEnabled(true)
+                .serverCertAllowedNames(java.util.List.of())
                 .webauthnUserVerification("example")
                 .build(),
                 "access_token_lifetime_secs", "admin_notifications_enabled", "cimd",
@@ -256,7 +259,7 @@ class ManagementSparseBodiesGeneratedTest {
                 "mfa_challenge_lifetime_secs", "mfa_enforced", "min_length", "opaque_ksf",
                 "opaque_mode", "opaque_suite", "password_history_count", "refresh_token_lifetime_secs",
                 "require_digits", "require_lowercase", "require_symbols", "require_uppercase",
-                "sensitive_scopes_enabled", "webauthn_user_verification");
+                "sensitive_scopes_enabled", "server_cert_allowed_names", "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder().build());
     }
 

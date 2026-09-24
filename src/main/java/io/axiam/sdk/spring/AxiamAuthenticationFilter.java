@@ -28,6 +28,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.cert.CertificateEncodingException;
+import java.security.cert.X509Certificate;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,7 +59,11 @@ import java.util.Set;
  * the JWKS is organization-wide, so signature validity alone never implies
  * tenant authorization), and {@code iss}/{@code aud} when the verifier's
  * {@link JwksVerifier.LocalVerificationPolicy} configures them, all under a
- * bounded, named clock skew. The signature-only primitive
+ * bounded, named clock skew — plus CONTRACT.md &sect;10.1 rule 9 (contract 1.51),
+ * the sender constraint: evidence is this connection's own verified client
+ * certificate ({@link #peerCertificateThumbprint}), never a header, so a
+ * certificate-bound token lifted off a device is refused unless replayed over
+ * that device's own connection. The signature-only primitive
  * ({@link JwksVerifier#verifySignatureOnlyUnchecked(String)}) is deliberately
  * never called here: a guard that checks the signature and stops is not a
  * weaker guard, it is not a guard. On success, an {@code Authentication} is
@@ -199,15 +205,24 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
 
         String token = credential.value();
         try {
-            // CONTRACT.md §10.1: one call applying every rule of the minimum
-            // local-verification set — EdDSA-pinned signature before key
-            // lookup, REQUIRED exp, nbf when present, REQUIRED tenant_id
-            // asserted against configuredTenantId, and iss/aud when the
-            // verifier's policy configures them, all under a bounded, named
-            // clock skew. The previous inline `exp != null && exp.before(now)`
-            // accepted a token carrying no exp at all — a permanent
-            // credential (SEC-080).
-            JWTClaimsSet claims = jwksVerifier.verifyAccessToken(token, configuredTenantId);
+            // CONTRACT.md §10.1: applies every rule of the minimum local-verification
+            // set — EdDSA-pinned signature before key lookup, REQUIRED exp, nbf when
+            // present, REQUIRED tenant_id asserted against configuredTenantId, iss/aud
+            // when the verifier's policy configures them, all under a bounded, named
+            // clock skew — AND rule 9, the sender constraint (contract 1.51). This
+            // filter's evidence is the connection's own verified client certificate
+            // (§10.1 rule 9's "the thumbprint must come from the transport" — never a
+            // caller-settable header, which would make the whole mechanism decorative):
+            // the servlet container records it, when TLS client auth negotiated one, as
+            // the standard jakarta.servlet.request.X509Certificate request attribute.
+            // With no certificate on this connection, peerCertificateThumbprint() is
+            // null, and verifySenderConstrained then refuses any cnf-bound token exactly
+            // as the bare verifyAccessToken does — a device token lifted off a device and
+            // replayed without its key opens nothing here. The previous inline
+            // `exp != null && exp.before(now)` accepted a token carrying no exp at all —
+            // a permanent credential (SEC-080).
+            JWTClaimsSet claims = jwksVerifier.verifySenderConstrained(
+                    token, configuredTenantId, peerCertificateThumbprint(request));
 
             List<GrantedAuthority> authorities = scopeToAuthorities(claims);
             var authentication = new UsernamePasswordAuthenticationToken(claims.getSubject(), null, authorities);
@@ -279,6 +294,36 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
 
     /** A verified-candidate token plus whether it was sourced from the {@code axiam_access} cookie. */
     private record Credential(String value, boolean fromCookie) {}
+
+    /**
+     * The RFC 8705 &sect;3.1 {@code x5t#S256} thumbprint of the client certificate the
+     * servlet container verified for this connection, or {@code null} when there is none.
+     *
+     * <p>CONTRACT.md &sect;10.1 rule 9: evidence for a sender-constrained token MUST come
+     * from the transport, never from a caller-settable header. Under a servlet container
+     * with client-certificate authentication configured on the connector, the container
+     * places the verified chain — leaf first — under the standard
+     * {@code jakarta.servlet.request.X509Certificate} request attribute; this reads only
+     * that attribute, never a header a request could forge.
+     *
+     * @param request the current request
+     * @return the leaf certificate's thumbprint, or {@code null} when this connection
+     *         presented none
+     */
+    private static @Nullable String peerCertificateThumbprint(HttpServletRequest request) {
+        Object attribute = request.getAttribute("jakarta.servlet.request.X509Certificate");
+        if (!(attribute instanceof X509Certificate[] chain) || chain.length == 0) {
+            return null;
+        }
+        try {
+            return JwksVerifier.certificateThumbprintS256(chain[0].getEncoded());
+        } catch (CertificateEncodingException e) {
+            // An unencodable "certificate" cannot be evidence of anything; treat it as
+            // though this connection presented none rather than let an unrelated
+            // exception fall out of a token-verification path.
+            return null;
+        }
+    }
 
     /**
      * Cookie double-submit check (CONTRACT.md &sect;3): the {@code X-CSRF-Token} header

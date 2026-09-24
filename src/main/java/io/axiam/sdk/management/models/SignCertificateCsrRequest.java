@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -23,6 +24,10 @@ import java.util.UUID;
  *     legacy OpenSSL {@code BEGIN NEW CERTIFICATE REQUEST} header is not accepted.
  * @param issuerCaId the server's issuer_ca_id field
  * @param metadata the server's metadata field
+ * @param subjectAltNames See [{@code CreateCertificateRequest::subject_alt_names}]. Stated here
+ *     and never in the CSR, which is still refused if it requests a {@code subjectAltName}. Under a CA
+ *     whose key is held by {@code vault_pki} a {@code Server} request on this path is refused; use
+ *     {@code POST /api/v1/certificates}.
  * @param validityDays Validity duration in days.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -32,6 +37,7 @@ public record SignCertificateCsrRequest(
         @JsonProperty("csr_pem") String csrPem,
         @JsonProperty("issuer_ca_id") UUID issuerCaId,
         @JsonProperty("metadata") @Nullable JsonNode metadata,
+        @JsonProperty("subject_alt_names") @Nullable List<SubjectAltName> subjectAltNames,
         @JsonProperty("validity_days") Integer validityDays
 ) {
 }

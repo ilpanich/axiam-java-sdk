@@ -556,7 +556,8 @@ class ManagementSemanticsTest extends ManagementTestBase {
                         + "\"status\":\"Active\",\"subject\":\"example\",\"tenant_id\":\"" + TENANT_ID + "\"}");
 
         Object result = client.management().certificates().signCsr(
-                new SignCertificateCsrRequest(CertificateType.USER, "example", EXAMPLE_ID, null, 1));
+                new SignCertificateCsrRequest(
+                        CertificateType.USER, "example", EXAMPLE_ID, null, null, 1));
 
         assertInstanceOf(Certificate.class, result,
                 "sign_csr must return the existing Certificate model, not GeneratedCertificate "

@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 /**
  * The one request path every CONTRACT.md &sect;27 management operation goes
@@ -116,6 +117,7 @@ public final class ManagementTransport {
     private final TelemetryDispatcher telemetry;
     private final boolean retryEnabled;
     private final Runnable ensureOpen;
+    private final @Nullable UUID actingTenant;
 
     /**
      * Builds the transport from the pieces its owning client already holds.
@@ -132,12 +134,36 @@ public final class ManagementTransport {
     public ManagementTransport(OkHttpClient http, String baseUrl, SessionState session,
                                TelemetryDispatcher telemetry, boolean retryEnabled,
                                Runnable ensureOpen) {
+        this(http, baseUrl, session, telemetry, retryEnabled, ensureOpen, null);
+    }
+
+    /**
+     * Builds the transport, additionally carrying the owning handle's acting tenant
+     * (CONTRACT.md &sect;5.2 rule 1, contract 1.51).
+     *
+     * @param http the client's decorated OkHttp client, which carries the
+     *             &sect;3/&sect;4/&sect;5 interceptors every request must go through
+     * @param baseUrl the client's base URL
+     * @param session the client's session state, for the &sect;27.4 rule 1
+     *                authentication precondition and the resolved identifiers
+     * @param telemetry the client's &sect;19 dispatcher
+     * @param retryEnabled whether the &sect;16 retry policy is on
+     * @param ensureOpen the client's use-after-close check (&sect;18.1 rule 4)
+     * @param actingTenant the tenant this specific handle acts on, or {@code null}
+     *                     when none was set — every request this transport sends is
+     *                     tagged with it, and {@code AuthInterceptor} is what turns
+     *                     the tag into the wire header
+     */
+    public ManagementTransport(OkHttpClient http, String baseUrl, SessionState session,
+                               TelemetryDispatcher telemetry, boolean retryEnabled,
+                               Runnable ensureOpen, @Nullable UUID actingTenant) {
         this.http = http;
         this.baseUrl = baseUrl;
         this.session = session;
         this.telemetry = telemetry;
         this.retryEnabled = retryEnabled;
         this.ensureOpen = ensureOpen;
+        this.actingTenant = actingTenant;
     }
 
     /**
@@ -223,6 +249,13 @@ public final class ManagementTransport {
                     ? null : RequestBody.create(new byte[0], JSON_MEDIA));
         } else {
             request.method(method, RequestBody.create(encodeBody(operation, body), JSON_MEDIA));
+        }
+        // CONTRACT.md §5.2 rule 1 (contract 1.51): tagged only when this handle was
+        // built/rebound with one — AuthInterceptor reads the tag and adds
+        // X-Axiam-Tenant; a management call from a handle with none carries no such
+        // tag and the header stays byte-for-byte absent, as it always was.
+        if (actingTenant != null) {
+            request.tag(ActingTenantTag.class, new ActingTenantTag(actingTenant));
         }
 
         // §19.1: the label is the TEMPLATE, never the substituted path — a

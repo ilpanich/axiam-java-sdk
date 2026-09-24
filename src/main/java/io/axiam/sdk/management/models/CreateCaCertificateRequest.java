@@ -23,7 +23,9 @@ import org.jspecify.annotations.Nullable;
  *     a root that signs only an intermediate can have that intermediate revoked and replaced without
  *     redistributing the trust anchor, and a root that signs leaves cannot.
  * @param keyAlgorithm the server's key_algorithm field
- * @param subject the server's subject field
+ * @param subject The CA's common name, e.g. {@code ACME Corp Root CA}. A **common name**, not a
+ *     distinguished name. A single {@code CN=} prefix is accepted and stripped; anything else
+ *     containing {@code =} — {@code O=Acme, CN=ACME Corp Root CA} — is refused with {@code 400}.
  * @param validityDays Validity duration in days.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
