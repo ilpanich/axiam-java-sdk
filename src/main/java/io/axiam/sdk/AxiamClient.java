@@ -252,7 +252,30 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     /** §18 shutdown flag, read on every operation. */
     private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    /**
+     * {@code true} only for the handle {@link Builder#build()} produced — {@code false} for
+     * every handle {@link #actingTenant(UUID)}/{@link #clearActingTenant()} returned. Guards
+     * {@link #close()}'s shared-resource teardown: {@link #httpClient} and everything it owns
+     * (connection pool, dispatcher executor) are shared across every handle over one session, so
+     * only the handle that actually built them may shut them down. A rebound handle's
+     * {@link #close()} still flips its OWN {@link #closed} flag (so ITS {@link #ensureOpen()}
+     * starts refusing calls), but leaves the shared transport running for every other handle.
+     */
+    private final boolean isPrimaryHandle;
     private final SingleFlight<OidcTokenSet> oidcRefreshSingleFlight = new SingleFlight<>();
+
+    /**
+     * CONTRACT.md &sect;5.2 rule 1 (contract 1.51) — the tenant THIS handle acts on,
+     * or {@code null} when none was set. Scoped to the handle, not the shared
+     * {@link #session}: {@link #actingTenant(UUID)} returns a NEW {@code AxiamClient}
+     * over the same session rather than mutating this one, so two handles acting on
+     * two tenants cannot race to overwrite each other's header between deciding and
+     * sending it. REST-only ({@link #management()} and {@link #checkAccess}/
+     * {@link #batchCheck} carry it; the gRPC interceptor sends no acting-tenant
+     * metadata and never will — see &sect;5.2 rule 1's own text on why).
+     */
+    private final @Nullable UUID actingTenant;
 
     /**
      * The ONLY construction path (SC#1) — {@code tenantId} is required and
@@ -297,6 +320,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         private boolean retryEnabled = true;
         private @Nullable Duration decisionMemoTtl;
         private @Nullable TelemetryHook telemetryHook;
+        private @Nullable UUID actingTenant;
 
         private Builder(String baseUrl, String tenantId) {
             this.baseUrl = baseUrl;
@@ -575,6 +599,27 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             return this;
         }
 
+        /**
+         * Sets the tenant this client acts on, distinct from the constructor
+         * {@code tenantId} (CONTRACT.md &sect;5.2 rule 1, contract 1.51).
+         *
+         * <p>Meaningful only for an organization-level principal (&sect;5.2):
+         * every {@code /api/v1} request of the built client carries
+         * {@code X-Axiam-Tenant} naming {@code tenantId}, on top of the
+         * unconditional {@code X-Tenant-Id} the constructor tenant already
+         * sends. This form precedes any login, so it cannot gate on
+         * {@code organizationLevel} the way {@link #actingTenant(UUID)} does —
+         * the server's {@code 403} is the answer for a client that turns out not
+         * to be organization-level.
+         *
+         * @param tenantId the tenant this client acts on
+         * @return this builder, for chaining
+         */
+        public Builder withActingTenant(UUID tenantId) {
+            this.actingTenant = Objects.requireNonNull(tenantId, "tenantId");
+            return this;
+        }
+
         /** Builds the configured {@link AxiamClient}.
          *
          * @return a new, ready-to-use {@link AxiamClient}
@@ -597,8 +642,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     private AxiamClient(Builder b) {
+        this.isPrimaryHandle = true;
         this.baseUrl = stripTrailingSlash(b.baseUrl);
         this.tenantId = b.tenantId;
+        this.actingTenant = b.actingTenant;
         this.customCaPem = b.customCaPem;
         this.oidcClientId = b.oidcClientId;
         this.oidcClientSecret = b.oidcClientSecret;
@@ -658,6 +705,101 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.session.attachHttpClient(this.httpClient);
     }
 
+    /**
+     * The rebind constructor for {@link #actingTenant(UUID)}/{@link #clearActingTenant()}:
+     * every field {@code other} already built is shared, unchanged — the same
+     * {@link #httpClient}, the same {@link #session} (so the same cookies, the same
+     * cached token, the same CSRF state), the same {@link #refreshGuard}, the same
+     * {@link #decisionMemo} — and only {@link #actingTenant} differs. No OkHttpClient,
+     * SSLContext or CookieManager is rebuilt: this is a NEW handle over the SAME
+     * session, exactly as CONTRACT.md &sect;5.2 rule 1 asks for, never a second
+     * session's worth of setup for the sake of one header.
+     */
+    private AxiamClient(AxiamClient other, @Nullable UUID actingTenant) {
+        this.isPrimaryHandle = false;
+        this.baseUrl = other.baseUrl;
+        this.tenantId = other.tenantId;
+        this.actingTenant = actingTenant;
+        this.customCaPem = other.customCaPem;
+        this.httpClient = other.httpClient;
+        this.refreshGuard = other.refreshGuard;
+        this.jwksVerifier = other.jwksVerifier;
+        this.session = other.session;
+        this.principalTenantId = other.principalTenantId;
+        this.oidcClientId = other.oidcClientId;
+        this.oidcClientSecret = other.oidcClientSecret;
+        this.oidcClockSkewSec = other.oidcClockSkewSec;
+        this.oidcDiscoveryCache = other.oidcDiscoveryCache;
+        this.retryEnabled = other.retryEnabled;
+        this.decisionMemo = other.decisionMemo;
+        this.telemetry = other.telemetry;
+        this.presentsClientCertificate = other.presentsClientCertificate;
+    }
+
+    /**
+     * Returns a new handle over this same session, acting on {@code tenantId}
+     * (CONTRACT.md &sect;5.2 rule 1, contract 1.51).
+     *
+     * <p>Every {@code /api/v1} request the returned handle makes through
+     * {@link #management()}, {@link #checkAccess}/{@link #batchCheck} carries
+     * {@code X-Axiam-Tenant: tenantId}. This client is unchanged: two handles over
+     * one session can act on two different tenants without racing to overwrite
+     * each other's header.
+     *
+     * <p><strong>Gated on what this client already knows</strong> (&sect;5.2 rule
+     * 1's "let the server decide the rest"): when this session holds a login
+     * result (a password/OPAQUE/MFA-setup login, or WebAuthn's own registration
+     * finish — every path that reports {@code organization_level} the same way a
+     * password login does), this refuses client-side, with <strong>zero wire
+     * calls</strong>, unless that principal is organization-level, and refuses a
+     * {@code tenantId} outside a reported {@code reachable_tenant_ids} (&sect;5.2.3
+     * rule 4). A session with no login result held — a device login, an injected
+     * token, a plain WebAuthn/SSO sign-in, or before any login at all — has
+     * nothing to gate on: the header is sent as asked, and the server's
+     * {@code 403} is the answer for a principal this turns out not to fit.
+     *
+     * @param tenantId the tenant to act on
+     * @return a new handle, acting on {@code tenantId}
+     * @throws io.axiam.sdk.errors.AuthzError if this session holds a login result
+     *         that is not organization-level, or whose {@code reachable_tenant_ids}
+     *         does not include {@code tenantId} — before any wire call
+     */
+    public AxiamClient actingTenant(UUID tenantId) {
+        Objects.requireNonNull(tenantId, "tenantId");
+        SessionState.PrincipalScopeState scope = session.principalScope();
+        if (scope != null) {
+            if (!scope.organizationLevel()) {
+                throw new io.axiam.sdk.errors.AuthzError(
+                        "actingTenant(" + tenantId + ") refused: this session's principal is not "
+                                + "organization-level (CONTRACT.md §5.2 rule 1) — an ordinary tenant "
+                                + "principal gets a 403 for the same header change, so this SDK refuses "
+                                + "client-side rather than turning a type-level distinction into a wire "
+                                + "round trip");
+            }
+            List<UUID> reachable = scope.reachableTenantIds();
+            if (reachable != null && !reachable.contains(tenantId)) {
+                throw new io.axiam.sdk.errors.AuthzError(
+                        "actingTenant(" + tenantId + ") refused: outside this account's "
+                                + "reachable_tenant_ids (CONTRACT.md §5.2.3 rule 4)");
+            }
+        }
+        return new AxiamClient(this, tenantId);
+    }
+
+    /**
+     * Returns a new handle over this same session, acting on no tenant beyond its
+     * constructor {@code tenantId} — the inverse of {@link #actingTenant(UUID)}.
+     *
+     * <p>The returned handle sends no {@code X-Axiam-Tenant} at all, byte-for-byte
+     * what a client that never called {@link #actingTenant(UUID)} sends. This
+     * client is unchanged.
+     *
+     * @return a new handle, with no acting tenant set
+     */
+    public AxiamClient clearActingTenant() {
+        return new AxiamClient(this, null);
+    }
+
     // ------------------------------------------------------------------
     // AutoCloseable (D-09)
     // ------------------------------------------------------------------
@@ -668,6 +810,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         // and an error path that itself throws hides the original failure.
         // compareAndSet also means a concurrent double-close does the work once.
         if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        if (!isPrimaryHandle) {
+            // A rebound handle (actingTenant(UUID)/clearActingTenant()) does not own
+            // httpClient — every other handle over this same session is still using
+            // it, so closing THIS one must not shut the shared transport down under
+            // them. Only this handle's own `closed` flag (above) is affected.
             return;
         }
         decisionMemo.clear();
@@ -697,14 +846,25 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     /**
-     * Drops memoized decisions (CONTRACT.md §17.1 rule 9).
+     * Drops memoized decisions (CONTRACT.md §17.1 rule 9) and resets the
+     * &sect;5.2 acting-tenant gate to "no login result held" (&sect;5.2 rule 1,
+     * contract 1.51).
      *
      * <p>Entries are keyed by subject rather than session, so a
      * re-authentication as a <em>different</em> principal would otherwise
-     * inherit the previous one's decisions.
+     * inherit the previous one's decisions. The same reasoning applies to the
+     * acting-tenant gate: called at the START of every credential-changing
+     * operation, before the new credential (if any) is adopted, so a caller
+     * that completes a session through a path with no
+     * {@code organization_level}/{@code reachable_tenant_ids} of its own (a
+     * plain WebAuthn/discoverable login, a refresh, a logout) is left with
+     * "unknown" rather than a stale answer for whoever was signed in before —
+     * {@code authenticatedFrom} then records a REAL scope immediately
+     * afterward on the paths that have one to report.
      */
     private void onCredentialChange() {
         decisionMemo.clear();
+        session.resetPrincipalScope();
     }
 
     // ------------------------------------------------------------------
@@ -836,7 +996,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public io.axiam.sdk.management.ManagementApi management() {
         return new io.axiam.sdk.management.ManagementApi(
                 new io.axiam.sdk.internal.ManagementTransport(
-                        httpClient, baseUrl, session, telemetry, retryEnabled, this::ensureOpen));
+                        httpClient, baseUrl, session, telemetry, retryEnabled, this::ensureOpen,
+                        actingTenant));
     }
 
     // ---- CONTRACT.md §27.2/§27.3: the namespace handles, on the client ----
@@ -1344,7 +1505,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("session_id", claims.jti());
 
-        try (Response response = executeJsonPost(LOGOUT_PATH, body)) {
+        try (Response response = executeJsonPost(LOGOUT_PATH, body, true)) {
             if (response.code() >= 300) {
                 throw ErrorMapper.fromHttpStatus(response.code(), "logout failed", response);
             }
@@ -1818,8 +1979,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         ensureOpen();
 
         // §17: consult the memo first. Disabled by default, in which case this
-        // is one map lookup that always misses.
-        String key = DecisionMemo.key(subjectId, resourceId, action, scope);
+        // is one map lookup that always misses. The acting tenant widens the
+        // key (CONTRACT.md §17 candidate amendment, contract 1.51): since one
+        // session can now ask this question of two tenants, a memo keyed on
+        // the original four alone would answer tenant B's check with tenant
+        // A's cached decision within the TTL.
+        String key = DecisionMemo.key(subjectId, resourceId, action, scope, actingTenant);
         AccessResult memoized = decisionMemo.get(key);
         if (memoized != null) {
             return memoized;
@@ -1968,7 +2133,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     private AccessResult sendCheckAccess(ObjectNode body, String operation, int attempt) {
         TelemetryDispatcher.Span span = telemetry.startRequest(operation, "POST", CHECK_PATH, attempt);
-        try (Response response = executeJsonPost(CHECK_PATH, body)) {
+        try (Response response = executeJsonPost(CHECK_PATH, body, true)) {
             if (!response.isSuccessful()) {
                 span.end(response.code(), TelemetryEvent.Outcome.FAILURE);
                 throw ErrorMapper.fromHttpStatus(response.code(), "checkAccess failed", response);
@@ -1987,7 +2152,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     private List<AccessResult> sendBatchCheck(ObjectNode body, String operation, int attempt) {
         TelemetryDispatcher.Span span = telemetry.startRequest(operation, "POST", BATCH_CHECK_PATH, attempt);
-        try (Response response = executeJsonPost(BATCH_CHECK_PATH, body)) {
+        try (Response response = executeJsonPost(BATCH_CHECK_PATH, body, true)) {
             if (!response.isSuccessful()) {
                 span.end(response.code(), TelemetryEvent.Outcome.FAILURE);
                 throw ErrorMapper.fromHttpStatus(response.code(), "batchCheck failed", response);
@@ -2414,6 +2579,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 throw ErrorMapper.fromHttpStatus(response.code(), "ssoComplete request failed", response);
             }
             JsonNode wire = readJson(response);
+            // CONTRACT.md §5.2 rule 1: this response reports no
+            // organization_level/reachable_tenant_ids (§5.2's premise for SSO), so a
+            // scope recorded by an earlier login on this same session must not go on
+            // gating a principal SSO just replaced — reset to "unknown, let the
+            // server's 403 answer" rather than keep answering for whoever logged in
+            // before.
+            session.resetPrincipalScope();
             return new SsoCompleteResult(
                     wire.path("user_id").asText(),
                     wire.path("session_id").asText(),
@@ -2630,6 +2802,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 throw ErrorMapper.fromHttpStatus(response.code(), operation + " request failed", response);
             }
             JsonNode wire = readJson(response);
+            // CONTRACT.md §5.2 rule 1 — see ssoComplete's twin comment.
+            session.resetPrincipalScope();
             return new SsoCompleteResult(
                     wire.path("user_id").asText(),
                     wire.path("session_id").asText(),
@@ -3577,16 +3751,30 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     // ------------------------------------------------------------------
 
     private Response executeJsonPost(String path, ObjectNode body) {
+        return executeJsonPost(path, body, false);
+    }
+
+    /**
+     * As {@link #executeJsonPost(String, ObjectNode)}, additionally tagging the request
+     * with this handle's acting tenant when {@code actingTenantEligible} — CONTRACT.md
+     * &sect;5.2 rule 1 (contract 1.51): {@code check_access}/{@code batch_check} and
+     * {@code logout} carry it; every other POST built here does not.
+     */
+    private Response executeJsonPost(String path, ObjectNode body, boolean actingTenantEligible) {
         byte[] payload;
         try {
             payload = MAPPER.writeValueAsBytes(body);
         } catch (IOException e) {
             throw new NetworkError("failed to encode request: " + e.getMessage(), e);
         }
-        Request request = new Request.Builder()
+        Request.Builder builder = new Request.Builder()
                 .url(baseUrl + path)
-                .post(RequestBody.create(payload, JSON))
-                .build();
+                .post(RequestBody.create(payload, JSON));
+        if (actingTenantEligible && actingTenant != null) {
+            builder.tag(io.axiam.sdk.internal.ActingTenantTag.class,
+                    new io.axiam.sdk.internal.ActingTenantTag(actingTenant));
+        }
+        Request request = builder.build();
         try {
             return httpClient.newCall(request).execute();
         } catch (IOException e) {
@@ -3649,6 +3837,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (scope != null && scope.principalTenantId() != null) {
             this.principalTenantId = scope.principalTenantId();
         }
+        // CONTRACT.md §5.2 rule 1 (contract 1.51): every path that reaches this
+        // helper reports organization_level/reachable_tenant_ids in the same
+        // response shape a password login does (login, verifyMfa, loginOpaque,
+        // webauthnSetupRegisterFinish, mfaSetupConfirm all adopt credentials
+        // through here), so each records REAL scope rather than falling back to
+        // "unknown, let the server's 403 answer" — a stronger answer than the
+        // reset the two paths below settle for, because it is an actual one.
+        session.recordPrincipalScope(
+                organizationLevel, scope == null ? null : scope.reachableTenantIds());
         return LoginResult.authenticated(buildUser(), organizationLevel, scope);
     }
 
