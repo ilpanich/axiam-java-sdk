@@ -247,6 +247,46 @@ class ManifestAdditionsTest extends ManagementTestBase {
         assertEquals(2, assign.calls(), "the failing assign, then the attempted restore");
     }
 
+    /**
+     * CONTRACT.md &sect;27.6.1 item 2's definition of the plain shape as "no resource":
+     * a server assignment that carries a {@code resource_id} is NOT the same binding as
+     * a manifest that states the role plainly, even when both inherit — the plain form
+     * unconditionally means "no resource", so this must plan as {@code Update}
+     * (unassign, then assign with no {@code resource_id}), never {@code NoChange}.
+     */
+    @Test
+    void aPlainBindingOverAScopedAssignmentIsAnUpdate() throws Exception {
+        mountEmptyTenant();
+        mount("GET", "/api/v1/resources", 200,
+                pageOf(resourceBody(RESOURCE_ID, "site-1", metadata("{}"))));
+        mount("GET", "/api/v1/resources/" + RESOURCE_ID + "/scopes", 200, pageOf(null));
+        mount("GET", "/api/v1/roles", 200, pageOf(roleBody(ROLE_ID, "Resident", "Resident")));
+        mount("GET", "/api/v1/roles/" + ROLE_ID + "/permissions", 200, "[]");
+        mount("GET", "/api/v1/roles/" + ROLE_ID + "/groups", 200, "[]");
+        UUID userId = UUID.fromString("00000000-1111-4111-8111-111111111111");
+        // The server's existing assignment carries a resource_id (scoped, inheriting) —
+        // the desired manifest binding below is plain.
+        mount("GET", "/api/v1/roles/" + ROLE_ID + "/users", 200,
+                "[" + roleUserAssignment(userId, RESOURCE_ID, true) + "]");
+        mount("GET", "/api/v1/users", 200, pageOf(userBody(0)));
+
+        ManagementManifest manifest = ManagementManifest.builder()
+                .role("resident", "Resident", "Resident")
+                .user("ann", "user0", "user0@example.test", null)
+                .assignRole("ann", "resident")
+                .build();
+
+        ManagementPlan plan = client.management().manifest().plan(manifest);
+
+        ManagementPlan.PlannedAction binding = plan.changes().stream()
+                .filter(a -> a.target() == ManagementPlan.Target.USER_ROLE)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no USER_ROLE action in " + plan.changes()));
+        assertEquals(ManagementPlan.Change.UPDATE, binding.change(),
+                "a plain binding over a resource-scoped assignment must be an Update, "
+                        + "not NoChange: " + plan.changes());
+    }
+
     private static final UUID ARCHIVE_ID = UUID.fromString("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
     private static String page(String... items) {
