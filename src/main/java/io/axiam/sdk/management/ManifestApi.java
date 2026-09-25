@@ -501,8 +501,14 @@ public final class ManifestApi {
             String onWhat, ManagementManifest.RoleBinding binding, @Nullable ExistingBinding existing,
             Resolved res, Kind createKind, Kind rebindKind) {
         String summary = "role '" + binding.role() + "' " + onWhat;
+        // CONTRACT 1.52 N6.2 (C-12): a stated `inherit: true` is planned like an
+        // omitted one and MUST NEVER reach the wire as a literal `true` — only a
+        // stated `false` is ever sent; both an omitted and a stated `true`
+        // normalize to `null` (BindingChange's own contract: "null to mean
+        // inheriting, say nothing").
+        Boolean wireInherit = Boolean.FALSE.equals(binding.inherit()) ? Boolean.FALSE : null;
         BindingChange change = new BindingChange(binding.role(), binding.resource(),
-                binding.inherit(), existing);
+                wireInherit, existing);
         if (existing == null) {
             out.add(step(ManagementPlan.Change.CREATE, target, subjectKey, summary,
                     createKind, change, subjectKey));

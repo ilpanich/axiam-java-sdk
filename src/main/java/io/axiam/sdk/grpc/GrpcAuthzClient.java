@@ -694,7 +694,12 @@ public final class GrpcAuthzClient implements AutoCloseable {
         try {
             return call.get();
         } catch (StatusRuntimeException e) {
-            if (isUnauthenticated(e)) {
+            // CONTRACT 1.52 N4.5 (C-12): a device credential is never refreshed,
+            // on either transport — its own UNAUTHENTICATED is terminal, exactly
+            // like the REST 401 AuthAuthenticator leaves alone for the same
+            // credential. There is no refresh token for it (§6.1 rule 6), so
+            // entering the guard would only spend a wire call on nothing.
+            if (isUnauthenticated(e) && !session.hasAdoptedAccessToken()) {
                 doRefresh();
                 try {
                     return call.get();
@@ -713,7 +718,8 @@ public final class GrpcAuthzClient implements AutoCloseable {
                         return CompletableFuture.completedFuture(result);
                     }
                     Throwable cause = unwrap(error);
-                    if (isUnauthenticated(cause)) {
+                    // N4.5 (C-12): same rule as the blocking path above.
+                    if (isUnauthenticated(cause) && !session.hasAdoptedAccessToken()) {
                         return CompletableFuture.runAsync(this::doRefresh)
                                 .thenCompose(unused -> toCompletableFuture(call.get()))
                                 .handle((retryResult, retryError) -> {
@@ -747,8 +753,19 @@ public final class GrpcAuthzClient implements AutoCloseable {
      * any refresh) still needs the cookie-jar fallback, exactly like the
      * REST {@code AuthInterceptor}'s token source. Non-blocking: neither
      * read acquires {@link RefreshGuard}'s lock.
+     *
+     * <p>CONTRACT 1.52 N4.3 (C-12): an adopted &sect;6.1 device token takes
+     * priority over the guard's cache unconditionally. The guard's cache can
+     * hold a PRIOR cookie-session's access token from a refresh that happened
+     * before {@code authenticateDevice()} was ever called — that entry is not
+     * cleared by adoption (it belongs to the guard, not the session) — so
+     * falling through to it here would send the wrong credential's token on
+     * every gRPC call this transport makes after adoption.
      */
     static @Nullable String currentAccessToken(RefreshGuard refreshGuard, SessionState session) {
+        if (session.hasAdoptedAccessToken()) {
+            return session.cachedAccessToken();
+        }
         String cached = refreshGuard.cachedAccessToken();
         return cached != null ? cached : session.cachedAccessToken();
     }

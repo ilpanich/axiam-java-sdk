@@ -45,8 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8628 `deviceLogin`. Reachable only on a client built with `clientCertificate(...)`
   (zero wire calls otherwise). Adopts the returned token as this client's
   credential; because the server sets no cookie on this route, every subsequent
-  request also carries an explicit empty `Cookie` header so a stale `axiam_access`
-  cookie from an earlier session cannot silently outrank the device token. Never
+  request has its `Cookie` header withheld entirely (`AuthInterceptor` swaps in a
+  `LoadSuppressedCookieJar` for the call) so a stale `axiam_access` cookie from an
+  earlier session cannot silently outrank the device token. Never
   enters the §9 refresh guard for this credential's own 401s — there is no refresh
   token for it.
 - **`GrpcAuthzClient.validateToken`/`introspectToken` (+ `Async` twins)**
@@ -111,9 +112,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CertificateType` already decoded an unrecognised value (including the new
   `"Server"`) openly rather than failing the response — CONTRACT.md §27.13 S-7 rule
   2 needed a test, not a code change; see `Contract151ModelsTest`.
+- **C-12: the device POST no longer carries a prior session's bearer token**
+  (CONTRACT 1.52 N4.1). `AuthInterceptor` excluded `/api/v1/auth/device` from the
+  cookie jar but not from the `Authorization`-attaching branch or the proactive
+  near-expiry refresh, so a client that already held a cookie/bearer session sent
+  that session's access token — and could trigger an unwanted refresh of it —
+  on the very call meant to authenticate as the device instead.
+- **C-12: `GrpcAuthzClient` never refreshes an adopted device credential's
+  `UNAUTHENTICATED`** (CONTRACT 1.52 N4.5). `callWithRefreshRetry`/
+  `callAsyncWithRefreshRetry` entered the shared refresh guard on any
+  `UNAUTHENTICATED`, with no check for an adopted §6.1 device token — there is no
+  refresh token for one. It now surfaces as `AuthError` verbatim, with no refresh
+  attempt, exactly like the REST 401 on the same credential.
+- **C-12: `GrpcAuthzClient` could send a stale pre-adoption token after a device
+  login** (CONTRACT 1.52 N4.3). `currentAccessToken` preferred the shared
+  `RefreshGuard`'s cache unconditionally; a refresh that happened before
+  `authenticateDevice()` left an entry there that outranked the newly adopted
+  device token on every gRPC call afterward. The adopted device token now takes
+  priority unconditionally.
+- **C-12: a refused `authenticateDevice()` call changed client state anyway**
+  (CONTRACT 1.52 N4.2). `onCredentialChange()` ran *before* the device POST,
+  so a `401` still dropped the previous credential, the §17 decision memo and
+  the §5.2 acting-tenant gate. It now runs only after the server confirms
+  success.
+- **C-12: `refresh()` dropped an adopted device credential** (CONTRACT 1.52
+  N4.4). `refresh()` called the full `onCredentialChange()`, which clears an
+  adopted §6.1 device token — so calling `refresh()` while one was held silently
+  fell back to whatever stale cookie-session token remained in the jar, or threw
+  "no access token to refresh" after already discarding the device credential.
+  `refresh()` now uses a narrower reset that leaves the credential untouched.
 
 ### Breaking
 
+- **C-12: `ManagementManifest` now accepts a stated `inherit: true` on a
+  resource-scoped role binding** (CONTRACT 1.52 N6.2). `ManifestValidation`
+  used to refuse it client-side, before any request — a value the contract
+  requires this SDK to accept, planned exactly like an omitted `inherit` and
+  never sent on the wire as a literal `true`. A manifest built with
+  `RoleBinding.scoped(role, resource, true)`, which used to throw
+  `NetworkError` from `build()`, now builds and applies successfully.
 - **`JwksVerifier.verifyAccessToken` now enforces CONTRACT.md §10.1 rule 9 — a real
   defect, fixed.** This is the entry point `AxiamAuthenticationFilter` (the SDK's
   default servlet-container guard, reachable via `AxiamAutoConfiguration`) calls for

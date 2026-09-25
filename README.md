@@ -25,23 +25,24 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 ## Contract conformance
 
 This SDK conforms to **contract 1.51**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
-§20, §22, §23, §24, §25, §26, §27, §28 — including §6.1 mTLS (client-certificate
+§20, §21, §22, §23, §24, §25, §26, §27, §28 — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
 gRPC-only `getUserInfo` operation and the §1.1.1 gRPC-only `validateToken`/
 `introspectToken` pair, the §10.1 minimum local-verification set (with its rule 9
 sender-constrained-token fix — see below), the §12 OIDC/SSO relying-party helpers,
 the §13 webhook-signature verifier, the §20 UMA 2.0 Protection API and ticket grant,
-the §22 reactor runtime, the §23 OPAQUE (RFC 9807) login path, the §24 WebAuthn
-relying-party layer with its §24.6a JSON bridge, the §25 account-lifecycle and
-MFA-enrolment operations, §26 Pushed Authorization Requests (RFC 9126), the §27
-Management API — all 162 operations across 24 namespaces, with the §27.6
-declarative layer, including the §27.6.1 manifest additions (contract 1.51) — and
-the §28 MCP resource-server helpers.
+the §21 FAPI 2.0 profile and mTLS client credentials (including §21.7 DPoP proof
+verification), the §22 reactor runtime, the §23 OPAQUE (RFC 9807) login path, the
+§24 WebAuthn relying-party layer with its §24.6a JSON bridge, the §25
+account-lifecycle and MFA-enrolment operations, §26 Pushed Authorization Requests
+(RFC 9126), the §27 Management API — all 162 operations across 24 namespaces, with
+the §27.6 declarative layer, including the §27.6.1 manifest additions (contract
+1.51) — and the §28 MCP resource-server helpers.
 
-§12.7, §14, §15, §20, §22, §23, §24, §25, §26, §27 and §28 are named rather than
-folded into the range because they landed after this SDK already claimed §1–§13:
-widening the range silently would turn a statement that was true when written into a
-different claim without anyone editing it.
+§12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27 and §28 are named
+rather than folded into the range because they landed after this SDK already
+claimed §1–§13: widening the range silently would turn a statement that was true
+when written into a different claim without anyone editing it.
 
 §24.6b — the linked-API ceremony helper — is **deliberately absent**. The JVM has
 no authenticator, and §24.6b rule 2 forbids emulating one in software: a
@@ -55,7 +56,7 @@ See [`CONTRACT.md`](CONTRACT.md) for the full cross-language behavioral contract
 
 | Item | Status |
 |---|---|
-| §5.2 rule 1 / §5.2.2 rule 4 — the acting tenant, `X-Axiam-Tenant` | **Shipped**, on every `/api/v1` POST this client sends once a login result is held — `management()`, `checkAccess`/`batchCheck`, `refresh()`, `logout()`, and the self-service and WebAuthn POSTs (MFA enroll/confirm/setup, resend-verification, password reset, WebAuthn register/authenticate/discoverable). `AxiamClient.Builder.withActingTenant(UUID)` at construction, `AxiamClient.actingTenant(UUID)`/`clearActingTenant()` on a built client. REST-only; gated client-side on a held login's `organizationLevel`/`reachableTenantIds` when one is held. §5.2.2 rule 4 forbids clearing or rewriting the header for self-service calls, so it is sent "as normal" there too, letting the server decide which tenant a call about the caller's own id belongs to. The one exception is `webauthnSetupRegisterStart`/`Finish`, which §24.1 forbids from carrying any of this client's session state at all |
+| §5.2 rule 1 / §5.2.2 rule 4 — the acting tenant, `X-Axiam-Tenant` | **Shipped**, on every `/api/v1` POST this client sends for as long as an acting tenant is set on this handle — `management()`, `checkAccess`/`batchCheck`, `refresh()`, `logout()`, and the self-service and WebAuthn POSTs (MFA enroll/confirm/setup, resend-verification, password reset, WebAuthn register/authenticate/discoverable). `AxiamClient.Builder.withActingTenant(UUID)` at construction, `AxiamClient.actingTenant(UUID)`/`clearActingTenant()` on a built client — the header is unconditional on every such call while it is set (CONTRACT 1.52 N5.1, C-12), never conditioned on whether a login result is held; a held login's `organizationLevel`/`reachableTenantIds` instead gates, client-side with zero wire calls, whether `actingTenant(UUID)` itself refuses an out-of-scope switch. REST-only. §5.2.2 rule 4 forbids clearing or rewriting the header for self-service calls, so it is sent "as normal" there too, letting the server decide which tenant a call about the caller's own id belongs to. The one exception is `webauthnSetupRegisterStart`/`Finish`, which §24.1 forbids from carrying any of this client's session state at all |
 | §6.1 rules 6–10 — `authenticateDevice()` | **Shipped**. `AxiamClient.authenticateDevice()`/`authenticateDeviceAsync()`; reachable only on a client built with `clientCertificate(...)` (zero wire calls otherwise); adopts the token, withholding any stale `axiam_access` cookie; never enters the §9 refresh guard for this credential's own 401s |
 | §1.1.1/§10.3 — `validateToken`/`introspectToken` | **Shipped**. `GrpcAuthzClient.validateToken`/`introspectToken` (+ `Async` twins), sharing this client's existing gRPC channel and interceptor; `cnf` modelled as optional and distinct from a present-but-empty confirmation |
 | §10.1 rule 9 fix | **Shipped — a real defect, fixed.** See the callout below |
@@ -100,6 +101,8 @@ one case its schema under-documents, against the server's own handler:
 | `webauthnAuthenticateFinish`, `webauthnDiscoverableFinish` | **No — reset to unknown** | `WebauthnLoginResponse` has no `user` field at all (`access_token`/`refresh_token`/`session_id`/`expires_in` only) — there is nothing to read |
 | `ssoComplete`, `ssoCompleteOauth2`, `ssoCompleteHandoff` | **No — reset to unknown** | Explicit `session.resetPrincipalScope()` regardless of what the response carries — federation completion never reports `organization_level` today, and coupling this gate to a shape that could change under a different IdP integration is the wrong place to find that out |
 | `authenticateDevice` | **No — reset to unknown** | `DeviceAuthResponse` has no `user` field; a device holds no login result by design (§6.1) |
+| `refresh` | **No — reset to unknown** | This SDK's settled choice under CONTRACT 1.52 N5.5 (C-12), which leaves resetting on refresh as a conforming SHOULD-not: rather than let a stale scope answer for whatever `refresh()` renews, this SDK resets it, exactly as every other credential-changing call does |
+| `logout` | **No — reset to unknown** | CONTRACT 1.52 N5.5 (C-12): a MUST |
 
 **This is a deliberate divergence from axiam-rust-sdk**, which treats OPAQUE,
 WebAuthn, SSO and MFA-setup completion uniformly as holding no login result — it
@@ -124,8 +127,11 @@ above then applies.
 ## Local token verification (§10.1)
 
 `AxiamAuthenticationFilter` verifies the access token **locally**, so it applies
-the complete CONTRACT.md §10.1 minimum local-verification set through the single
-`JwksVerifier.verifyAccessToken(token, configuredTenantId)` entry point:
+the complete CONTRACT.md §10.1 minimum local-verification set — reaching it
+through `JwksVerifier.verifySenderConstrained(token, configuredTenantId,
+presentedThumbprint)`, not the plain `verifyAccessToken` entry point, since rule 9
+requires the filter to check the connection's own evidence (see the callout
+above):
 
 | # | Claim | What this SDK does |
 |---|-------|--------------------|
@@ -136,6 +142,7 @@ the complete CONTRACT.md §10.1 minimum local-verification set through the singl
 | 5 | `iss` | Checked **only** when an expected issuer is configured (optional, unset by default — no issuer is ever assumed) |
 | 6 | `aud` | Checked **only** when an expected audience is configured; a user-facing resource server should use `JwksVerifier.RECOMMENDED_RESOURCE_SERVER_AUDIENCE` (`"axiam:user"`) |
 | 7 | clock skew | `JwksVerifier.DEFAULT_CLOCK_SKEW_SECONDS` (60 s), bounded by `MAX_CLOCK_SKEW_SECONDS` (300 s) — an out-of-range value is refused, never silently applied |
+| 9 | `cnf` | A token carrying `cnf` is refused unless the connection's own evidence (the presented client certificate) matches it; `verifyAccessToken` — the signature-only primitive, exempt by name and doc (CONTRACT 1.52 N1, C-12) — refuses any `cnf`-bound token unconditionally instead, having no evidence to check it against |
 
 Rules 5–7 are configured through `JwksVerifier.LocalVerificationPolicy`, or via
 three **optional** Spring properties read by the auto-configuration:

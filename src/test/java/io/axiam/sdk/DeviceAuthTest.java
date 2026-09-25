@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -124,6 +125,134 @@ class DeviceAuthTest {
                         "a LATER call on the adopted device token must still withhold the stale "
                                 + "axiam_access cookie — the server reads it BEFORE Authorization");
                 assertEquals("Bearer device-token-xyz", laterRequest.getHeader("Authorization"));
+            }
+        }
+    }
+
+    /**
+     * CONTRACT 1.52 N4.1 (C-12): "The device POST carries nothing of a prior
+     * session: no Cookie, no Authorization." A client that already holds a
+     * bearer/cookie session from a prior {@code login()} must not let that
+     * session's access token ride along as {@code Authorization: Bearer} on
+     * the device login call itself — the device call authenticates by mTLS
+     * alone.
+     */
+    @Test
+    void deviceLoginItselfWithholdsAPriorBearerToken() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .addHeader("Set-Cookie",
+                            "axiam_access=" + OidcTestTokens.unsignedAccessToken() + "; Path=/; HttpOnly")
+                    .setBody("{\"mfa_required\":false,\"user\":{\"id\":\"11111111-1111-4111-8111-"
+                            + "111111111111\",\"email\":\"a@b.test\",\"username\":\"a\"}}"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"access_token\":\"device-token-after-login\",\"token_type\":\"Bearer\","
+                            + "\"expires_in\":900}"));
+            server.start();
+
+            try (AxiamClient client = builderWithCert(server.url("/").toString()).build()) {
+                client.login("a@b.test", "password");
+                server.takeRequest(); // consume the login request
+
+                client.authenticateDevice();
+                RecordedRequest deviceRequest = server.takeRequest();
+                assertNull(deviceRequest.getHeader("Authorization"),
+                        "the device login call must not carry a prior session's bearer token");
+                assertNull(deviceRequest.getHeader("Cookie"),
+                        "the device login call itself must carry no stale cookie");
+            }
+        }
+    }
+
+    /**
+     * CONTRACT 1.52 N4.2 (C-12): "A refused or malformed device login changes
+     * no client state." A &sect;17 decision memo entry recorded before a
+     * refused {@code authenticateDevice()} call must still answer from cache
+     * afterward — it must not have been silently dropped as a side effect of
+     * the refused call.
+     */
+    @Test
+    void aRefusedDeviceLoginChangesNoClientState() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"allowed\":true}"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(401)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"error\":\"authentication_failed\",\"message\":\"unknown certificate\"}"));
+            server.start();
+
+            try (AxiamClient client = builderWithCert(server.url("/").toString())
+                    .decisionMemoTtl(Duration.ofSeconds(30))
+                    .build()) {
+                client.checkAccess("read", "documents/1");
+                assertEquals(1, server.getRequestCount(), "the memo-populating call");
+
+                assertThrows(AuthError.class, client::authenticateDevice);
+                assertEquals(2, server.getRequestCount(), "the refused device login");
+
+                client.checkAccess("read", "documents/1");
+                assertEquals(2, server.getRequestCount(),
+                        "the memo entry recorded before the refused device login must still answer "
+                                + "from cache — a refused device login changes NO client state (N4.2)");
+            }
+        }
+    }
+
+    /**
+     * CONTRACT 1.52 N4.4 (C-12): {@code refresh()} "never refreshed" is about
+     * the automatic guard, but calling {@code refresh()} explicitly must still
+     * never drop an adopted &sect;6.1 device token as a side effect — the
+     * credential a later request presents is the assertion, not whatever
+     * {@code refresh()} itself does or throws.
+     */
+    @Test
+    void refreshNeverDropsTheAdoptedDeviceCredential() throws Exception {
+        String deviceToken = OidcTestTokens.unsignedAccessToken();
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"access_token\":\"" + deviceToken + "\",\"token_type\":\"Bearer\","
+                            + "\"expires_in\":900}"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .addHeader("Set-Cookie",
+                            "axiam_access=" + OidcTestTokens.unsignedAccessToken() + "; Path=/; HttpOnly")
+                    .setBody("{\"expires_in\":900}"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"allowed\":true}"));
+            server.start();
+
+            try (AxiamClient client = builderWithCert(server.url("/").toString()).build()) {
+                DeviceToken adopted = client.authenticateDevice();
+                assertEquals(deviceToken, adopted.accessToken().expose());
+
+                try {
+                    client.refresh();
+                } catch (RuntimeException ignored) {
+                    // Whether this explicit refresh() call itself succeeds is not this
+                    // test's concern — only that it does not corrupt session state.
+                }
+
+                client.checkAccess("read", "documents/1");
+                RecordedRequest last = null;
+                for (int i = 0; i < server.getRequestCount(); i++) {
+                    last = server.takeRequest();
+                }
+                assertEquals("Bearer " + deviceToken, last.getHeader("Authorization"),
+                        "refresh() must never drop the adopted device credential (N4.4)");
+                assertNull(last.getHeader("Cookie"),
+                        "the device credential's stale-cookie withholding must still apply after refresh()");
             }
         }
     }
