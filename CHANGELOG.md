@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta17] - 2026-09-25
+
 ### Added
+
+- Add resource metadata, scoped role bindings, service accounts (§27.6.1)
+
+- Add validateToken/introspectToken (§1.1.1/§10.3)
+
+- Add authenticateDevice() (§6.1 rules 6-10)
+
+- Wire acting-tenant scoping through AxiamClient
+
+- Add acting-tenant scoping (§5.2 rule 1)
+
+- Re-vendor contract 1.51 and regenerate the §27 surface
 
 - **Re-vendored CONTRACT.md, openapi.json and management-registry.json from axiam
   `56fbe44`** (contract 1.51). `CONTRACT.md` byte-matches that commit (sha256
   `0ac7fd75f83c…`); `proto/` was already identical. The §27 surface is regenerated
   at 162 operations across 24 namespaces.
+
 - **The acting tenant, `X-Axiam-Tenant` (CONTRACT.md §5.2 rule 1 / §5.2.2 rule 4).**
   `AxiamClient.Builder.withActingTenant(UUID)` at construction;
   `AxiamClient.actingTenant(UUID)` / `clearActingTenant()` on a built client, each
@@ -40,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `theDecisionMemoDoesNotAnswerAcrossActingTenants`, which asks the same question
   through two handles acting on two different tenants and checks both answers are
   correct with two real wire calls, not one memoized one.
+
 - **`AxiamClient.authenticateDevice()` / `authenticateDeviceAsync()`** — the §6.1
   mTLS device login (CONTRACT.md §6.1 rules 6–10), distinct from the existing RFC
   8628 `deviceLogin`. Reachable only on a client built with `clientCertificate(...)`
@@ -50,16 +66,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier session cannot silently outrank the device token. Never
   enters the §9 refresh guard for this credential's own 401s — there is no refresh
   token for it.
+
 - **`GrpcAuthzClient.validateToken`/`introspectToken` (+ `Async` twins)**
   (CONTRACT.md §1.1.1, §10.3) — the gRPC-only `TokenService` wrappers, sharing this
   client's existing channel and interceptor. The caller's own token authenticates
   the call; the inspected token travels only in the request message and is never
   defaulted from the caller's. `cnf` is modelled as optional and a present-but-empty
   confirmation stays distinct from an absent one.
+
 - **Manifest: `resources[].metadata`** (CONTRACT.md §27.6.1 item 1) —
   `ManagementManifest.Builder.metadata(resourceKey, JsonNode)`. Sent on `Create`
   and, when stated, on `Update`; drift is JSON value equality of the whole object,
   never a key-by-key merge.
+
 - **Manifest: the two-shape role binding** (CONTRACT.md §27.6.1 item 2) —
   `ManagementManifest.RoleBinding.role(key)` (plain, tenant-wide) and
   `.scoped(role, resource[, inherit])` (resource-scoped), on groups, users and
@@ -69,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconciled as unassign-then-assign, carrying the server's `tenant_scope` across;
   a failed assign re-assigns the previous binding, and `ApplyReport.StepOutcome`
   gains a `restored` field reporting whether that held.
+
 - **Manifest: `service_accounts`** (CONTRACT.md §27.6.1 item 3) —
   `ManagementManifest.Builder.serviceAccount(key, name, description)` and
   `.assignServiceAccountRole(key, binding)`. Reconciled by name, which the server
@@ -77,9 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconciles. A `Create`'s one-time `client_secret` is on
   `ApplyReport.createdServiceAccounts()`, survives a later action of the same
   `apply` failing, and `apply` never calls `rotate_secret` to reconcile anything.
+
 - `ApplyReport.StepOutcome` gains `createdServiceAccount` and `restored` components
   (a new canonical constructor; the pre-1.51 two-argument constructor still
   compiles unchanged) and `ApplyReport.createdServiceAccounts()`.
+
 - `scripts/gen_management.py`: an externally-tagged-`oneOf` emitter (a sealed
   interface plus a hand-written `JsonSerializer`/`JsonDeserializer` pair) and a
   `DEFAULT_TRUE_WHEN_ABSENT` name list with an `inherits()` accessor, fixing the two
@@ -87,11 +109,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-vendor CONTRACT.md at contract 1.52
+
+- C-12 corrections to README and CHANGELOG
+
+- A plain binding over a scoped assignment plans as Update
+
+- Contract 1.51 in README and CHANGELOG
+
+- Bump the minor-patch group with 3 updates
+
 - **CONTRACT.md re-vendored at contract 1.52.** Copied byte for byte from axiam `80bc7aa`
   (sha256 `c7954eec…`), the merge of the C-12 cross-SDK conformance review
   (ilpanich/axiam#500). 1.52 changes no wire behaviour: it writes rules N1–N6, which
   this SDK's C-12 fixes (#103) already implement. The README's conformance line
   moves to 1.52.
+
 - `AxiamClient` gained an internal rebind constructor and an `isPrimaryHandle` flag:
   `close()` on a handle returned by `actingTenant`/`clearActingTenant` now flips
   only that handle's own closed flag and leaves the shared `OkHttpClient`
@@ -100,12 +133,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Accept a stated inherit:true; still never send it
+
+- A refused device login, and refresh(), change no state
+
+- Never refresh a device credential; never send a stale token
+
+- Withhold a prior session's bearer/CSRF from the device POST
+
+- Send X-Axiam-Tenant on every eligible /api/v1 call (§5.2.2 rule 4)
+
+- VerifyAccessToken() now refuses a cnf-bound token (§10.1 rule 9)
+
+- Update Contract135Test for the regenerated request arity
+
+- Exclude the device login path from refresh-guard retry
+
 - **`scripts/gen_management.py`: `SubjectAltName` is an externally tagged `oneOf`**
   (`{"dns": …}` / `{"ip": …}`). The generator recognised neither that shape nor any
   `oneOf` without a common discriminator field, and emitted an empty record that
   serialized as `{}` — which the server refuses. It is now a sealed interface
   (`SubjectAltName` / `SubjectAltNameDns` / `SubjectAltNameIp`) with a hand-written
   serializer/deserializer pair.
+
 - **`scripts/gen_management.py`: a required `inherit` on the three role-side
   listings** (`RoleUserAssignment`/`RoleGroupAssignment`/`RoleServiceAccountAssignment`)
   is now decoded as optional and defaults to `true` when the server omits it (a
@@ -114,32 +164,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not enforce "required" by default, unlike languages whose codegen would fail
   the whole response), but nothing gave a caller the correct default, and a boxed
   `Boolean` read as absent was one accessor call away from being misread as `false`.
+
 - `CertificateType` already decoded an unrecognised value (including the new
   `"Server"`) openly rather than failing the response — CONTRACT.md §27.13 S-7 rule
   2 needed a test, not a code change; see `Contract151ModelsTest`.
+
 - **C-12: the device POST no longer carries a prior session's bearer token**
   (CONTRACT 1.52 N4.1). `AuthInterceptor` excluded `/api/v1/auth/device` from the
   cookie jar but not from the `Authorization`-attaching branch or the proactive
   near-expiry refresh, so a client that already held a cookie/bearer session sent
   that session's access token — and could trigger an unwanted refresh of it —
   on the very call meant to authenticate as the device instead.
+
 - **C-12: `GrpcAuthzClient` never refreshes an adopted device credential's
   `UNAUTHENTICATED`** (CONTRACT 1.52 N4.5). `callWithRefreshRetry`/
   `callAsyncWithRefreshRetry` entered the shared refresh guard on any
   `UNAUTHENTICATED`, with no check for an adopted §6.1 device token — there is no
   refresh token for one. It now surfaces as `AuthError` verbatim, with no refresh
   attempt, exactly like the REST 401 on the same credential.
+
 - **C-12: `GrpcAuthzClient` could send a stale pre-adoption token after a device
   login** (CONTRACT 1.52 N4.3). `currentAccessToken` preferred the shared
   `RefreshGuard`'s cache unconditionally; a refresh that happened before
   `authenticateDevice()` left an entry there that outranked the newly adopted
   device token on every gRPC call afterward. The adopted device token now takes
   priority unconditionally.
+
 - **C-12: a refused `authenticateDevice()` call changed client state anyway**
   (CONTRACT 1.52 N4.2). `onCredentialChange()` ran *before* the device POST,
   so a `401` still dropped the previous credential, the §17 decision memo and
   the §5.2 acting-tenant gate. It now runs only after the server confirms
   success.
+
 - **C-12: `refresh()` dropped an adopted device credential** (CONTRACT 1.52
   N4.4). `refresh()` called the full `onCredentialChange()`, which clears an
   adopted §6.1 device token — so calling `refresh()` while one was held silently
@@ -156,6 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never sent on the wire as a literal `true`. A manifest built with
   `RoleBinding.scoped(role, resource, true)`, which used to throw
   `NetworkError` from `build()`, now builds and applies successfully.
+
 - **`JwksVerifier.verifyAccessToken` now enforces CONTRACT.md §10.1 rule 9 — a real
   defect, fixed.** This is the entry point `AxiamAuthenticationFilter` (the SDK's
   default servlet-container guard, reachable via `AxiamAutoConfiguration`) calls for
@@ -173,6 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   populates for a TLS client-auth handshake — never a header) — a resource server
   that upgrades and does not configure client-certificate authentication on its
   connector will see `401` for a device token it previously accepted.
+
 - **A resource-scoped role binding drift now reconciles as `Update`.** Before 1.51
   the manifest compared only presence of a binding; a plain manifest binding over a
   server assignment that was actually scoped to a resource read as `NoChange`. It is
