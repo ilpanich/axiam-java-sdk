@@ -15,4 +15,7 @@
  * it did not fetch from the configured JWKS: no {@code jwk} or {@code x5c}
  * header member is honoured (&sect;32.9).
  */
+@NullMarked
 package io.axiam.sdk.ssf;
+
+import org.jspecify.annotations.NullMarked;

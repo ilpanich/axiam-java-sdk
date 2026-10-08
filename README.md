@@ -24,8 +24,9 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.52**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
-§20, §21, §22, §23, §24, §25, §26, §27, §28 — including §6.1 mTLS (client-certificate
+This SDK conforms to **contract 1.58**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32 and §33, with
+§32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
 gRPC-only `getUserInfo` operation and the §1.1.1 gRPC-only `validateToken`/
 `introspectToken` pair, the §10.1 minimum local-verification set (with its rule 9
@@ -35,11 +36,21 @@ the §21 FAPI 2.0 profile and mTLS client credentials (including §21.7 DPoP pro
 verification), the §22 reactor runtime, the §23 OPAQUE (RFC 9807) login path, the
 §24 WebAuthn relying-party layer with its §24.6a JSON bridge, the §25
 account-lifecycle and MFA-enrolment operations, §26 Pushed Authorization Requests
-(RFC 9126), the §27 Management API — all 162 operations across 24 namespaces, with
+(RFC 9126), the §27 Management API — all 190 operations across 28 namespaces, with
 the §27.6 declarative layer, including the §27.6.1 manifest additions (contract
-1.51) — and the §28 MCP resource-server helpers.
+1.51) — the §28 MCP resource-server helpers, the §28.12 RFC 7592 client
+configuration operations, the §29 SAML service-provider (`saml`), §30 directory
+(`directory`), §31 outbound SCIM target (`scimTargets`) and §32 SSF stream (`ssf`)
+management namespaces with their call-site documentation, explicit-null and
+no-secret-on-response rules, the §32.7 SSF receiver helper (`io.axiam.sdk.ssf`), and
+the §33 CIBA client helpers (`cibaInitiate`, `cibaPoll`, `cibaAwait`,
+`cibaHandlePing`) including the §33.2 signed request form for all three algorithms
+(PS256, ES256, EdDSA). The §21.3.1 vector A amendment (the seventh
+`mtls_endpoint_aliases` member, `backchannel_authentication_endpoint`) is pinned.
+Nothing of §28.12–§33 is carved out.
 
-§12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27 and §28 are named
+§12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29,
+§30, §31, §32, §32.7, §33 and §33.2 signed are named
 rather than folded into the range because they landed after this SDK already
 claimed §1–§13: widening the range silently would turn a statement that was true
 when written into a different claim without anyone editing it.
@@ -1780,17 +1791,135 @@ the attack.
 
 Worked end to end in [`examples/par-login`](examples/par-login).
 
+## RFC 7592 client configuration (§28.12)
+
+A client that registered itself through `POST /oauth2/register` (RFC 7591)
+receives, once, a `registration_client_uri` and a `registration_access_token`.
+With those two it can read, replace and delete **its own** registration:
+
+```java
+Sensitive token = loadStoredRegistrationToken();   // never a literal
+ClientRegistration current = client.readClientRegistration(registrationClientUri, token);
+
+// update is a FULL replacement: start from the read, change what you mean.
+ClientRegistration updated = client.updateClientRegistration(registrationClientUri, token,
+        current.toBuilder().clientName("Agent v2").build());
+
+// The token ROTATED. Persist it before doing anything else: the old one is dead.
+store(updated.registrationAccessToken());
+
+client.deleteClientRegistration(registrationClientUri, updated.registrationAccessToken());
+```
+
+- **The URI is used verbatim, and only at this client's AXIAM.** A URI whose
+  scheme, host or port differs from the base URL — or an `http` URI unless the base
+  URL is `http` on a loopback host — is refused with a local `ValidationError`
+  before any request: the token is a bearer, and following a URI elsewhere would
+  hand it to whoever wrote the URI.
+- **Not the SDK's session.** The requests carry `Authorization: Bearer <token>`
+  and nothing else of this client — no cookie, no SDK access token, no CSRF header,
+  no redirect followed — and a `401` never triggers the §9 refresh.
+- **The update body** drops `registration_access_token`, `registration_client_uri`,
+  `client_secret_expires_at`, `client_id_issued_at` and `client_secret`, and keeps
+  every member this SDK does not name (`ClientRegistration.extra()`, e.g. the CIBA
+  `backchannel_*` members), so a read-modify-write deletes nothing by accident.
+- **Update and delete are never retried**; the read follows §16 but never on a
+  `4xx` other than `408`/`429`. Errors with an `error` member are
+  `OAuthProtocolError` at any status (`invalid_token`, `invalid_client_metadata`, …);
+  `error_description` is optional.
+- `registrationAccessToken` and `clientSecret` are `Sensitive`. `*Async` companions
+  exist for all three.
+
+## CIBA — backchannel authentication (§33)
+
+A client that already knows whom it wants to authenticate asks AXIAM to
+authenticate that user **on another device**; AXIAM notifies the user, who approves
+or refuses on the console. The client collects the tokens at the token endpoint —
+by polling, or once after AXIAM *pings* it. The client always authenticates, with
+the credential this client was built with (`oidcClientSecret`, or the §6.1 client
+certificate for a `tls_client_auth` client); a client with neither is refused
+locally.
+
+**Poll mode:**
+
+```java
+CibaInitiateResponse started = client.cibaInitiate(
+        CibaInitiateRequest.builder("openid profile", CibaUserHint.loginHint("ada"))
+                .bindingMessage("W4SCT")      // what the user sees, to tell your request apart
+                .build());
+try {
+    OidcTokenSet tokens = client.cibaAwait(started);   // interval, slow_down, deadline handled
+    store(tokens);                                       // consume first: a request redeems once
+} catch (OAuthProtocolError e) {
+    if (e.isAccessDenied()) { /* the user said no */ }
+    else if (e.isExpiredToken()) { /* nobody answered in time */ }
+    else throw e;
+}
+```
+
+`cibaInitiate` is **never retried** (each call may notify a person); a lost answer
+is a request you let expire. **A success proves nothing about the user** — AXIAM
+answers an unknown or locked user exactly like a real one, and only `expired_token`
+tells you nobody answered. `cibaAwait` waits one `interval` before the first poll,
+adds 5 s per `slow_down` for good, treats a transport failure, `5xx` or `429` as one
+more interval, and raises `expired_token` itself at `receivedAt + expiresIn`. It
+takes an injectable `CibaClock` for tests, and does not adopt the tokens as this
+client's credential.
+
+**Ping mode** — answer the ping first, then poll once:
+
+```java
+Sensitive notificationToken = Sensitive.of(randomUrlSafeToken());   // you mint it
+CibaInitiateResponse started = client.cibaInitiate(
+        CibaInitiateRequest.builder("openid", CibaUserHint.loginHint("ada"))
+                .pingMode(notificationToken).build());
+
+// In your notification endpoint (e.g. a Spring controller):
+Sensitive authReqId = client.cibaHandlePing(httpHeaders, requestBody, notificationToken);
+respondNoContent();                       // answer 204 BEFORE redeeming
+OidcTokenSet tokens = client.cibaPoll(authReqId);
+```
+
+`cibaHandlePing` performs no I/O: it requires exactly one `Authorization: Bearer`
+header whose token matches in constant time (`MessageDigest.isEqual`) — else an
+`AuthError` naming no value — and a JSON body with a non-empty `auth_req_id` — else
+a `ValidationError`. A ping says only that the request was *decided*; the outcome
+comes from `cibaPoll`. If no ping arrives within half of `expiresIn`, fall back to
+`cibaAwait`.
+
+**Signed form** (a client registered with
+`backchannel_authentication_request_signing_alg`, required of a `fapi2` client):
+
+```java
+CibaRequestSigner signer = CibaRequestSigner.fromPem(
+        CibaSigningAlg.EDDSA, Sensitive.of(pkcs8Pem), "client-key-1");   // or PS256, ES256
+client.cibaInitiate(CibaInitiateRequest.builder("openid", CibaUserHint.loginHint("ada"))
+        .bindingMessage("W4SCT").signer(signer).build());
+```
+
+The algorithm and the key are both yours — no default for either — and a key that
+cannot sign under the algorithm is refused at construction. The form then carries
+only the client authentication and `request`, a JWS whose claims are every member
+(with `requested_expiry` as a number), `iss` = client id, `aud` = issuer,
+`iat` = `nbf` = now, `exp` = now + 5 min and a fresh 256-bit `jti`.
+
+`auth_req_id`, the notification token, the signing key and the `request` string are
+`Sensitive` or never rendered. `login_hint_token`, `user_code` and `request_uri`
+have no parameter: AXIAM refuses them. `cibaInitiate`, `cibaPoll` and `cibaAwait`
+have `*Async` companions; `cibaHandlePing` is synchronous.
+
 ## Management API (§27)
 
-The administrative surface: 158 operations across 24 namespaces — users, groups,
+The administrative surface: 190 operations across 28 namespaces — users, groups,
 roles, permissions, resources, scopes, service accounts, certificates, CA
 certificates, PGP keys, webhooks, OAuth2 clients, federation, notification rules,
 e-mail config, settings, SCIM tokens, reactors, WebAuthn policy, audit, privacy,
-organizations, tenants and platform.
+organizations, tenants, platform, directory (§30), SAML (§29), SSF (§32) and SCIM
+targets (§31).
 
 The namespace handles sit **directly on the client** —
 `client.serviceAccounts().rotateSecret(id)`, the form §27.3's Java row shows — and
-the same 24 handles are also reachable behind one accessor,
+the same 28 handles are also reachable behind one accessor,
 `client.management()` (§27.2 rule 4), which reads better where a call site is
 already dense with §1 methods. The two forms are **equivalent**: the direct
 methods forward to `management()`, so rule 4's "where an SDK offers both, the two
@@ -1934,6 +2063,120 @@ Worked end to end in
 [`examples/management-manifest`](examples/management-manifest), and combined
 with §6.1 mTLS for a full device provisioning lifecycle in
 [`examples/device-mtls-provisioning`](examples/device-mtls-provisioning).
+
+## Directory, SAML, SSF and SCIM targets (§29 – §32)
+
+Four §27 namespaces with rules worth reading before the first write. Each
+operation's Javadoc repeats the contract's call-site notes.
+
+**Directory (§30).** `directory().update` is sparse, and `null` is a value for the
+two group members: not calling a setter keeps the stored value, calling it with
+`null` sends JSON `null` and **clears** it. Moving the connection (`url`,
+`start_tls`, `bind_dn`, `trust_anchors_pem`) requires the bind secret again — the
+SDK holds no copy to re-send.
+
+```java
+client.directory().update(UpdateDirectoryConfig.builder()
+        .groupFilter(null)                          // {"group_filter":null}: clear it
+        .build());
+client.directory().update(UpdateDirectoryConfig.builder()
+        .url("ldaps://dc2.corp.example")
+        .bindSecret(Sensitive.of(bindSecret))       // required with a connection move
+        .build());
+
+// set is a replacement: start from the read (bind_secret absent = keep it).
+SetDirectoryConfig body = ReplacementBodies.from(client.directory().get());
+```
+
+`DirectoryConfig` has no secret member, and a `bind_secret` in a response is
+dropped. `linkAccount` signs the account's owner out everywhere; `delete` stops the
+directory and nothing else.
+
+**SAML service providers (§29).** Import an SP's metadata into a draft, review it,
+create it — the draft is accepted unchanged:
+
+```java
+SamlSpMetadataDraft draft = client.saml().parseSpMetadata(
+        ParseSamlSpMetadata.fromUrl("https://sp.example/metadata"));   // or fromXml(...)
+SamlServiceProvider sp = client.saml().createServiceProvider(draft.serviceProvider());
+```
+
+Exactly one of `metadata_url` / `metadata_xml`: both or neither is a local
+`ValidationError`. `updateServiceProvider` is a replacement (an omitted member takes
+its default) — `ReplacementBodies.from(sp)` is the read-modify-write form.
+`SamlIdpCredential` carries no key, `getIdp` is never cached, and its
+`activeCredentialId()`/`nextCredentialId()` are `JsonNullable`: JSON `null` (an empty
+slot) stays distinct from an absent member.
+
+**SCIM targets (§31) and SSF streams (§32)** are replacements whose write-only
+secret (`credential`, `authorization_header`) is kept when absent — unless the write
+moves its URL, which then needs it again:
+
+```java
+ScimTargetResponse target = client.scimTargets().get(id);
+ScimTargetInput t = ReplacementBodies.from(target);       // credential absent: kept
+client.scimTargets().update(id, new ScimTargetInput(t.auth(), t.baseUrl(), null,
+        DeprovisionPolicy.DELETE, t.enabled(), t.name(), t.pushGroups(), t.scope(),
+        t.userNameFrom()));
+
+SsfStreamInput s = ReplacementBodies.from(client.ssf().getStream(streamId));  // header kept
+```
+
+No response type has a member for the secret, and one met in a response is
+dropped. `scimTargets().delete` deprovisions nothing downstream; `reconcile`
+answers `202` and its outcome is on `state`. Unknown enum values and unknown
+`auth.type`/`scope.type` decode (as `UNKNOWN` / `ScimTargetAuthUnknown`) and are
+never sent. None of the writes is retried.
+
+## SSF receiver (`io.axiam.sdk.ssf`, §32.7)
+
+For a relying party that **receives** AXIAM's CAEP/RISC events. `verifySet`
+verifies one Security Event Token in the contract's order and refuses with a
+`SetVerificationError` (an `AuthError`) carrying a `SetFailureReason`; `poll` calls
+the stream's RFC 8936 endpoint and verifies what it returns.
+
+```java
+SsfReceiver receiver = new SsfReceiver(client, SsfReceiverConfig
+        .builder(issuer, audience, SsfKeySource.jwksUri(issuer + "/oauth2/jwks"))
+        .accessTokenProvider(() -> client.loginClientCredentials("ssf.manage", null, null).accessToken())
+        .build());
+
+// Push (RFC 8935): your endpoint receives the compact SET as the body.
+try {
+    SecurityEvent event = receiver.verifySet(body);
+    if (SsfEventTypes.SESSION_REVOKED.equals(event.eventType())) { /* … */ }
+    respond(202);
+} catch (SetVerificationError e) {
+    respond(400, SetErr.fromReason(e.failureReason()));   // {"err": "<RFC 8935 code>"}
+}
+
+// Poll (RFC 8936): acknowledge what you processed, refuse what failed.
+List<String> ack = new ArrayList<>();
+Map<String, SetErr> setErrs = new LinkedHashMap<>();
+while (true) {
+    SsfPollResult page = receiver.poll(streamId, new SsfPollOptions(null, true, ack, setErrs));
+    ack = new ArrayList<>();
+    setErrs = new LinkedHashMap<>();
+    for (SecurityEvent e : page.events()) { process(e); ack.add(e.jti()); }
+    for (RefusedSet r : page.refused()) { setErrs.put(r.jti(), SetErr.fromReason(r.reason())); }
+    if (!page.moreAvailable()) break;
+}
+```
+
+- The key comes only from the configured JWKS (`jwksUri`, or a `discoveryUrl` whose
+  `issuer` must equal yours), fetched over this client's TLS policy without its
+  session; `jwk`/`x5c` headers are never honoured. An unknown `kid` costs one
+  refetch, at most once a minute. A JWKS fetch failure is a `NetworkError`, not a
+  verdict on the SET.
+- **A verified SET is recorded** in the replay store (default in-memory, pluggable
+  via `ReplayStore`; window seven days, the floor — shorter is refused at
+  configuration). Re-offered unacknowledged, it reads as `replayed`, so acknowledge
+  what you processed. `poll` never acknowledges anything itself.
+- `SetFailureReason.pushErrorCode()` maps the SDK's reasons to RFC 8935 `err` codes:
+  `malformed`, `invalid_type` and `replayed` answer `invalid_request`.
+- `poll` is retried per §16 on transport errors, `5xx`, `408` and `429`, never on
+  another `4xx`; it sends only the options you set (`SsfPollOptions.none()` sends
+  `{}`). `pollAsync` is its `CompletableFuture` twin.
 
 ## Building from source
 

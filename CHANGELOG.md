@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Contract 1.58.** Re-vendored `CONTRACT.md`, `openapi.json` and
+  `management-registry.json` (contract 1.58; `proto/` unchanged) and regenerated the §27
+  surface at **190 operations across 28 namespaces**. The README's Conformance Statement now
+  reads "contract 1.58: … §27, §28, §28.12, §29, §30, §31, §32 and §33, with §32.7 and §33.2
+  signed".
+- **§28.12 RFC 7592 client configuration.** `readClientRegistration`,
+  `updateClientRegistration`, `deleteClientRegistration` (+ `*Async`) and `ClientRegistration`
+  (tolerant decode; unknown members round-trip through `extra()`; `registrationAccessToken` and
+  `clientSecret` `Sensitive`). The URI is used only at the configured origin (else a local
+  `ValidationError`), the token travels as the only bearer on a session-free transport, update
+  and delete are never retried, and the update body drops the five server-stated members.
+- **§30 `directory`, §29 `saml`, §31 `scimTargets`, §32 `ssf` management namespaces** —
+  generated, with the contract's call-site documentation in each operation's Javadoc;
+  `UpdateDirectoryConfig.groupBaseDn`/`groupFilter` can send an explicit JSON `null`
+  (`JsonNullable`), and `SamlIdpInfo`'s credential ids keep `null` apart from absent;
+  `ParseSamlSpMetadata.fromUrl`/`fromXml`, with both-or-neither refused locally;
+  `ReplacementBodies.from(...)` read-modify-write conversions for the four replacement bodies.
+- **§32.7 SSF receiver helper** (`io.axiam.sdk.ssf`): `SsfReceiver.verifySet` (nine-step
+  verification, `SetVerificationError` with `SetFailureReason`, pluggable replay store with a
+  seven-day floor) and `poll`/`pollAsync`; `SsfEventTypes` for the eight event-type URIs.
+- **§33 CIBA**: `cibaInitiate`, `cibaPoll`, `cibaAwait` (+ `*Async`) and `cibaHandlePing`;
+  poll and ping modes; the §33.2 signed request form (`CibaRequestSigner`, PS256/ES256/EdDSA);
+  `OAuthProtocolError.isAccessDenied()`/`isExpiredToken()`.
+- **§21.3.1**: `MtlsEndpointAliases` gains `backchannel_authentication_endpoint` (the seventh
+  alias; a six-argument constructor is kept), and `OidcConfiguration` the four CIBA discovery
+  members (a 22-argument constructor is kept).
+
+### Changed
+
+- `OAuthProtocolError` no longer requires `error_description`: a body with a non-empty `error`
+  alone is an `OAuthProtocolError`, and `errorDescription()` may be `null` (RFC 6749 §5.2).
+  `ErrorMapper.fromOAuth2ErrorAtAnyStatus` applies the mapping at any status for the
+  operations whose contract section says so (§28.12.3, §33.4).
+- `/oauth2/bc-authorize` joins the paths whose `401` never enters the §9 refresh guard.
+
 ## [1.0.0-beta17] - 2026-09-25
 
 ### Added
