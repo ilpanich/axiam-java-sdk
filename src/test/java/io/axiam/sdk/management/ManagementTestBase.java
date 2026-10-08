@@ -72,11 +72,22 @@ abstract class ManagementTestBase {
     static final class Route {
         private final int status;
         private final String body;
+        private final java.util.function.@Nullable Function<Recorded, String> responder;
         private final List<Recorded> requests = new ArrayList<>();
 
         Route(int status, String body) {
+            this(status, body, null);
+        }
+
+        Route(int status, String body, java.util.function.@Nullable Function<Recorded, String> responder) {
             this.status = status;
             this.body = body;
+            this.responder = responder;
+        }
+
+        /** Every request this route saw, in order. */
+        List<Recorded> requests() {
+            return List.copyOf(requests);
         }
 
         /** How many requests reached this route. */
@@ -154,12 +165,14 @@ abstract class ManagementTestBase {
                 // same header.
                 Map<String, String> headers = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
                 request.getHeaders().forEach(pair -> headers.put(pair.getFirst(), pair.getSecond()));
-                route.requests.add(new Recorded(request.getMethod(), bare, query,
-                        request.getBody().readUtf8(), headers));
+                Recorded recorded = new Recorded(request.getMethod(), bare, query,
+                        request.getBody().readUtf8(), headers);
+                route.requests.add(recorded);
 
+                String answer = route.responder == null ? route.body : route.responder.apply(recorded);
                 MockResponse response = new MockResponse().setResponseCode(route.status);
-                if (!route.body.isEmpty()) {
-                    response.setHeader("Content-Type", "application/json").setBody(route.body);
+                if (!answer.isEmpty()) {
+                    response.setHeader("Content-Type", "application/json").setBody(answer);
                 }
                 return response;
             }
@@ -192,6 +205,29 @@ abstract class ManagementTestBase {
         Route route = new Route(status, body);
         routes.put(method + " " + path, route);
         return route;
+    }
+
+    /**
+     * Mounts one route whose body is computed from the request it answers, e.g.
+     * a page envelope that follows the requested {@code offset}.
+     */
+    protected Route mountDynamic(String method, String path, int status,
+                                 java.util.function.Function<Recorded, String> responder) {
+        Route route = new Route(status, "", responder);
+        routes.put(method + " " + path, route);
+        return route;
+    }
+
+    /**
+     * A two-item paged route over {@code item}: every response's {@code offset}
+     * follows the request, one item per page, {@code total} 2.
+     */
+    protected Route mountTwoPages(String path, java.util.function.Supplier<String> item) {
+        return mountDynamic("GET", path, 200, r -> {
+            int offset = Integer.parseInt(r.query().getOrDefault("offset", "0"));
+            String items = offset < 2 ? item.get() : "";
+            return "{\"items\":[" + items + "],\"total\":2,\"offset\":" + offset + ",\"limit\":1}";
+        });
     }
 
     /** The route mounted at {@code method path}, for assertions. */
