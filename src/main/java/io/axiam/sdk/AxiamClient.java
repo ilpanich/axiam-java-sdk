@@ -2976,7 +2976,16 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 // predates them. `null` is "the OP published nothing", which is
                 // information an empty list would destroy.
                 textListOrNull(wire, "code_challenge_methods_supported"),
-                textListOrNull(wire, "token_endpoint_auth_signing_alg_values_supported"));
+                textListOrNull(wire, "token_endpoint_auth_signing_alg_values_supported"),
+                // Contract 1.58 (CONTRACT.md §21.5, §33): optional, as every
+                // conditionally-advertised endpoint is — absence means "this
+                // server does not support CIBA", never a URL to synthesise.
+                wire.hasNonNull("backchannel_authentication_endpoint")
+                        ? wire.get("backchannel_authentication_endpoint").asText() : null,
+                textListOrNull(wire, "backchannel_token_delivery_modes_supported"),
+                wire.path("backchannel_user_code_parameter_supported").isBoolean()
+                        ? wire.get("backchannel_user_code_parameter_supported").asBoolean() : null,
+                textListOrNull(wire, "backchannel_authentication_request_signing_alg_values_supported"));
     }
 
     /**
@@ -3001,7 +3010,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 aliasEntry(aliases, "revocation_endpoint"),
                 aliasEntry(aliases, "introspection_endpoint"),
                 aliasEntry(aliases, "device_authorization_endpoint"),
-                aliasEntry(aliases, "pushed_authorization_request_endpoint"));
+                aliasEntry(aliases, "pushed_authorization_request_endpoint"),
+                aliasEntry(aliases, "backchannel_authentication_endpoint"));
     }
 
     private static @Nullable String aliasEntry(JsonNode aliases, String field) {
@@ -4378,6 +4388,389 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private static boolean isLoopbackHost(@Nullable String host) {
         return host != null && ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)
                 || "::1".equals(host) || "[::1]".equals(host));
+    }
+
+    // ------------------------------------------------------------------
+    // §33 CIBA — client-initiated backchannel authentication (contract 1.58)
+    // ------------------------------------------------------------------
+
+    /** {@code grant_type} of the CIBA token request (CIBA Core &sect;10.1). */
+    public static final String CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba";
+
+    /** The interval used when the initiate response carries none (CONTRACT.md &sect;33.7 rule 2). */
+    static final int DEFAULT_CIBA_INTERVAL_SECONDS = 5;
+
+    /** Seconds added to the interval per {@code slow_down}, permanently (&sect;33.7 rule 3). */
+    static final int CIBA_SLOW_DOWN_INCREMENT_SECONDS = 5;
+
+    /**
+     * The client's credential for a CIBA call (&sect;33.1): {@code client_secret_post},
+     * or the &sect;6.1 client certificate the transport presents ({@code tls_client_auth},
+     * {@code client_id} only). A CIBA client is never public, so neither is refused
+     * here, before any request.
+     */
+    private void appendCibaClientAuth(FormBody.Builder form, String operation) {
+        form.add("client_id", requireOidcClientId());
+        if (oidcClientSecret != null) {
+            form.add("client_secret", oidcClientSecret.expose());
+        } else if (!presentsClientCertificate) {
+            throw new AuthError(operation + " requires client authentication: a CIBA client is never public "
+                    + "— build the client with Builder.oidcClientSecret(...) or a §6.1 client certificate "
+                    + "(CONTRACT.md §33.1)");
+        }
+    }
+
+    /**
+     * {@code POST /oauth2/bc-authorize} (CIBA Core &sect;7, CONTRACT.md &sect;33.1)
+     * &mdash; ask AXIAM to authenticate a user <strong>on another device</strong>.
+     *
+     * <p>The client authenticates by the credential this SDK was built with
+     * ({@code client_secret_post}, or the &sect;6.1 certificate for a
+     * {@code tls_client_auth} client, preferring
+     * {@code mtls_endpoint_aliases.backchannel_authentication_endpoint}); a client
+     * with neither is refused locally. {@code tenant_id} is a query parameter,
+     * never a body member. With {@link io.axiam.sdk.oidc.CibaInitiateRequest#signer()}
+     * set, the form carries only the client authentication and {@code request}.
+     *
+     * <p><strong>Never retried</strong> &mdash; not on a transport error, a
+     * {@code 5xx} or a {@code 429} (&sect;33.7 rule 1): every accepted call stores a
+     * request and may notify a person. On a lost answer, let it expire and ask
+     * again deliberately.
+     *
+     * <p><strong>A success proves nothing about the user</strong> (&sect;33.3 rule
+     * 4): AXIAM answers an unknown, locked or ineligible user exactly like a real
+     * one, and the only signal that nobody answered is {@code expired_token}.
+     *
+     * @param request what to send
+     * @return the request's id, lifetime and polling interval
+     * @throws AuthError when the client has no credential, or the server advertises no CIBA endpoint
+     * @throws io.axiam.sdk.errors.ValidationError for a ping-mode request without a
+     *         {@code client_notification_token} (no request sent)
+     * @throws OAuthProtocolError for any answer carrying an {@code error} member &mdash;
+     *         e.g. {@code invalid_binding_message} with its description, or a {@code 429}
+     *         {@code rate_limit_exceeded}
+     * @throws NetworkError on a transport failure or a bodiless {@code 5xx}
+     */
+    public io.axiam.sdk.oidc.CibaInitiateResponse cibaInitiate(io.axiam.sdk.oidc.CibaInitiateRequest request) {
+        ensureOpen();
+        FormBody.Builder form = new FormBody.Builder();
+        appendCibaClientAuth(form, "cibaInitiate");
+        Sensitive notification = request.clientNotificationToken();
+        if (request.pingMode() && (notification == null || notification.expose().isEmpty())) {
+            throw io.axiam.sdk.internal.LocalRefusal.of("ciba_initiate", "client_notification_token",
+                    "a ping-mode request needs a client_notification_token: without one AXIAM has nothing "
+                            + "to ping with (CONTRACT.md §33.2)");
+        }
+        OidcConfiguration config = request.configuration() != null ? request.configuration() : oidcDiscover();
+        String endpoint = preferredEndpointOrNull(config,
+                MtlsEndpointAliases::backchannel_authentication_endpoint,
+                config.backchannel_authentication_endpoint());
+        if (endpoint == null || endpoint.isEmpty()) {
+            throw new AuthError("the authorization server's discovery document advertises no "
+                    + "backchannel_authentication_endpoint: this server does not support CIBA "
+                    + "(CONTRACT.md §33.1)");
+        }
+        String url = oauth2Url(endpoint, request.tenantId());
+        io.axiam.sdk.oidc.CibaRequestSigner signer = request.signer();
+        if (signer != null) {
+            form.add("request", signer.sign(requireOidcClientId(), config.issuer(), request.members()).expose());
+        } else {
+            request.members().forEach((member, value) -> form.add(member, String.valueOf(value)));
+        }
+        Request http = new Request.Builder().url(url).post(form.build()).build();
+        try (Response response = sendOnceHttpClient.newCall(http).execute()) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response, "cibaInitiate failed");
+            }
+            JsonNode wire = readJson(response);
+            if (!wire.path("auth_req_id").isTextual()) {
+                throw new NetworkError("cibaInitiate: the response carries no auth_req_id");
+            }
+            long interval = wire.path("interval").asLong(0);
+            return new io.axiam.sdk.oidc.CibaInitiateResponse(
+                    Sensitive.of(wire.get("auth_req_id").asText()),
+                    wire.path("expires_in").asLong(0),
+                    interval > 0 ? interval : DEFAULT_CIBA_INTERVAL_SECONDS,
+                    java.time.Instant.now());
+        } catch (IOException e) {
+            throw new NetworkError("cibaInitiate request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #cibaInitiate(io.axiam.sdk.oidc.CibaInitiateRequest)};
+     * never retried, like its twin.
+     *
+     * @param request what to send
+     * @return a future resolving to the initiate response
+     */
+    public CompletableFuture<io.axiam.sdk.oidc.CibaInitiateResponse> cibaInitiateAsync(
+            io.axiam.sdk.oidc.CibaInitiateRequest request) {
+        return CompletableFuture.supplyAsync(() -> cibaInitiate(request));
+    }
+
+    /**
+     * {@code POST /oauth2/token} with {@code grant_type=urn:openid:params:grant-type:ciba}
+     * (CIBA Core &sect;10.1, CONTRACT.md &sect;33.1) &mdash; <strong>one</strong> token
+     * request.
+     *
+     * <p>The answers of &sect;33.3 rule 6 surface as {@link OAuthProtocolError}:
+     * {@code authorization_pending} and {@code slow_down} (non-terminal),
+     * {@code access_denied} and {@code expired_token} (terminal and distinct &mdash;
+     * {@link OAuthProtocolError#isAccessDenied()}, {@link OAuthProtocolError#isExpiredToken()}),
+     * {@code invalid_grant}; none is retried. A transport failure, a {@code 5xx}, a
+     * {@code 408} or a bodiless {@code 429} is retried per &sect;16 within the call.
+     * A {@code 200} is the &sect;12 token set, its ID token validated (no nonce).
+     *
+     * <p><strong>Store the returned tokens before anything else</strong>: a request
+     * is redeemed once, and a second {@code cibaPoll} for it is {@code invalid_grant}
+     * (&sect;33.7 rule 7). The token set is not adopted as this client's credential.
+     *
+     * @param authReqId     the {@code auth_req_id} from the initiate response or a ping
+     * @param tenantId      the tenant for the {@code tenant_id} query parameter, or {@code null}
+     * @param configuration a pre-fetched discovery document, or {@code null} to discover
+     * @return the token set
+     * @throws AuthError when the client has no credential (no request sent)
+     * @throws OAuthProtocolError for the protocol answers above
+     * @throws NetworkError when a transient failure outlived &sect;16's retries
+     */
+    public OidcTokenSet cibaPoll(Sensitive authReqId, @Nullable UUID tenantId,
+                                 @Nullable OidcConfiguration configuration) {
+        ensureOpen();
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", CIBA_GRANT_TYPE)
+                .add("auth_req_id", authReqId.expose());
+        appendCibaClientAuth(form, "cibaPoll");
+        FormBody body = form.build();
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        String url = oauth2Url(preferredEndpoint(config, MtlsEndpointAliases::token_endpoint,
+                config.token_endpoint()), tenantId);
+        JsonNode wire = io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "ciba_poll", n -> {
+            Request request = new Request.Builder().url(url).post(body).build();
+            Response response;
+            try {
+                response = httpClient.newCall(request).execute();
+            } catch (IOException e) {
+                throw new io.axiam.sdk.internal.StatusRetry.Transient(
+                        new NetworkError("cibaPoll request failed: " + e.getMessage(), e), 0);
+            }
+            try (response) {
+                if (!response.isSuccessful()) {
+                    RuntimeException err = ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response,
+                            "cibaPoll failed");
+                    // The protocol answers are decisive, and so is any other 4xx but 408/429.
+                    if (!(err instanceof OAuthProtocolError)
+                            && io.axiam.sdk.internal.StatusRetry.retryableStatus(response.code())) {
+                        throw new io.axiam.sdk.internal.StatusRetry.Transient(err,
+                                io.axiam.sdk.internal.StatusRetry.retryAfterMillis(response));
+                    }
+                    throw err;
+                }
+                // §33.7 rule 7: a 200 whose body does not parse is not retried —
+                // the server may already have redeemed the request.
+                return readJson(response);
+            }
+        });
+        return buildTokenSet(wire, config, null);
+    }
+
+    /** {@link #cibaPoll(Sensitive, UUID, OidcConfiguration)} with the client's tenant and a discovered document.
+     *
+     * @param authReqId the {@code auth_req_id}
+     * @return the token set
+     */
+    public OidcTokenSet cibaPoll(Sensitive authReqId) {
+        return cibaPoll(authReqId, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #cibaPoll(Sensitive, UUID, OidcConfiguration)}.
+     *
+     * @param authReqId     the {@code auth_req_id}
+     * @param tenantId      the tenant for the {@code tenant_id} query parameter, or {@code null}
+     * @param configuration a pre-fetched discovery document, or {@code null} to discover
+     * @return a future resolving to the token set
+     */
+    public CompletableFuture<OidcTokenSet> cibaPollAsync(Sensitive authReqId, @Nullable UUID tenantId,
+                                                         @Nullable OidcConfiguration configuration) {
+        return CompletableFuture.supplyAsync(() -> cibaPoll(authReqId, tenantId, configuration));
+    }
+
+    /**
+     * Polls for {@code initiated}'s outcome until it is decided or expires
+     * (CONTRACT.md &sect;33.1, &sect;33.7). Surfaces nothing to the user &mdash; AXIAM
+     * notified them.
+     *
+     * <ul>
+     *   <li>The first poll waits one {@code interval}; polling earlier only earns
+     *       {@code slow_down} and a longer wait.</li>
+     *   <li>{@code slow_down} adds 5 s to the interval, cumulatively and permanently;
+     *       {@code authorization_pending} never lowers it.</li>
+     *   <li>A transport failure, a {@code 5xx} or a {@code 429}
+     *       ({@code rate_limit_exceeded}) that outlived {@link #cibaPoll}'s own
+     *       &sect;16 retries is not terminal: the loop waits one interval and polls
+     *       again.</li>
+     *   <li>Polling stops at {@code receivedAt + expiresIn}, even if the server has
+     *       not said {@code expired_token}; the same {@code expired_token}
+     *       ({@link OAuthProtocolError#isExpiredToken()}) is then raised locally,
+     *       without a request.</li>
+     * </ul>
+     *
+     * <p>Returns the token set without adopting it as this client's credential
+     * &mdash; the posture of {@code deviceLogin} and {@code loginClientCredentials}.
+     *
+     * <p><strong>Ping mode</strong>: do not loop. Call {@link #cibaPoll} once from the
+     * handler that received the ping ({@link #cibaHandlePing}), once more at
+     * {@code interval} if that answered {@code slow_down} or
+     * {@code authorization_pending}, and fall back to this loop only once half of
+     * {@code expiresIn} has passed without a ping (&sect;33.7 rule 6).
+     *
+     * @param initiated     what {@link #cibaInitiate} returned
+     * @param tenantId      the tenant for the {@code tenant_id} query parameter, or {@code null}
+     * @param configuration a pre-fetched discovery document, or {@code null} to discover
+     * @param clock         the clock to wait on, or {@code null} for {@link io.axiam.sdk.oidc.CibaClock#system()}
+     * @return the token set
+     * @throws OAuthProtocolError on a terminal answer &mdash; {@code access_denied},
+     *         {@code expired_token} (also the local deadline), {@code invalid_grant}, &hellip;
+     * @throws NetworkError if the wait is interrupted
+     */
+    public OidcTokenSet cibaAwait(io.axiam.sdk.oidc.CibaInitiateResponse initiated, @Nullable UUID tenantId,
+                                  @Nullable OidcConfiguration configuration,
+                                  io.axiam.sdk.oidc.@Nullable CibaClock clock) {
+        io.axiam.sdk.oidc.CibaClock waitOn = clock != null ? clock : io.axiam.sdk.oidc.CibaClock.system();
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        java.time.Instant deadline = initiated.receivedAt().plusSeconds(initiated.expiresIn());
+        long interval = initiated.interval() > 0 ? initiated.interval() : DEFAULT_CIBA_INTERVAL_SECONDS;
+        while (true) {
+            Duration wait = Duration.ofSeconds(interval);
+            if (!waitOn.now().plus(wait).isBefore(deadline)) {
+                throw new OAuthProtocolError("expired_token",
+                        "the CIBA request expired before it was decided (client-side deadline from "
+                                + "expires_in; CONTRACT.md §33.7 rule 4)");
+            }
+            try {
+                waitOn.sleep(wait);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new NetworkError("CIBA polling was interrupted", e);
+            }
+            try {
+                return cibaPoll(initiated.authReqId(), tenantId, config);
+            } catch (OAuthProtocolError e) {
+                switch (e.error()) {
+                    case "authorization_pending", "rate_limit_exceeded" -> {
+                        // §33.3 rule 13: a 429's rate_limit_exceeded is never terminal.
+                    }
+                    case "slow_down" -> interval += CIBA_SLOW_DOWN_INCREMENT_SECONDS;
+                    default -> throw e;
+                }
+            } catch (NetworkError e) {
+                // §33.7 rule 5: an approved request must survive a server restart.
+            }
+        }
+    }
+
+    /** {@link #cibaAwait(io.axiam.sdk.oidc.CibaInitiateResponse, UUID, OidcConfiguration, io.axiam.sdk.oidc.CibaClock)}
+     * with the client's tenant, a discovered document and the system clock.
+     *
+     * @param initiated what {@link #cibaInitiate} returned
+     * @return the token set
+     */
+    public OidcTokenSet cibaAwait(io.axiam.sdk.oidc.CibaInitiateResponse initiated) {
+        return cibaAwait(initiated, null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #cibaAwait(io.axiam.sdk.oidc.CibaInitiateResponse)}.
+     *
+     * @param initiated what {@link #cibaInitiate} returned
+     * @return a future resolving to the token set
+     */
+    public CompletableFuture<OidcTokenSet> cibaAwaitAsync(io.axiam.sdk.oidc.CibaInitiateResponse initiated) {
+        return CompletableFuture.supplyAsync(() -> cibaAwait(initiated));
+    }
+
+    /**
+     * Checks a ping AXIAM delivered to your notification endpoint and returns the
+     * {@code auth_req_id} it names (CIBA Core &sect;10.2, CONTRACT.md &sect;33.1).
+     * <strong>No I/O</strong>, synchronous.
+     *
+     * <ol>
+     *   <li>Exactly one {@code Authorization} header (name matched in any case):
+     *       {@code Bearer} (any case), one space, and {@code expectedToken} &mdash;
+     *       compared in constant time ({@link java.security.MessageDigest#isEqual}).
+     *       Anything else is an {@link AuthError} whose message names no value.</li>
+     *   <li>A JSON object with a non-empty string {@code auth_req_id}; any other
+     *       member is ignored. Anything else is a local
+     *       {@link io.axiam.sdk.errors.ValidationError}.</li>
+     * </ol>
+     *
+     * <p>It neither answers the HTTP request nor calls the token endpoint: answer
+     * {@code 204} as soon as this returns, <strong>then</strong> {@link #cibaPoll}
+     * &mdash; AXIAM retries a ping that is not answered quickly, and the ping says
+     * only that the request was decided, never how. Nor does it check that the
+     * {@code auth_req_id} is one you issued: the token endpoint answers
+     * {@code invalid_grant} for any other.
+     *
+     * @param headers       the request's headers as name/value pairs, repeats included
+     * @param body          the request's raw body
+     * @param expectedToken the {@code client_notification_token} you sent with the request
+     * @return the {@code auth_req_id}, wrapped
+     * @throws AuthError when the bearer is not exactly the expected one
+     * @throws io.axiam.sdk.errors.ValidationError when the body is not a ping body
+     */
+    public Sensitive cibaHandlePing(List<Map.Entry<String, String>> headers, byte[] body, Sensitive expectedToken) {
+        AuthError refused = new AuthError("CIBA ping refused: the Authorization header is not the expected "
+                + "bearer (CONTRACT.md §33.1)");
+        String value = null;
+        int found = 0;
+        for (Map.Entry<String, String> header : headers) {
+            if (header.getKey() != null && "authorization".equalsIgnoreCase(header.getKey())) {
+                found++;
+                value = header.getValue();
+            }
+        }
+        if (found != 1 || value == null) {
+            throw refused;
+        }
+        int space = value.indexOf(' ');
+        if (space < 0 || !"bearer".equalsIgnoreCase(value.substring(0, space))) {
+            throw refused;
+        }
+        byte[] presented = value.substring(space + 1).getBytes(StandardCharsets.UTF_8);
+        byte[] expected = expectedToken.expose().getBytes(StandardCharsets.UTF_8);
+        if (expected.length == 0 || presented.length == 0
+                || !java.security.MessageDigest.isEqual(presented, expected)) {
+            throw refused;
+        }
+        JsonNode parsed;
+        try {
+            parsed = MAPPER.readTree(body);
+        } catch (IOException e) {
+            throw io.axiam.sdk.internal.LocalRefusal.of("ciba_handle_ping", "body", "the ping body is not JSON");
+        }
+        JsonNode id = parsed == null ? null : parsed.get("auth_req_id");
+        if (parsed == null || !parsed.isObject() || id == null || !id.isTextual() || id.asText().isEmpty()) {
+            throw io.axiam.sdk.internal.LocalRefusal.of("ciba_handle_ping", "auth_req_id",
+                    "the ping body carries no non-empty auth_req_id string");
+        }
+        return Sensitive.of(id.asText());
+    }
+
+    /**
+     * {@link #cibaHandlePing(List, byte[], Sensitive)} over a multi-valued header map
+     * &mdash; the shape a servlet container or Spring's {@code HttpHeaders} hands you.
+     *
+     * @param headers       the request's headers, each name to its values
+     * @param body          the request's raw body
+     * @param expectedToken the {@code client_notification_token} you sent with the request
+     * @return the {@code auth_req_id}, wrapped
+     */
+    public Sensitive cibaHandlePing(Map<String, List<String>> headers, byte[] body, Sensitive expectedToken) {
+        List<Map.Entry<String, String>> pairs = new ArrayList<>();
+        headers.forEach((name, values) -> {
+            for (String v : values) {
+                pairs.add(new java.util.AbstractMap.SimpleImmutableEntry<>(name, v));
+            }
+        });
+        return cibaHandlePing(pairs, body, expectedToken);
     }
 
     // ------------------------------------------------------------------

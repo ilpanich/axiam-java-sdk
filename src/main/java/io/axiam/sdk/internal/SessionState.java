@@ -68,7 +68,10 @@ public final class SessionState {
      * {@link #REFRESH_PATH} is already special-cased for the same reason.
      */
     private static final java.util.Set<String> OAUTH2_SKIP_REFRESH_PATHS =
-            java.util.Set.of("/oauth2/token", "/oauth2/introspect", "/oauth2/revoke");
+            java.util.Set.of("/oauth2/token", "/oauth2/introspect", "/oauth2/revoke",
+                    // CONTRACT.md §33.4: a 401 at bc-authorize is the client's
+                    // credential, never a session expiry.
+                    "/oauth2/bc-authorize");
 
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -200,13 +203,14 @@ public final class SessionState {
     }
 
     /**
-     * Checks whether {@code encodedPath} is one of the three {@code /oauth2/*}
+     * Checks whether {@code encodedPath} is one of the four {@code /oauth2/*}
      * paths that must never enter the &sect;9 single-flight refresh guard
-     * (CONTRACT.md &sect;12.3 rule 3).
+     * (CONTRACT.md &sect;12.3 rule 3, &sect;33.4).
      *
      * @param encodedPath a request URL's encoded path
      * @return {@code true} if {@code encodedPath} is {@code /oauth2/token},
-     *         {@code /oauth2/introspect}, or {@code /oauth2/revoke}
+     *         {@code /oauth2/introspect}, {@code /oauth2/revoke} or
+     *         {@code /oauth2/bc-authorize}
      */
     public static boolean isOauth2SkipRefreshPath(String encodedPath) {
         return OAUTH2_SKIP_REFRESH_PATHS.contains(encodedPath);
