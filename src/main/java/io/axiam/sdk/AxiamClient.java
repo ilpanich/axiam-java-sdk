@@ -250,6 +250,21 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     private final boolean presentsClientCertificate;
 
+    /**
+     * {@link #httpClient} without the session: no cookie jar, no
+     * {@code AuthInterceptor}/{@code AuthAuthenticator}, no redirects, no
+     * OkHttp connection-failure retry (CONTRACT.md &sect;28.12.2 rule 3).
+     * Same TLS configuration and connection pool.
+     */
+    private final OkHttpClient sessionlessHttpClient;
+
+    /**
+     * {@link #httpClient} with OkHttp's silent connection-failure retry off:
+     * every session decoration is kept, but a request is put on the wire at
+     * most once (CONTRACT.md &sect;33.7 rule 1, {@code cibaInitiate}).
+     */
+    private final OkHttpClient sendOnceHttpClient;
+
     /** §18 shutdown flag, read on every operation. */
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -703,6 +718,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         this.httpClient = clientBuilder.build();
         this.session.attachHttpClient(this.httpClient);
+        this.sessionlessHttpClient = io.axiam.sdk.internal.Sessionless.of(this.httpClient);
+        this.sendOnceHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false).build();
     }
 
     /**
@@ -722,6 +739,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.actingTenant = actingTenant;
         this.customCaPem = other.customCaPem;
         this.httpClient = other.httpClient;
+        this.sessionlessHttpClient = other.sessionlessHttpClient;
+        this.sendOnceHttpClient = other.sendOnceHttpClient;
         this.refreshGuard = other.refreshGuard;
         this.jwksVerifier = other.jwksVerifier;
         this.session = other.session;
@@ -960,6 +979,16 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public OkHttpClient okHttpClient() {
         return httpClient;
+    }
+
+    /** Whether the CONTRACT.md &sect;16 retry policy is on for this client
+     * ({@link Builder#retryDisabled()} turns it off). Read by helpers built over
+     * this client, e.g. the {@code SsfReceiver}.
+     *
+     * @return {@code true} unless retries were disabled
+     */
+    public boolean retryEnabled() {
+        return retryEnabled;
     }
 
     /** Returns the configured custom CA certificate, if any.
@@ -4105,6 +4134,251 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
 
+
+    // ------------------------------------------------------------------
+    // §28.12 RFC 7592 client configuration (contract 1.53)
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code GET registration_client_uri} (RFC 7592 &sect;2.1, CONTRACT.md
+     * &sect;28.12) &mdash; read this client's own registration.
+     *
+     * <p>The result carries neither the token nor the client secret (the server
+     * never returns them on a read), and every member an update needs, so the
+     * usual update is "read, change a field, update".
+     *
+     * <p>{@code registrationClientUri} is used verbatim, query included, and
+     * <strong>only at this client's configured AXIAM origin</strong>: a URI whose
+     * scheme, host or port differs from the base URL &mdash; or an {@code http}
+     * URI unless the base URL is itself {@code http} on a loopback host &mdash; is
+     * refused before any request (&sect;28.12.2 rule 1). The token is a bearer,
+     * and a helper that followed a URI elsewhere would hand it to whoever wrote
+     * the URI.
+     *
+     * <p>The request carries {@code Authorization: Bearer <token>} and nothing
+     * of this client's session: no cookie, no SDK access token, no CSRF header,
+     * no redirect followed, and a {@code 401} never enters the &sect;9 refresh
+     * guard (rules 2&ndash;3). Retried per &sect;16 on a transport failure, a
+     * {@code 5xx}, a {@code 408} or a {@code 429}, never on another {@code 4xx}.
+     *
+     * @param registrationClientUri   the {@code registration_client_uri} the registration returned
+     * @param registrationAccessToken the registration's bearer token
+     * @return the registration
+     * @throws io.axiam.sdk.errors.ValidationError if the URI is refused by rule 1 (no request sent)
+     * @throws OAuthProtocolError on any answer carrying an {@code error} member &mdash;
+     *         {@code invalid_token} for an unknown client, a wrong or rotated-away token,
+     *         another tenant's client or a client with no token (the server never says which)
+     * @throws NetworkError on a transport failure, {@code 429} or {@code 5xx}
+     */
+    public io.axiam.sdk.oidc.ClientRegistration readClientRegistration(
+            String registrationClientUri, Sensitive registrationAccessToken) {
+        ensureOpen();
+        HttpUrl url = checkRegistrationUri(registrationClientUri, "read_client_registration");
+        return io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "read_client_registration", n -> {
+            Request request = new Request.Builder().url(url).get()
+                    .header("Authorization", "Bearer " + registrationAccessToken.expose())
+                    .header("Accept", "application/json")
+                    .build();
+            Response response;
+            try {
+                response = sessionlessHttpClient.newCall(request).execute();
+            } catch (IOException e) {
+                throw new io.axiam.sdk.internal.StatusRetry.Transient(
+                        new NetworkError("read_client_registration request failed: " + e.getMessage(), e), 0);
+            }
+            try (response) {
+                if (!response.isSuccessful()) {
+                    RuntimeException err = ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response,
+                            "read_client_registration failed");
+                    if (!(err instanceof OAuthProtocolError)
+                            && io.axiam.sdk.internal.StatusRetry.retryableStatus(response.code())) {
+                        throw new io.axiam.sdk.internal.StatusRetry.Transient(err,
+                                io.axiam.sdk.internal.StatusRetry.retryAfterMillis(response));
+                    }
+                    throw err;
+                }
+                return io.axiam.sdk.oidc.ClientRegistration.fromJson(readJson(response));
+            }
+        });
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #readClientRegistration(String, Sensitive)}.
+     *
+     * @param registrationClientUri   the {@code registration_client_uri}
+     * @param registrationAccessToken the registration's bearer token
+     * @return a future resolving to the registration
+     */
+    public CompletableFuture<io.axiam.sdk.oidc.ClientRegistration> readClientRegistrationAsync(
+            String registrationClientUri, Sensitive registrationAccessToken) {
+        return CompletableFuture.supplyAsync(
+                () -> readClientRegistration(registrationClientUri, registrationAccessToken));
+    }
+
+    /**
+     * {@code PUT registration_client_uri} (RFC 7592 &sect;2.2, CONTRACT.md
+     * &sect;28.12) &mdash; <strong>replace</strong> this client's registration, and
+     * receive a <strong>rotated</strong> token.
+     *
+     * <p>{@code metadata} is the <strong>whole</strong> registration: a member it
+     * omits is a member the server deletes. Start from
+     * {@link #readClientRegistration}'s result, which carries every member
+     * ({@code jwks}/{@code jwks_uri} and members this SDK does not name included),
+     * and change what you mean to change ({@link io.axiam.sdk.oidc.ClientRegistration#toBuilder()}).
+     * The SDK sets {@code client_id} to {@code metadata.clientId()} and never sends
+     * {@code registration_access_token}, {@code registration_client_uri},
+     * {@code client_secret_expires_at}, {@code client_id_issued_at} or
+     * {@code client_secret} (rule 4).
+     *
+     * <p><strong>Persist the returned {@code registrationAccessToken()} before doing
+     * anything else.</strong> From the moment the server answers it is the only
+     * valid token: the one you presented is dead for every operation (rule 5).
+     *
+     * <p><strong>Never retried</strong> &mdash; not on a transport error, not on a
+     * {@code 5xx}. An update that reached the server and lost its response has
+     * already rotated the token; repeating it with the old one is a {@code 401}
+     * that locks you out of your own registration. On a lost answer, read the
+     * registration with the token you hold: a {@code 401} means the update landed.
+     *
+     * <p>Same origin rule and same session-free request as {@link #readClientRegistration}.
+     *
+     * @param registrationClientUri   the {@code registration_client_uri}
+     * @param registrationAccessToken the registration's current bearer token
+     * @param metadata                the whole replacement registration
+     * @return the registration as stored, carrying the rotated token
+     * @throws io.axiam.sdk.errors.ValidationError if the URI is refused by rule 1 (no request sent)
+     * @throws OAuthProtocolError on any answer carrying an {@code error} member, e.g.
+     *         {@code invalid_client_metadata}, {@code invalid_redirect_uri}, {@code invalid_token}
+     * @throws NetworkError on a transport failure, {@code 429} or {@code 5xx}
+     */
+    public io.axiam.sdk.oidc.ClientRegistration updateClientRegistration(
+            String registrationClientUri, Sensitive registrationAccessToken,
+            io.axiam.sdk.oidc.ClientRegistration metadata) {
+        ensureOpen();
+        HttpUrl url = checkRegistrationUri(registrationClientUri, "update_client_registration");
+        byte[] body;
+        try {
+            body = MAPPER.writeValueAsBytes(metadata.updateBody());
+        } catch (IOException e) {
+            throw new NetworkError("update_client_registration: could not encode the request body", e);
+        }
+        Request request = new Request.Builder().url(url).put(RequestBody.create(body, JSON))
+                .header("Authorization", "Bearer " + registrationAccessToken.expose())
+                .header("Accept", "application/json")
+                .build();
+        try (Response response = sessionlessHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response,
+                        "update_client_registration failed");
+            }
+            return io.axiam.sdk.oidc.ClientRegistration.fromJson(readJson(response));
+        } catch (IOException e) {
+            throw new NetworkError("update_client_registration request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of
+     * {@link #updateClientRegistration(String, Sensitive, io.axiam.sdk.oidc.ClientRegistration)}.
+     * Never retried, like its twin: persist the rotated token it resolves to.
+     *
+     * @param registrationClientUri   the {@code registration_client_uri}
+     * @param registrationAccessToken the registration's current bearer token
+     * @param metadata                the whole replacement registration
+     * @return a future resolving to the stored registration, carrying the rotated token
+     */
+    public CompletableFuture<io.axiam.sdk.oidc.ClientRegistration> updateClientRegistrationAsync(
+            String registrationClientUri, Sensitive registrationAccessToken,
+            io.axiam.sdk.oidc.ClientRegistration metadata) {
+        return CompletableFuture.supplyAsync(
+                () -> updateClientRegistration(registrationClientUri, registrationAccessToken, metadata));
+    }
+
+    /**
+     * {@code DELETE registration_client_uri} (RFC 7592 &sect;2.3, CONTRACT.md
+     * &sect;28.12) &mdash; delete this client's registration. A {@code 204} returns
+     * normally.
+     *
+     * <p><strong>Never retried</strong>: a retry after a lost {@code 204} would read
+     * {@code 401} and report a successful deletion as a failure (rule 5). Same
+     * origin rule and same session-free request as {@link #readClientRegistration};
+     * no body is sent.
+     *
+     * @param registrationClientUri   the {@code registration_client_uri}
+     * @param registrationAccessToken the registration's bearer token
+     * @throws io.axiam.sdk.errors.ValidationError if the URI is refused by rule 1 (no request sent)
+     * @throws OAuthProtocolError on any answer carrying an {@code error} member
+     * @throws NetworkError on a transport failure, {@code 429} or {@code 5xx}
+     */
+    public void deleteClientRegistration(String registrationClientUri, Sensitive registrationAccessToken) {
+        ensureOpen();
+        HttpUrl url = checkRegistrationUri(registrationClientUri, "delete_client_registration");
+        Request request = new Request.Builder().url(url).delete()
+                .header("Authorization", "Bearer " + registrationAccessToken.expose())
+                .build();
+        try (Response response = sessionlessHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response,
+                        "delete_client_registration failed");
+            }
+        } catch (IOException e) {
+            throw new NetworkError("delete_client_registration request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** {@code CompletableFuture} async twin of {@link #deleteClientRegistration(String, Sensitive)}.
+     *
+     * @param registrationClientUri   the {@code registration_client_uri}
+     * @param registrationAccessToken the registration's bearer token
+     * @return a future completing when the registration is deleted
+     */
+    public CompletableFuture<Void> deleteClientRegistrationAsync(
+            String registrationClientUri, Sensitive registrationAccessToken) {
+        return CompletableFuture.runAsync(
+                () -> deleteClientRegistration(registrationClientUri, registrationAccessToken));
+    }
+
+    /**
+     * &sect;28.12.2 rule 1: accept {@code uri} only at this client's configured
+     * origin (scheme, lower-cased host, port-or-default), and {@code http} only
+     * when the base URL is itself {@code http} on a loopback host. The refusal
+     * names no part of the URI: it is caller input, and an error message is the
+     * line most often logged.
+     */
+    private HttpUrl checkRegistrationUri(String uri, String operation) {
+        URI parsed;
+        try {
+            parsed = new URI(uri);
+        } catch (java.net.URISyntaxException | NullPointerException e) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "registration_client_uri",
+                    "not an absolute URL (CONTRACT.md §28.12.2 rule 1)");
+        }
+        String scheme = parsed.getScheme() == null ? "" : parsed.getScheme().toLowerCase(Locale.ROOT);
+        if (!"https".equals(scheme) && !"http".equals(scheme) || parsed.getHost() == null) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "registration_client_uri",
+                    "must be an absolute https URL (CONTRACT.md §28.12.2 rule 1)");
+        }
+        if (!normalizeOrigin(uri).equals(normalizeOrigin(baseUrl))) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "registration_client_uri",
+                    "not at the configured AXIAM origin: scheme, host and port must match the client's "
+                            + "base URL (CONTRACT.md §28.12.2 rule 1)");
+        }
+        String baseHost = URI.create(baseUrl).getHost();
+        if ("http".equals(scheme) && !isLoopbackHost(baseHost)) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "registration_client_uri",
+                    "must be https unless the base URL is http on a loopback host "
+                            + "(CONTRACT.md §28.12.2 rule 1)");
+        }
+        HttpUrl url = HttpUrl.parse(uri);
+        if (url == null) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "registration_client_uri",
+                    "not an absolute URL (CONTRACT.md §28.12.2 rule 1)");
+        }
+        return url;
+    }
+
+    private static boolean isLoopbackHost(@Nullable String host) {
+        return host != null && ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)
+                || "::1".equals(host) || "[::1]".equals(host));
+    }
 
     // ------------------------------------------------------------------
     // §26 Pushed Authorization Requests (RFC 9126)
