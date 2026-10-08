@@ -63,6 +63,173 @@ IMPLICIT_TENANT_NAMESPACES = {
 # know. Each gains a decode-only `<Name>Unknown` arm (see emit_union).
 OPEN_UNIONS = {"ScimTargetAuth", "ScimTargetScope"}
 
+# Sparse-body members where an explicit `null` is a different request from an
+# absent member (§27.4 rule 5, "null is not absent"). §30.2 names exactly two:
+# on `UpdateDirectoryConfig`, `null` clears the value and absence keeps it.
+# They are generated as `@Nullable JsonNullable<T>`: a Java null is absent
+# (omitted by NON_NULL), `JsonNullable.ofNull()` sends `null`. A name list
+# rather than a schema rule, because the export spells every optional member
+# `["string", "null"]` and cannot say which ones `null` clears.
+#
+# §29.8 test 8 asks the same of a *response*: `SamlIdpInfo`'s two credential
+# ids are null when the slot is empty, and that null must stay distinct from an
+# absent member, so a server that stopped sending the member is noticed.
+EXPLICIT_NULL_FIELDS = {
+    ("UpdateDirectoryConfig", "group_base_dn"),
+    ("UpdateDirectoryConfig", "group_filter"),
+    ("SamlIdpInfo", "active_credential_id"),
+    ("SamlIdpInfo", "next_credential_id"),
+}
+
+# Call-site documentation the contract makes an SDK repeat (§29.3, §30.3,
+# §31.3, §32.2). Generated rather than hand-written because the methods are
+# generated; keyed by the registry's namespace-qualified operation name.
+# `**x**` renders as <strong>.
+CALL_SITE_NOTES: dict[str, str] = {
+    "directory.set": (
+        "**Moving the connection requires the secret again** (§30.3 rule 2): a "
+        "`set` that changes `url`, `start_tls`, `bind_dn` or `trust_anchors_pem` "
+        "without `bind_secret` is refused `400` and changes nothing. The SDK holds "
+        "no copy of the secret and cannot re-send one for you. `bind_secret` is "
+        "required while the tenant has no configuration; otherwise absent keeps the "
+        "stored secret. Every other optional member left out is **reset to its "
+        "default**. An enabled directory and an effective `opaque_mode = required` "
+        "never coexist (`409`); without the deployment's directory key a write "
+        "carrying a secret is `503`."
+    ),
+    "directory.update": (
+        "**Moving the connection requires the secret again** (§30.3 rule 2): an "
+        "`update` that changes `url`, `start_tls`, `bind_dn` or `trust_anchors_pem` "
+        "without `bind_secret` is refused `400` and changes nothing; the SDK holds no "
+        "copy of the secret to re-send. A member left unset on the builder is not "
+        "sent and stays as stored; `groupBaseDn(null)` / `groupFilter(null)` send "
+        "`null` and clear the value. An enabled directory and an effective "
+        "`opaque_mode = required` never coexist (`409`)."
+    ),
+    "directory.delete": (
+        "**Deleting stops the directory, and only that** (§30.3 rule 5): directory "
+        "accounts can no longer sign in with a password — there is no fallback to a "
+        "local hash — and the sync stops. Sessions, refresh tokens and passkeys those "
+        "accounts already hold keep working until they expire or the accounts are "
+        "deactivated. There is no unlink: a linked account stays a directory account."
+    ),
+    "directory.link_account": (
+        "**Signs the account's owner out everywhere** (§30.3 rule 6): linking "
+        "deletes the account's WebAuthn credentials and federation links, revokes "
+        "its `User` certificates, all its sessions and its OAuth2 refresh tokens "
+        "(TOTP is kept). The entry is found by the account's own username; a repeat "
+        "on an already-linked account answers `was_already_linked` and repeats the "
+        "revocations."
+    ),
+    "saml.create_service_provider": (
+        "`sp_signing_cert_pem` must be RSA (2048 bits or more) or ECDSA on P-256, "
+        "P-384 or P-521; an **ECDSA certificate verifies HTTP-POST requests only** — "
+        "the HTTP-Redirect binding is RSA-only (§29.3 rule 2). `encrypt_assertions: "
+        "true` is refused while encryption is unimplemented. `entity_id` is unique "
+        "per tenant (`409`) and immutable once created."
+    ),
+    "saml.update_service_provider": (
+        "An omitted member takes its **default**, not its stored value: `enabled` "
+        "and `sign_responses` default to `true`, `name_id_format` to `persistent`, "
+        "the other flags to `false`, certificates and `slo_url` / `slo_binding` to "
+        "null, the lists to empty (§29.2). Start from `getServiceProvider` "
+        "(`ReplacementBodies.from(SamlServiceProvider)`). `entity_id` is immutable: "
+        "changing it is `400` — register a new service provider instead (§29.3 "
+        "rule 3). An ECDSA `sp_signing_cert_pem` verifies HTTP-POST requests only; "
+        "HTTP-Redirect is RSA-only."
+    ),
+    "saml.delete_service_provider": (
+        "Ends no session: users already signed in to the SP stay signed in there "
+        "until their SP session ends (§29.3 rule 5)."
+    ),
+    "saml.parse_sp_metadata": (
+        "**Parses and stores nothing** (§29.3 rule 6): the result is a draft to "
+        "review and pass to `createServiceProvider`. Exactly one of `metadata_xml` "
+        "and `metadata_url` must be set (`ParseSamlSpMetadata.fromXml` / "
+        "`fromUrl`); both or neither is refused locally with a `ValidationError`, "
+        "before any request. The metadata's own signature is not evaluated. `503` "
+        "in a server built without SAML."
+    ),
+    "saml.issue_idp_credential": (
+        "Generates an RSA-4096 key on the server, which takes seconds; the key is "
+        "never returned. An occupied slot is `409` (§29.3 rule 7)."
+    ),
+    "saml.promote_idp_credential": (
+        "`credential_id` must be the tenant's current `next` credential; in one "
+        "transaction the old `active` is retired — its key destroyed — and `next` "
+        "becomes `active` (§29.3 rule 7)."
+    ),
+    "saml.retire_idp_credential": (
+        "**Retiring the `active` credential with no successor stops SAML sign-on "
+        "for the whole tenant at once** (§29.3 rule 7) — it is the incident "
+        "response to a leaked key. The key is destroyed. The safe rotation is: issue "
+        "into `next`, wait until every SP has refreshed the metadata, then promote."
+    ),
+    "ssf.update_stream": (
+        "An omitted optional member takes its default (§32.2) — **except "
+        "`authorization_header`, which absent keeps the stored one** — unless the "
+        "update moves `endpoint_url` to another scheme, host or port while a header "
+        "is stored: then it must carry `authorization_header` again or "
+        "`clear_authorization_header: true`, else `400` (§32.3 rule 5). An update "
+        "overtaken by the receiver's own write is `409`: read the stream again. "
+        "`ReplacementBodies.from(SsfStream)` turns a read into the body."
+    ),
+    "scim_targets.create": (
+        "`credential` is required here (§31.3 rule 2). It is write-only: no "
+        "response ever carries it, and the SDK keeps no copy."
+    ),
+    "scim_targets.update": (
+        "**The credential is bound to its URL** (§31.3 rule 2): absent `credential` "
+        "keeps the stored one — except that changing `base_url` of a bearer "
+        "target, `auth.token_url` or `base_url` of a client-credentials target, or "
+        "`auth.type`, without `credential` in the same write is refused `400` and "
+        "changes nothing. The SDK holds no credential to re-send. Every other member "
+        "left out takes its default (`ReplacementBodies.from(ScimTargetResponse)` "
+        "turns a read into the body). An update overtaken by another "
+        "administrator's write is `409` (§31.3 rule 4): reload, then retry yourself."
+    ),
+    "scim_targets.delete": (
+        "**Deprovisions nothing downstream** (§31.3 rule 8): the users and groups "
+        "AXIAM created in the service provider stay there, and AXIAM no longer knows "
+        "them. To remove them, set `deprovision` to `delete`, let AXIAM push, and "
+        "only then delete the target."
+    ),
+    "scim_targets.reconcile": (
+        "Starts a reconciliation in the background and answers `202`; its outcome "
+        "is on the target's `state` (§31.3 rule 7). `409` while a run holds the "
+        "claim, within five minutes of the last one, or for a disabled target."
+    ),
+}
+
+# Local checks a generated operation runs before any I/O, by name of a static
+# method in the hand-written `ManagementChecks` taking the operation name and
+# the request body.
+PRECHECKS: dict[str, str] = {
+    "saml.parse_sp_metadata": "parseSpMetadataExactlyOne",
+}
+
+# The body the generated surface test sends to an operation with a PRECHECK —
+# the minimal body every other case uses would be refused locally.
+PRECHECK_TEST_BODIES: dict[str, str] = {
+    "saml.parse_sp_metadata":
+        'io.axiam.sdk.management.models.ParseSamlSpMetadata.fromUrl("https://sp.example/metadata")',
+}
+
+# Hand-picked static factories added to a generated record, where the contract
+# asks for a shape a builder alone does not make obvious (§29.2: exactly one of
+# two members).
+RECORD_FACTORIES: dict[str, list[tuple[str, str, str, str]]] = {
+    # (method, parameter, doc, constructor arguments)
+    "ParseSamlSpMetadata": [
+        ("fromUrl", "metadataUrl",
+         "A request for the server to fetch the SP's metadata from an https URL, "
+         "through its SSRF guard (§29.2).", "metadataUrl, null"),
+        ("fromXml", "metadataXml",
+         "A request carrying the SP's metadata document itself, at most 512 KiB "
+         "(§29.2).", "null, metadataXml"),
+    ],
+}
+
 # Schema names that would collide with a type this SDK already exports from its
 # package root. The generated surface is re-exported, so a duplicate name makes
 # one of the two unreachable.
@@ -574,6 +741,7 @@ def model_imports(rendered: str) -> list[str]:
         ("java.util.List", "List<"),
         ("java.util.UUID", "UUID"),
         ("io.axiam.sdk.Sensitive", "Sensitive"),
+        ("io.axiam.sdk.management.JsonNullable", "JsonNullable<"),
     ]
     return [fqn for fqn, token in wanted if token in rendered]
 
@@ -772,10 +940,14 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
         }
     fields = []
     for wire in sorted(props):
+        explicit_null = (schema_name, wire) in EXPLICIT_NULL_FIELDS
+        base_type = "Sensitive" if wire in secrets else java_type(props[wire])
         fields.append({
             "wire": wire,
             "name": member(wire),
-            "type": "Sensitive" if wire in secrets else java_type(props[wire]),
+            "type": f"JsonNullable<{base_type}>" if explicit_null else base_type,
+            "inner": base_type,
+            "explicit_null": explicit_null,
             # DEFAULT_TRUE_WHEN_ABSENT overrides the schema's own "required":
             # a server older than contract 1.51 omits `inherit` entirely, and
             # §27.13 S-10 rule 3 defines that absence as `true`, not a decode
@@ -784,7 +956,8 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
             # nothing downstream is told means `true`. Treating it as
             # optional here, with the inherits() helper emit_record adds
             # below, is what actually applies the rule.
-            "required": wire in required and wire not in DEFAULT_TRUE_WHEN_ABSENT,
+            "required": (wire in required and wire not in DEFAULT_TRUE_WHEN_ABSENT
+                         and not explicit_null),
             "doc": props[wire].get("description") or f"the server's {wire} field",
             "secret": wire in secrets,
         })
@@ -889,6 +1062,9 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
         if f["secret"]:
             doc += " -- SECRET: redacted from toString and from every JSON rendering except " \
                    "the one request body it is sent in"
+        if f["explicit_null"]:
+            doc += (" -- null is NOT absent here (§27.4 rule 5): a Java null means the member "
+                    "is absent, JsonNullable.ofNull() means it is JSON null")
         tags.append(f"@param {f['name']} {escape(' '.join(str(doc).split()))}")
 
     body: list[str] = []
@@ -907,6 +1083,7 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
         body.append(") {")
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
+        body.extend(emit_factories(name, type_name))
         if all_optional:
             body.extend(emit_builder(type_name, fields))
         body.append("}")
@@ -924,6 +1101,19 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
         header.extend(f"import {fqn};" for fqn in imports)
     header.append("")
     return "\n".join(header + [rendered]) + "\n"
+
+
+def emit_factories(name: str, type_name: str) -> list[str]:
+    """The RECORD_FACTORIES static methods for ``name``, if any."""
+    out: list[str] = []
+    for method, param, doc, args in RECORD_FACTORIES.get(name, []):
+        out.append("")
+        out.extend(javadoc(doc, "    ", [f"@param {param} the value to send",
+                                        f"@return a {type_name} carrying exactly that member"]))
+        out.append(f"    public static {type_name} {method}(String {param}) {{")
+        out.append(f"        return new {type_name}({args});")
+        out.append("    }")
+    return out
 
 
 def emit_builder(type_name: str, fields: list[dict[str, Any]]) -> list[str]:
@@ -956,6 +1146,20 @@ def emit_builder(type_name: str, fields: list[dict[str, Any]]) -> list[str]:
     lines.append("")
     for f in fields:
         bare = f["type"].replace("@Nullable ", "")
+        if f["explicit_null"]:
+            lines.extend(javadoc(
+                f"Sets {f['wire']}, where null is a value: `null` here sends "
+                f"JSON null, which clears the stored value (§27.4 rule 5). Not calling this "
+                f"leaves the member absent, which keeps it.",
+                "        ",
+                [f"@param {f['name']} the value to send, or null to send JSON null",
+                 "@return this builder"]))
+            lines.append(f"        public Builder {f['name']}(@Nullable {f['inner']} {f['name']}) {{")
+            lines.append(f"            this.{f['name']} = JsonNullable.of({f['name']});")
+            lines.append("            return this;")
+            lines.append("        }")
+            lines.append("")
+            continue
         lines.extend(javadoc(
             f"Sets {escape(f['wire'])}.",
             "        ",
@@ -1216,9 +1420,14 @@ def response_java(op: dict[str, Any]) -> tuple[str, str]:
     return model, f"ManagementSupport.convert(node, {model}.class, operation)"
 
 
-def operation_doc(op: dict[str, Any]) -> str:
+def operation_doc(op: dict[str, Any], canonical: str = "") -> str:
     """The Javadoc body for one generated operation."""
     text = f"Issues {op['method']} {op['path']}."
+    if canonical in CALL_SITE_NOTES:
+        # \x01/\x02 survive escape() and wrap(); emit_operation turns them
+        # into <strong>/</strong> once the comment is laid out.
+        note = re.sub(r"\*\*(.+?)\*\*", "\x01\\1\x02", CALL_SITE_NOTES[canonical])
+        text += "\n\n" + note
     if op["update_style"] == "replace":
         text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the "
                  "body is required, and what you do not carry over from a prior read is not "
@@ -1317,9 +1526,12 @@ def emit_operation(namespace: str, opname: str, op: dict[str, Any]) -> list[str]
     ])
 
     lines: list[str] = []
-    lines.extend(javadoc(operation_doc(op), "    ", tags))
+    lines.extend(line.replace("\x01", "<strong>").replace("\x02", "</strong>")
+                 for line in javadoc(operation_doc(op, canonical), "    ", tags))
     lines.append(f"    public {ret} {method_name}({signature}) {{")
     lines.append(f'        final String operation = "{canonical}";')
+    if canonical in PRECHECKS:
+        lines.append(f"        ManagementChecks.{PRECHECKS[canonical]}(operation, body);")
 
     route = op["path"]
     for p in op["path_params"]:
@@ -1590,7 +1802,12 @@ def call_arguments(namespace: str, opname: str, op: dict[str, Any],
     required_q, optional_q = split_query(op)
     args.extend('"example"' for _ in required_q)
     if op["request_body"] == "schema":
-        args.append(literal_for(op["request_schema"], secrets.get(op["request_schema"], set())))
+        canonical = f"{namespace}.{opname}"
+        if canonical in PRECHECK_TEST_BODIES:
+            # A body the operation's local check accepts (PRECHECKS).
+            args.append(PRECHECK_TEST_BODIES[canonical])
+        else:
+            args.append(literal_for(op["request_schema"], secrets.get(op["request_schema"], set())))
     elif op["request_body"] == "untyped":
         args.append("io.axiam.sdk.internal.ManagementTransport.reader().createObjectNode()")
     args.extend("null" for _ in optional_q)
@@ -1760,6 +1977,11 @@ def emit_sparse_test() -> str:
                 lines.append("                " + " ".join(row))
                 row = []
         lines.append(f"        assertKeys({MODELS_PACKAGE}.{type_name}.builder().build());")
+        for f in fields:
+            if f["explicit_null"]:
+                # §27.4 rule 5: null is not absent -- an explicit null is sent.
+                lines.append(f"        assertExplicitNull({MODELS_PACKAGE}.{type_name}.builder()"
+                             f".{f['name']}(null).build(), \"{f['wire']}\");")
         lines.append("    }")
         lines.append("")
 
@@ -1776,6 +1998,18 @@ def emit_sparse_test() -> str:
     lines.append('                "one case per sparse body the schema closure declares");')
     lines.append("    }")
     lines.append("")
+    if any(f["explicit_null"] for _, fields in models for f in fields):
+        lines.extend(javadoc(
+            "Asserts the encoded body carries exactly the one wire key, and that its value "
+            "is JSON null: present, not absent.", "    ",
+            ["@param body the request body to render", "@param wire the one wire key it must carry",
+             "@throws Exception if the encoded body is not readable JSON"]))
+        lines.append("    private static void assertExplicitNull(Object body, String wire) throws Exception {")
+        lines.append("        assertKeys(body, wire);")
+        lines.append('        JsonNode node = JSON.readTree(ManagementTransport.encodeBody("test", body));')
+        lines.append('        assertEquals(true, node.get(wire).isNull(), wire + ": an explicit null is sent as null");')
+        lines.append("    }")
+        lines.append("")
     lines.extend(javadoc(
         "Asserts the encoded body's key set is exactly {@code expected}, in any order.",
         "    ", ["@param body the request body to render", "@param expected the wire keys it must carry",

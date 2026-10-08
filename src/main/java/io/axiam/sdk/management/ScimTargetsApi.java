@@ -73,6 +73,9 @@ public final class ScimTargetsApi {
     /**
      * Issues POST /api/v1/scim-targets.
      *
+     * <p>{@code credential} is required here (§31.3 rule 2). It is write-only: no response ever
+     * carries it, and the SDK keeps no copy.
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -116,6 +119,14 @@ public final class ScimTargetsApi {
     /**
      * Issues PUT /api/v1/scim-targets/{id}.
      *
+     * <p><strong>The credential is bound to its URL</strong> (§31.3 rule 2): absent {@code credential} keeps the
+     * stored one — except that changing {@code base_url} of a bearer target, {@code
+     * auth.token_url} or {@code base_url} of a client-credentials target, or {@code auth.type},
+     * without {@code credential} in the same write is refused {@code 400} and changes nothing. The
+     * SDK holds no credential to re-send. Every other member left out takes its default ({@code
+     * ReplacementBodies.from(ScimTargetResponse)} turns a read into the body). An update overtaken
+     * by another administrator's write is {@code 409} (§31.3 rule 4): reload, then retry yourself.
+     *
      * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the body is required,
      * and what you do not carry over from a prior read is not preserved -- it is overwritten. Read
      * first, change the field you mean, send the whole thing back.
@@ -144,6 +155,10 @@ public final class ScimTargetsApi {
     /**
      * Issues DELETE /api/v1/scim-targets/{id}.
      *
+     * <p><strong>Deprovisions nothing downstream</strong> (§31.3 rule 8): the users and groups AXIAM created in
+     * the service provider stay there, and AXIAM no longer knows them. To remove them, set {@code
+     * deprovision} to {@code delete}, let AXIAM push, and only then delete the target.
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -164,6 +179,10 @@ public final class ScimTargetsApi {
 
     /**
      * Issues POST /api/v1/scim-targets/{id}/reconcile.
+     *
+     * <p>Starts a reconciliation in the background and answers {@code 202}; its outcome is on the
+     * target's {@code state} (§31.3 rule 7). {@code 409} while a run holds the claim, within five
+     * minutes of the last one, or for a disabled target.
      *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.

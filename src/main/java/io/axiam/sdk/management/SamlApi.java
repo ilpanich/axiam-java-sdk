@@ -105,6 +105,12 @@ public final class SamlApi {
     /**
      * Issues POST /api/v1/tenants/{tenant_id}/saml/service-providers.
      *
+     * <p>{@code sp_signing_cert_pem} must be RSA (2048 bits or more) or ECDSA on P-256, P-384 or
+     * P-521; an <strong>ECDSA certificate verifies HTTP-POST requests only</strong> — the HTTP-Redirect binding
+     * is RSA-only (§29.3 rule 2). {@code encrypt_assertions: true} is refused while encryption is
+     * unimplemented. {@code entity_id} is unique per tenant ({@code 409}) and immutable once
+     * created.
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -150,6 +156,14 @@ public final class SamlApi {
     /**
      * Issues PUT /api/v1/tenants/{tenant_id}/saml/service-providers/{sp_id}.
      *
+     * <p>An omitted member takes its <strong>default</strong>, not its stored value: {@code enabled} and {@code
+     * sign_responses} default to {@code true}, {@code name_id_format} to {@code persistent}, the
+     * other flags to {@code false}, certificates and {@code slo_url} / {@code slo_binding} to
+     * null, the lists to empty (§29.2). Start from {@code getServiceProvider} ({@code
+     * ReplacementBodies.from(SamlServiceProvider)}). {@code entity_id} is immutable: changing it
+     * is {@code 400} — register a new service provider instead (§29.3 rule 3). An ECDSA {@code
+     * sp_signing_cert_pem} verifies HTTP-POST requests only; HTTP-Redirect is RSA-only.
+     *
      * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the body is required,
      * and what you do not carry over from a prior read is not preserved -- it is overwritten. Read
      * first, change the field you mean, send the whole thing back.
@@ -179,6 +193,9 @@ public final class SamlApi {
     /**
      * Issues DELETE /api/v1/tenants/{tenant_id}/saml/service-providers/{sp_id}.
      *
+     * <p>Ends no session: users already signed in to the SP stay signed in there until their SP
+     * session ends (§29.3 rule 5).
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -201,6 +218,12 @@ public final class SamlApi {
     /**
      * Issues POST /api/v1/tenants/{tenant_id}/saml/parse-sp-metadata.
      *
+     * <p><strong>Parses and stores nothing</strong> (§29.3 rule 6): the result is a draft to review and pass to
+     * {@code createServiceProvider}. Exactly one of {@code metadata_xml} and {@code metadata_url}
+     * must be set ({@code ParseSamlSpMetadata.fromXml} / {@code fromUrl}); both or neither is
+     * refused locally with a {@code ValidationError}, before any request. The metadata's own
+     * signature is not evaluated. {@code 503} in a server built without SAML.
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -215,6 +238,7 @@ public final class SamlApi {
      */
     public io.axiam.sdk.management.models.SamlSpMetadataDraft parseSpMetadata(io.axiam.sdk.management.models.ParseSamlSpMetadata body) {
         final String operation = "saml.parse_sp_metadata";
+        ManagementChecks.parseSpMetadataExactlyOne(operation, body);
         UUID tenantId = ManagementSupport.resolveTenant(transport, scope, operation);
         Map<String, @Nullable String> query = new LinkedHashMap<>();
         JsonNode node = transport.send(operation, "POST",
@@ -245,6 +269,9 @@ public final class SamlApi {
     /**
      * Issues POST /api/v1/tenants/{tenant_id}/saml/idp-credentials.
      *
+     * <p>Generates an RSA-4096 key on the server, which takes seconds; the key is never returned.
+     * An occupied slot is {@code 409} (§29.3 rule 7).
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -269,6 +296,10 @@ public final class SamlApi {
     /**
      * Issues POST /api/v1/tenants/{tenant_id}/saml/idp-credentials/{credential_id}/promote.
      *
+     * <p>{@code credential_id} must be the tenant's current {@code next} credential; in one
+     * transaction the old {@code active} is retired — its key destroyed — and {@code next} becomes
+     * {@code active} (§29.3 rule 7).
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -292,6 +323,11 @@ public final class SamlApi {
 
     /**
      * Issues POST /api/v1/tenants/{tenant_id}/saml/idp-credentials/{credential_id}/retire.
+     *
+     * <p><strong>Retiring the {@code active} credential with no successor stops SAML sign-on for the
+     * whole tenant at once</strong> (§29.3 rule 7) — it is the incident response to a leaked key. The key
+     * is destroyed. The safe rotation is: issue into {@code next}, wait until every SP has
+     * refreshed the metadata, then promote.
      *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.

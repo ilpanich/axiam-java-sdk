@@ -9,17 +9,21 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
 import java.util.UUID;
+import io.axiam.sdk.management.JsonNullable;
 
 /**
  * The tenant's SAML IdP, as the administrator needs to see it before and while switching it on:
  * what an SP will be given, and whether it answers yet.
  *
- * @param activeCredentialId The {@code active} credential, or null.
+ * @param activeCredentialId The {@code active} credential, or null. -- null is NOT absent here
+ *     (§27.4 rule 5): a Java null means the member is absent, JsonNullable.ofNull() means it is JSON
+ *     null
  * @param entityId The IdP's entity id (the metadata URL itself).
  * @param metadataServed Whether {@code metadata_url} answers now: SAML is available, enabled for
  *     the tenant, and an {@code active} or {@code next} credential exists (D-40).
  * @param metadataUrl Where the IdP metadata is served.
- * @param nextCredentialId The {@code next} credential, or null.
+ * @param nextCredentialId The {@code next} credential, or null. -- null is NOT absent here (§27.4
+ *     rule 5): a Java null means the member is absent, JsonNullable.ofNull() means it is JSON null
  * @param samlAvailable Whether this server build serves SAML at all (it was built with the {@code
  *     saml} feature).
  * @param samlIdpEnabled The tenant's **effective** {@code saml_idp_enabled} setting (D-20).
@@ -31,11 +35,11 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SamlIdpInfo(
-        @JsonProperty("active_credential_id") @Nullable UUID activeCredentialId,
+        @JsonProperty("active_credential_id") @Nullable JsonNullable<UUID> activeCredentialId,
         @JsonProperty("entity_id") String entityId,
         @JsonProperty("metadata_served") Boolean metadataServed,
         @JsonProperty("metadata_url") String metadataUrl,
-        @JsonProperty("next_credential_id") @Nullable UUID nextCredentialId,
+        @JsonProperty("next_credential_id") @Nullable JsonNullable<UUID> nextCredentialId,
         @JsonProperty("saml_available") Boolean samlAvailable,
         @JsonProperty("saml_idp_enabled") Boolean samlIdpEnabled,
         @JsonProperty("slo_url") String sloUrl,

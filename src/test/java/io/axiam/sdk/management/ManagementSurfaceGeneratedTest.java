@@ -1034,7 +1034,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void samlParseSpMetadata() throws Exception {
         mount("POST", "/api/v1/tenants/" + TENANT_ID + "/saml/parse-sp-metadata", 200, "{\"service_provider\": {\"acs_urls\": [], \"display_name\": \"example\", \"entity_id\": \"example\"}, \"warnings\": []}");
-        client.management().saml().parseSpMetadata(new io.axiam.sdk.management.models.ParseSamlSpMetadata(null, null));
+        client.management().saml().parseSpMetadata(io.axiam.sdk.management.models.ParseSamlSpMetadata.fromUrl("https://sp.example/metadata"));
     }
 
     /** Exercises saml.list_idp_credentials. */

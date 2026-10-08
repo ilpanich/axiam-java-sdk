@@ -378,6 +378,8 @@ class ManagementSparseBodiesGeneratedTest {
                 "jit_provisioning", "kind", "start_tls", "sync_interval_secs",
                 "trust_anchors_pem", "url", "user_attribute_map", "user_filter");
         assertKeys(UpdateDirectoryConfig.builder().build());
+        assertExplicitNull(UpdateDirectoryConfig.builder().groupBaseDn(null).build(), "group_base_dn");
+        assertExplicitNull(UpdateDirectoryConfig.builder().groupFilter(null).build(), "group_filter");
     }
 
     /** §27.4 rule 5 for UpdateFederationConfigRequest: each setter sets exactly its own key. */
@@ -803,6 +805,20 @@ class ManagementSparseBodiesGeneratedTest {
                 .filter(m -> m.getName().endsWith("SendsOnlyWhatWasSet")).count();
         assertEquals(21L, cases,
                 "one case per sparse body the schema closure declares");
+    }
+
+    /**
+     * Asserts the encoded body carries exactly the one wire key, and that its value is JSON null:
+     * present, not absent.
+     *
+     * @param body the request body to render
+     * @param wire the one wire key it must carry
+     * @throws Exception if the encoded body is not readable JSON
+     */
+    private static void assertExplicitNull(Object body, String wire) throws Exception {
+        assertKeys(body, wire);
+        JsonNode node = JSON.readTree(ManagementTransport.encodeBody("test", body));
+        assertEquals(true, node.get(wire).isNull(), wire + ": an explicit null is sent as null");
     }
 
     /**

@@ -70,6 +70,15 @@ public final class DirectoryApi {
     /**
      * Issues PUT /api/v1/tenants/{tenant_id}/directory.
      *
+     * <p><strong>Moving the connection requires the secret again</strong> (§30.3 rule 2): a {@code set} that
+     * changes {@code url}, {@code start_tls}, {@code bind_dn} or {@code trust_anchors_pem} without
+     * {@code bind_secret} is refused {@code 400} and changes nothing. The SDK holds no copy of the
+     * secret and cannot re-send one for you. {@code bind_secret} is required while the tenant has
+     * no configuration; otherwise absent keeps the stored secret. Every other optional member left
+     * out is <strong>reset to its default</strong>. An enabled directory and an effective {@code opaque_mode =
+     * required} never coexist ({@code 409}); without the deployment's directory key a write
+     * carrying a secret is {@code 503}.
+     *
      * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the body is required,
      * and what you do not carry over from a prior read is not preserved -- it is overwritten. Read
      * first, change the field you mean, send the whole thing back.
@@ -98,6 +107,14 @@ public final class DirectoryApi {
     /**
      * Issues PATCH /api/v1/tenants/{tenant_id}/directory.
      *
+     * <p><strong>Moving the connection requires the secret again</strong> (§30.3 rule 2): an {@code update} that
+     * changes {@code url}, {@code start_tls}, {@code bind_dn} or {@code trust_anchors_pem} without
+     * {@code bind_secret} is refused {@code 400} and changes nothing; the SDK holds no copy of the
+     * secret to re-send. A member left unset on the builder is not sent and stays as stored;
+     * {@code groupBaseDn(null)} / {@code groupFilter(null)} send {@code null} and clear the value.
+     * An enabled directory and an effective {@code opaque_mode = required} never coexist ({@code
+     * 409}).
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -122,6 +139,12 @@ public final class DirectoryApi {
     /**
      * Issues DELETE /api/v1/tenants/{tenant_id}/directory.
      *
+     * <p><strong>Deleting stops the directory, and only that</strong> (§30.3 rule 5): directory accounts can no
+     * longer sign in with a password — there is no fallback to a local hash — and the sync stops.
+     * Sessions, refresh tokens and passkeys those accounts already hold keep working until they
+     * expire or the accounts are deactivated. There is no unlink: a linked account stays a
+     * directory account.
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *
@@ -142,6 +165,12 @@ public final class DirectoryApi {
 
     /**
      * Issues POST /api/v1/tenants/{tenant_id}/directory/links.
+     *
+     * <p><strong>Signs the account's owner out everywhere</strong> (§30.3 rule 6): linking deletes the account's
+     * WebAuthn credentials and federation links, revokes its {@code User} certificates, all its
+     * sessions and its OAuth2 refresh tokens (TOTP is kept). The entry is found by the account's
+     * own username; a repeat on an already-linked account answers {@code was_already_linked} and
+     * repeats the revocations.
      *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.

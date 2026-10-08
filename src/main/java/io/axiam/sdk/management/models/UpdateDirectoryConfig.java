@@ -10,6 +10,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import io.axiam.sdk.Sensitive;
+import io.axiam.sdk.management.JsonNullable;
 
 /**
  * {@code PATCH /api/v1/tenants/{tenant_id}/directory} — a **sparse** update.
@@ -27,8 +28,10 @@ import io.axiam.sdk.Sensitive;
  *     subject to the same P23W2-01 rule. -- SECRET: redacted from toString and from every JSON
  *     rendering except the one request body it is sent in
  * @param enabled See [{@code SetDirectoryConfig::enabled}].
- * @param groupBaseDn Explicit {@code null} clears it.
- * @param groupFilter Explicit {@code null} clears it.
+ * @param groupBaseDn Explicit {@code null} clears it. -- null is NOT absent here (§27.4 rule 5): a
+ *     Java null means the member is absent, JsonNullable.ofNull() means it is JSON null
+ * @param groupFilter Explicit {@code null} clears it. -- null is NOT absent here (§27.4 rule 5): a
+ *     Java null means the member is absent, JsonNullable.ofNull() means it is JSON null
  * @param groupMappings Replaces the whole table when present.
  * @param groupMemberAttribute See [{@code SetDirectoryConfig::group_member_attribute}].
  * @param groupNestingDepth See [{@code SetDirectoryConfig::group_nesting_depth}].
@@ -48,8 +51,8 @@ public record UpdateDirectoryConfig(
         @JsonProperty("bind_dn") @Nullable String bindDn,
         @JsonProperty("bind_secret") @Nullable Sensitive bindSecret,
         @JsonProperty("enabled") @Nullable Boolean enabled,
-        @JsonProperty("group_base_dn") @Nullable String groupBaseDn,
-        @JsonProperty("group_filter") @Nullable String groupFilter,
+        @JsonProperty("group_base_dn") @Nullable JsonNullable<String> groupBaseDn,
+        @JsonProperty("group_filter") @Nullable JsonNullable<String> groupFilter,
         @JsonProperty("group_mappings") @Nullable List<GroupMapping> groupMappings,
         @JsonProperty("group_member_attribute") @Nullable String groupMemberAttribute,
         @JsonProperty("group_nesting_depth") @Nullable Integer groupNestingDepth,
@@ -90,8 +93,8 @@ public record UpdateDirectoryConfig(
         private @Nullable String bindDn;
         private @Nullable Sensitive bindSecret;
         private @Nullable Boolean enabled;
-        private @Nullable String groupBaseDn;
-        private @Nullable String groupFilter;
+        private @Nullable JsonNullable<String> groupBaseDn;
+        private @Nullable JsonNullable<String> groupFilter;
         private @Nullable List<GroupMapping> groupMappings;
         private @Nullable String groupMemberAttribute;
         private @Nullable Integer groupNestingDepth;
@@ -149,24 +152,28 @@ public record UpdateDirectoryConfig(
         }
 
         /**
-         * Sets group_base_dn.
+         * Sets group_base_dn, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param groupBaseDn the value to send
+         * @param groupBaseDn the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder groupBaseDn(String groupBaseDn) {
-            this.groupBaseDn = groupBaseDn;
+        public Builder groupBaseDn(@Nullable String groupBaseDn) {
+            this.groupBaseDn = JsonNullable.of(groupBaseDn);
             return this;
         }
 
         /**
-         * Sets group_filter.
+         * Sets group_filter, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param groupFilter the value to send
+         * @param groupFilter the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder groupFilter(String groupFilter) {
-            this.groupFilter = groupFilter;
+        public Builder groupFilter(@Nullable String groupFilter) {
+            this.groupFilter = JsonNullable.of(groupFilter);
             return this;
         }
 

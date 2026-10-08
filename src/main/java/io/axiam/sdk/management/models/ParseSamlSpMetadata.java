@@ -27,6 +27,27 @@ public record ParseSamlSpMetadata(
 ) {
 
     /**
+     * A request for the server to fetch the SP's metadata from an https URL, through its SSRF
+     * guard (§29.2).
+     *
+     * @param metadataUrl the value to send
+     * @return a ParseSamlSpMetadata carrying exactly that member
+     */
+    public static ParseSamlSpMetadata fromUrl(String metadataUrl) {
+        return new ParseSamlSpMetadata(metadataUrl, null);
+    }
+
+    /**
+     * A request carrying the SP's metadata document itself, at most 512 KiB (§29.2).
+     *
+     * @param metadataXml the value to send
+     * @return a ParseSamlSpMetadata carrying exactly that member
+     */
+    public static ParseSamlSpMetadata fromXml(String metadataXml) {
+        return new ParseSamlSpMetadata(null, metadataXml);
+    }
+
+    /**
      * Starts a ParseSamlSpMetadata with nothing set.
      *
      * <p>Every field left unset is omitted from the wire body entirely, so a builder that sets one
