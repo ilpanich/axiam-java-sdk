@@ -983,7 +983,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
     /** Whether the CONTRACT.md &sect;16 retry policy is on for this client
      * ({@link Builder#retryDisabled()} turns it off). Read by helpers built over
-     * this client, e.g. the {@code SsfReceiver}.
+     * this client, e.g. {@link io.axiam.sdk.ssf.SsfReceiver}.
      *
      * @return {@code true} unless retries were disabled
      */
