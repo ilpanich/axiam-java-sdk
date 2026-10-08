@@ -6,7 +6,7 @@ package io.axiam.sdk.management;
 import io.axiam.sdk.internal.ManagementTransport;
 
 /**
- * The CONTRACT §27 management surface: 147 operations across 24 namespaces.
+ * The CONTRACT §27 management surface: 190 operations across 28 namespaces.
  *
  * <p>§27.2 makes this namespacing normative rather than stylistic: twenty namespaces have a list
  * and fourteen a get, so flattening 147 operations onto the client would need a disambiguating
@@ -188,6 +188,54 @@ public final class ManagementApi {
      */
     public EmailConfigApi emailConfig() {
         return new EmailConfigApi(transport, NamespaceScope.inherited());
+    }
+
+    /**
+     * A tenant's LDAP / Active Directory identity source (CONTRACT §30): the one configuration,
+     * the explicit act that links an existing local account to its directory entry, and a
+     * read-only view of the sync job. Signing in needs nothing new -- a directory account calls
+     * the same §1 {@code login}.
+     *
+     * @return the directory namespace handle
+     */
+    public DirectoryApi directory() {
+        return new DirectoryApi(transport, NamespaceScope.inherited());
+    }
+
+    /**
+     * A tenant's SAML 2.0 identity provider (CONTRACT §29): the registry of service providers, the
+     * import of an SP's metadata into a *draft* registration (never a write), and the lifecycle of
+     * the IdP signing credential. The protocol itself -- single sign-on, single logout, the IdP
+     * metadata document -- is browser and SP-to-IdP surface under /saml/v2/{tenant_id}, an SP's
+     * own SAML library speaks to it, and it is not in this registry.
+     *
+     * @return the saml namespace handle
+     */
+    public SamlApi saml() {
+        return new SamlApi(transport, NamespaceScope.inherited());
+    }
+
+    /**
+     * A tenant's Shared Signals Framework streams (CONTRACT §32): which receiver -- an OAuth2
+     * client of the tenant -- receives which CAEP and RISC security events, as SETs pushed to its
+     * endpoint or polled. The receiver's own protocol (transmitter metadata, the SSF stream
+     * management API, polling) is not in this registry.
+     *
+     * @return the ssf namespace handle
+     */
+    public SsfApi ssf() {
+        return new SsfApi(transport, NamespaceScope.inherited());
+    }
+
+    /**
+     * A tenant's outbound SCIM targets (CONTRACT §31): the downstream SCIM 2.0 service providers
+     * AXIAM pushes the tenant's users and groups to, each with its delivery state. The credential
+     * AXIAM pushes with is write-only. Deleting a target does not deprovision anything downstream.
+     *
+     * @return the scim_targets namespace handle
+     */
+    public ScimTargetsApi scimTargets() {
+        return new ScimTargetsApi(transport, NamespaceScope.inherited());
     }
 
     /**

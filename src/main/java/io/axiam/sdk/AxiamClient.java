@@ -1350,6 +1350,70 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     /**
+     * A tenant's LDAP / Active Directory identity source (CONTRACT §30): the one configuration,
+     * the explicit act that links an existing local account to its directory entry, and a
+     * read-only view of the sync job. Signing in needs nothing new -- a directory account calls
+     * the same §1 {@code login}.
+     *
+     *
+     * <p>The same handle as {@code management().directory()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the directory namespace handle
+     */
+    public io.axiam.sdk.management.DirectoryApi directory() {
+        return management().directory();
+    }
+
+    /**
+     * A tenant's SAML 2.0 identity provider (CONTRACT §29): the registry of service providers, the
+     * import of an SP's metadata into a *draft* registration (never a write), and the lifecycle of
+     * the IdP signing credential. The protocol itself -- single sign-on, single logout, the IdP
+     * metadata document -- is browser and SP-to-IdP surface under /saml/v2/{tenant_id}, an SP's
+     * own SAML library speaks to it, and it is not in this registry.
+     *
+     *
+     * <p>The same handle as {@code management().saml()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the saml namespace handle
+     */
+    public io.axiam.sdk.management.SamlApi saml() {
+        return management().saml();
+    }
+
+    /**
+     * A tenant's Shared Signals Framework streams (CONTRACT §32): which receiver -- an OAuth2
+     * client of the tenant -- receives which CAEP and RISC security events, as SETs pushed to its
+     * endpoint or polled. The receiver's own protocol (transmitter metadata, the SSF stream
+     * management API, polling) is not in this registry.
+     *
+     *
+     * <p>The same handle as {@code management().ssf()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the ssf namespace handle
+     */
+    public io.axiam.sdk.management.SsfApi ssf() {
+        return management().ssf();
+    }
+
+    /**
+     * A tenant's outbound SCIM targets (CONTRACT §31): the downstream SCIM 2.0 service providers
+     * AXIAM pushes the tenant's users and groups to, each with its delivery state. The credential
+     * AXIAM pushes with is write-only. Deleting a target does not deprovision anything downstream.
+     *
+     *
+     * <p>The same handle as {@code management().scimTargets()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the scim_targets namespace handle
+     */
+    public io.axiam.sdk.management.ScimTargetsApi scimTargets() {
+        return management().scimTargets();
+    }
+
+    /**
      * {@code POST /api/v1/auth/login}. Returns a typed {@link LoginResult} —
      * an MFA challenge (HTTP 202) is an expected outcome, not an exception;
      * check {@link LoginResult#mfaRequired()} before assuming a session was

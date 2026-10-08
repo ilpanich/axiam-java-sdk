@@ -7,49 +7,31 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
- * Events that can trigger an admin notification.
+ * Where an attribute's value comes from.
+ *
+ * <p>Every variant has a real source today; a variant with none (a telephone number the OIDC
+ * {@code phone} scope gates behind its own consent, say) is deliberately absent rather than mapped
+ * to an empty value.
  *
  * <p>The wire spelling is carried on each constant rather than derived from its name, because the
  * server's vocabulary is not uniformly cased and a derivation that worked for every value today
  * would break on the first one that did not fit.
  */
-public enum NotificationEventType {
-    /** The server's 'login_failure' value. */
-    LOGIN_FAILURE("login_failure"),
-    /** The server's 'account_locked' value. */
-    ACCOUNT_LOCKED("account_locked"),
-    /** The server's 'mfa_enrollment_changed' value. */
-    MFA_ENROLLMENT_CHANGED("mfa_enrollment_changed"),
-    /** The server's 'password_changed' value. */
-    PASSWORD_CHANGED("password_changed"),
-    /** The server's 'password_reset_requested' value. */
-    PASSWORD_RESET_REQUESTED("password_reset_requested"),
-    /** The server's 'role_assigned' value. */
-    ROLE_ASSIGNED("role_assigned"),
-    /** The server's 'role_unassigned' value. */
-    ROLE_UNASSIGNED("role_unassigned"),
-    /** The server's 'permission_granted' value. */
-    PERMISSION_GRANTED("permission_granted"),
-    /** The server's 'permission_revoked' value. */
-    PERMISSION_REVOKED("permission_revoked"),
-    /** The server's 'certificate_issued' value. */
-    CERTIFICATE_ISSUED("certificate_issued"),
-    /** The server's 'certificate_revoked' value. */
-    CERTIFICATE_REVOKED("certificate_revoked"),
-    /** The server's 'ca_certificate_revoked' value. */
-    CA_CERTIFICATE_REVOKED("ca_certificate_revoked"),
-    /** The server's 'user_created' value. */
-    USER_CREATED("user_created"),
-    /** The server's 'user_deleted' value. */
-    USER_DELETED("user_deleted"),
-    /** The server's 'user_updated' value. */
-    USER_UPDATED("user_updated"),
-    /** The server's 'service_account_created' value. */
-    SERVICE_ACCOUNT_CREATED("service_account_created"),
-    /** The server's 'service_account_deleted' value. */
-    SERVICE_ACCOUNT_DELETED("service_account_deleted"),
-    /** The server's 'scim_delivery_failed' value. */
-    SCIM_DELIVERY_FAILED("scim_delivery_failed"),
+public enum AttributeSource {
+    /** The server's 'username' value. */
+    USERNAME("username"),
+    /** The server's 'email' value. */
+    EMAIL("email"),
+    /** The server's 'display_name' value. */
+    DISPLAY_NAME("display_name"),
+    /** The server's 'given_name' value. */
+    GIVEN_NAME("given_name"),
+    /** The server's 'family_name' value. */
+    FAMILY_NAME("family_name"),
+    /** The server's 'groups' value. */
+    GROUPS("groups"),
+    /** The server's 'roles' value. */
+    ROLES("roles"),
     /**
      * A value this SDK's copy of the spec does not list.
      *
@@ -70,7 +52,7 @@ public enum NotificationEventType {
     /** The spelling this value has on the wire. */
     private final String wire;
 
-    NotificationEventType(String wire) {
+    AttributeSource(String wire) {
         this.wire = wire;
     }
 
@@ -100,11 +82,11 @@ public enum NotificationEventType {
      * UNKNOWN}; one that does not gets the rest of the record intact.
      *
      * @param value the server's spelling
-     * @return the matching NotificationEventType, or {@link #UNKNOWN}
+     * @return the matching AttributeSource, or {@link #UNKNOWN}
      */
     @JsonCreator
-    public static NotificationEventType fromWire(String value) {
-        for (NotificationEventType candidate : values()) {
+    public static AttributeSource fromWire(String value) {
+        for (AttributeSource candidate : values()) {
             if (candidate != UNKNOWN && candidate.wire.equals(value)) {
                 return candidate;
             }

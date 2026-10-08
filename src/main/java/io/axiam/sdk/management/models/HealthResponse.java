@@ -6,15 +6,28 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
+
+import java.util.List;
 
 /**
- * The HealthResponse schema from the server's OpenAPI document.
+ * Response body for {@code GET /health}.
  *
+ * <p>{@code profile} and {@code unavailable} are additive (G-8, D-59): a client that reads only
+ * {@code status} is unaffected.
+ *
+ * @param profile The messaging profile this process runs: {@code full} (RabbitMQ is used) or
+ *     {@code minimal} ({@code AXIAM__AMQP__ENABLED=false}, no broker).
  * @param status the server's status field
+ * @param unavailable Present only in the {@code minimal} profile: the capabilities it does not
+ *     provide — {@code reactors}, {@code amqp_authz}, {@code amqp_audit_ingestion} and {@code
+ *     decision_cache_broadcast}. Absent in {@code full}.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record HealthResponse(
-        @JsonProperty("status") String status
+        @JsonProperty("profile") String profile,
+        @JsonProperty("status") String status,
+        @JsonProperty("unavailable") @Nullable List<String> unavailable
 ) {
 }

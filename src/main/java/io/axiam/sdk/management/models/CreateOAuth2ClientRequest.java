@@ -29,8 +29,23 @@ import java.util.List;
  *     has always done: they are dropped and reach no decision. {@code "honour"} opts in, and is
  *     **refused on a {@code fapi2} client** at both this gate and the authorization endpoint — the two
  *     are different answers to the same question about what a request from this client means.
+ * @param backchannelAuthenticationRequestSigningAlg G-7 — CIBA Core §4: {@code PS256}, {@code
+ *     ES256} or {@code EdDSA}. When set, every backchannel authentication request must be a signed
+ *     {@code request} JWT under this algorithm, verified against {@code jwks} or {@code jwks_uri}
+ *     (exactly one is required; an inline {@code jwks} must hold a key of the algorithm). Required for
+ *     a {@code fapi2} client holding the CIBA grant.
+ * @param backchannelClientNotificationEndpoint G-7 — CIBA Core §4: where a ping-mode client is
+ *     notified. Required in ping mode and refused in poll mode; an absolute {@code https} URL held to
+ *     the webhook address policy (no credentials, no fragment, no private, loopback or internal host).
  * @param backchannelLogoutUri B5 — where OIDC back-channel logout tokens are delivered. Omit for a
  *     client that does not participate.
+ * @param backchannelTokenDeliveryMode G-7 — CIBA Core §4 {@code backchannel_token_delivery_mode}:
+ *     {@code poll} or {@code ping}. Required when {@code grant_types} holds {@code
+ *     urn:openid:params:grant-type:ciba}, refused otherwise; {@code push} is not offered. A CIBA
+ *     client must be confidential; a {@code fapi2} one must also register {@code
+ *     backchannel_authentication_request_signing_alg}.
+ * @param backchannelUserCodeParameter G-7 — CIBA Core §4. {@code true} is **refused**: this server
+ *     holds no user code to verify.
  * @param browserSso X7.3 — whether an unauthenticated authorization request from this client may
  *     be answered with a redirect to the login page rather than the {@code 401} AXIAM answers today.
  *     Accepted and stored, but **nothing reads it yet**: the login hop it gates is a later wave.
@@ -91,7 +106,11 @@ import java.util.List;
 public record CreateOAuth2ClientRequest(
         @JsonProperty("allowed_resources") @Nullable List<String> allowedResources,
         @JsonProperty("authn_request_params") @Nullable AuthnRequestParamsMode authnRequestParams,
+        @JsonProperty("backchannel_authentication_request_signing_alg") @Nullable String backchannelAuthenticationRequestSigningAlg,
+        @JsonProperty("backchannel_client_notification_endpoint") @Nullable String backchannelClientNotificationEndpoint,
         @JsonProperty("backchannel_logout_uri") @Nullable String backchannelLogoutUri,
+        @JsonProperty("backchannel_token_delivery_mode") @Nullable String backchannelTokenDeliveryMode,
+        @JsonProperty("backchannel_user_code_parameter") @Nullable Boolean backchannelUserCodeParameter,
         @JsonProperty("browser_sso") @Nullable Boolean browserSso,
         @JsonProperty("dpop_bound_access_tokens") @Nullable Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") @Nullable Boolean dpopRequireNonce,

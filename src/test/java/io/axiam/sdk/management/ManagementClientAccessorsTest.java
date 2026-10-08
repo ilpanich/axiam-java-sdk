@@ -63,9 +63,9 @@ class ManagementClientAccessorsTest extends ManagementTestBase {
                     "client." + name + "() and management()." + name
                             + "() must return the same kind of handle (§27.2 rule 4)");
         }
-        // 24 namespaces. Pinned so a partial regeneration that dropped one fails here
-        // rather than quietly shipping 23.
-        assertEquals(24, onAggregate.size());
+        // 28 namespaces. Pinned so a partial regeneration that dropped one fails here
+        // rather than quietly shipping 27.
+        assertEquals(28, onAggregate.size());
     }
 
     /** Both forms reach the same route with the client's own scope. */
