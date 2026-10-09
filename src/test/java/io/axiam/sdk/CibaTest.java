@@ -208,6 +208,8 @@ class CibaTest {
                 oauthError(400, "invalid_binding_message"));
         CibaInitiateRequest req = request(config).pingMode(Sensitive.of(notification)).bindingMessage("W4SCT").build();
         Redaction.assertNoFragment("request rendering", req.toString(), notification);
+        // §7 rule 2 / §33.5: the public members() view is a rendering sink too (R-19).
+        Redaction.assertNoFragment("members() rendering", req.members().toString(), notification);
         CibaInitiateResponse response = client.cibaInitiate(req);
         Redaction.assertNoFragment("response rendering",
                 response + " " + MAPPER.writeValueAsString(response), authReqId);

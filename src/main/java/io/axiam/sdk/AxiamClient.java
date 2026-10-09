@@ -4479,7 +4479,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (signer != null) {
             form.add("request", signer.sign(requireOidcClientId(), config.issuer(), request.members()).expose());
         } else {
-            request.members().forEach((member, value) -> form.add(member, String.valueOf(value)));
+            request.members().forEach((member, value) -> form.add(member,
+                    value instanceof Sensitive secret ? secret.expose() : String.valueOf(value)));
         }
         Request http = new Request.Builder().url(url).post(form.build()).build();
         try (Response response = sendOnceHttpClient.newCall(http).execute()) {

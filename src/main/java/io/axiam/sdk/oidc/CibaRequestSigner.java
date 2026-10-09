@@ -187,7 +187,8 @@ public final class CibaRequestSigner {
      *
      * @param clientId the client's {@code client_id}
      * @param audience the issuer the call is made against
-     * @param members  the authentication-request members, with their JSON types
+     * @param members  the authentication-request members, with their JSON types; a
+     *                 {@link Sensitive} value is exposed into the signed claims
      * @return the compact JWS, wrapped
      */
     public Sensitive sign(String clientId, String audience, Map<String, Object> members) {
@@ -201,7 +202,10 @@ public final class CibaRequestSigner {
                 .notBeforeTime(Date.from(now))
                 .expirationTime(Date.from(now.plusSeconds(SIGNED_REQUEST_LIFETIME_SECONDS)))
                 .jwtID(HexFormat.of().formatHex(jti));
-        members.forEach(claims::claim);
+        // A Sensitive member (the notification token, §33.5) is exposed here, into the
+        // claims the signature covers and nowhere else.
+        members.forEach((name, value) -> claims.claim(name, value instanceof Sensitive secret
+                ? secret.expose() : value));
         JWSHeader.Builder header = new JWSHeader.Builder(alg.jose());
         if (kid != null) {
             header.keyID(kid);

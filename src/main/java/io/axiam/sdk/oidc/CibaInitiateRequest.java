@@ -122,6 +122,11 @@ public final class CibaInitiateRequest {
      * types: {@code requested_expiry} is a number here (inside a signed
      * request) and is sent as a string on the plain form.
      *
+     * <p>{@code client_notification_token} stays {@link Sensitive} in this map
+     * (CONTRACT.md &sect;33.5, &sect;7 rule 2): rendering the map shows
+     * {@code [SENSITIVE]}, and the value is exposed only where it goes on the
+     * wire &mdash; the form, or {@link CibaRequestSigner#sign}.
+     *
      * @return the members, in a stable order
      */
     public Map<String, Object> members() {
@@ -141,7 +146,7 @@ public final class CibaInitiateRequest {
             out.put("resource", resource);
         }
         if (pingMode && clientNotificationToken != null) {
-            out.put("client_notification_token", clientNotificationToken.expose());
+            out.put("client_notification_token", clientNotificationToken);
         }
         return out;
     }
