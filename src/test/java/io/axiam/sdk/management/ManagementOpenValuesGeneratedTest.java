@@ -41,7 +41,6 @@ import io.axiam.sdk.management.models.ScimTargetScopeUnknown;
 import io.axiam.sdk.management.models.ScimTokenStatus;
 import io.axiam.sdk.management.models.SettingsScope;
 import io.axiam.sdk.management.models.SsfDeliveryMethod;
-import io.axiam.sdk.management.models.SsfEventType;
 import io.axiam.sdk.management.models.SsfStatusActor;
 import io.axiam.sdk.management.models.SsfStreamStatus;
 import io.axiam.sdk.management.models.SsfSubjectFormat;
@@ -286,13 +285,6 @@ class ManagementOpenValuesGeneratedTest {
     void ssfDeliveryMethodIsOpen() throws Exception {
         assertEquals(SsfDeliveryMethod.PUSH, JSON.readValue("\"push\"", SsfDeliveryMethod.class));
         assertEquals(SsfDeliveryMethod.UNKNOWN, JSON.readValue(UNLISTED, SsfDeliveryMethod.class));
-    }
-
-    /** §27.11 rule 1 for SsfEventType. */
-    @Test
-    void ssfEventTypeIsOpen() throws Exception {
-        assertEquals(SsfEventType.SESSION_REVOKED, JSON.readValue("\"https://schemas.openid.net/secevent/caep/event-type/session-revoked\"", SsfEventType.class));
-        assertEquals(SsfEventType.UNKNOWN, JSON.readValue(UNLISTED, SsfEventType.class));
     }
 
     /** §27.11 rule 1 for SsfStatusActor. */

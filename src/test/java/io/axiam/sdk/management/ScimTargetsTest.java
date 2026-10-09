@@ -169,6 +169,15 @@ class ScimTargetsTest extends ManagementTestBase {
         ScimTargetResponse first = page.items().get(0);
         assertInstanceOf(ScimTargetAuthUnknown.class, first.auth());
         assertEquals(DeprovisionPolicy.UNKNOWN, first.deprovision());
+        // §34.2 P12.2: carried back into a write, an unknown value is refused locally.
+        ObjectNode archived = targetBody();
+        archived.put("deprovision", "archive");
+        UUID id = UUID.randomUUID();
+        Route put = mount("PUT", TARGETS + "/" + id, 200, targetBody().toString());
+        ScimTargetInput back = ReplacementBodies.from(JSON.treeToValue(archived, ScimTargetResponse.class));
+        ValidationError refused = assertThrows(ValidationError.class, () -> client.scimTargets().update(id, back));
+        assertTrue(refused.getMessage().contains("deprovision"), refused.getMessage());
+        assertEquals(0, put.calls(), "refused before sending, never as \"\"");
         assertEquals(UserNameSource.UNKNOWN, first.userNameFrom());
         assertNull(first.state());
         List<ScimTargetResponse> all = client.scimTargets().listAll(PageRequest.matching(1, "downstream"));

@@ -71,8 +71,87 @@ public final class ManagementTransport {
      */
     private static final ObjectMapper WIRE = new ObjectMapper()
             .registerModule(new JavaTimeModule())
+            .registerModule(new com.fasterxml.jackson.databind.module.SimpleModule("refuse-unknown-values")
+                    .setSerializerModifier(new RefuseUnknownValues()))
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .addMixIn(Sensitive.class, ExposeSensitiveMixin.class);
+
+    /** The package whose open enums decode an unrecognised value as {@code UNKNOWN}. */
+    private static final String MODELS_PACKAGE = "io.axiam.sdk.management.models";
+
+    /**
+     * CONTRACT.md &sect;29.2, &sect;31.2, &sect;32.2 ("MUST NOT send one it does not
+     * know") and &sect;34.2 P12.2: an SDK refuses a value it does not know locally,
+     * before sending &mdash; never as {@code ""}, never by leaving the refusal to the
+     * server. A generated open enum decodes an unrecognised value as {@code UNKNOWN},
+     * whose wire spelling is {@code ""}; on this writer, and only here, serializing it
+     * throws. Every other rendering (toString, a log mapper) is unaffected.
+     */
+    private static final class RefuseUnknownValues
+            extends com.fasterxml.jackson.databind.ser.BeanSerializerModifier {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public com.fasterxml.jackson.databind.JsonSerializer<?> modifySerializer(
+                com.fasterxml.jackson.databind.SerializationConfig config,
+                com.fasterxml.jackson.databind.BeanDescription description,
+                com.fasterxml.jackson.databind.JsonSerializer<?> serializer) {
+            Class<?> type = description.getBeanClass();
+            if (type.isEnum() && MODELS_PACKAGE.equals(type.getPackageName())) {
+                return new UnknownRefusing((com.fasterxml.jackson.databind.JsonSerializer<Object>) serializer);
+            }
+            return serializer;
+        }
+    }
+
+    /** Delegates every known constant; refuses {@code UNKNOWN}, naming the member. */
+    private static final class UnknownRefusing extends com.fasterxml.jackson.databind.JsonSerializer<Object>
+            implements com.fasterxml.jackson.databind.ser.ContextualSerializer {
+        private final com.fasterxml.jackson.databind.JsonSerializer<Object> delegate;
+
+        UnknownRefusing(com.fasterxml.jackson.databind.JsonSerializer<Object> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public com.fasterxml.jackson.databind.JsonSerializer<?> createContextual(
+                com.fasterxml.jackson.databind.SerializerProvider provider,
+                com.fasterxml.jackson.databind.@Nullable BeanProperty property)
+                throws com.fasterxml.jackson.databind.JsonMappingException {
+            if (delegate instanceof com.fasterxml.jackson.databind.ser.ContextualSerializer contextual) {
+                return new UnknownRefusing((com.fasterxml.jackson.databind.JsonSerializer<Object>)
+                        contextual.createContextual(provider, property));
+            }
+            return this;
+        }
+
+        @Override
+        public void serialize(Object value, com.fasterxml.jackson.core.JsonGenerator gen,
+                              com.fasterxml.jackson.databind.SerializerProvider provider) throws IOException {
+            if (value instanceof Enum<?> constant && "UNKNOWN".equals(constant.name())) {
+                com.fasterxml.jackson.core.JsonStreamContext context = gen.getOutputContext();
+                String field = context.getCurrentName();
+                if (field == null && context.getParent() != null) {
+                    field = context.getParent().getCurrentName(); // an item of a list member
+                }
+                throw new UnknownValueRefused(field == null ? "body" : field);
+            }
+            delegate.serialize(value, gen, provider);
+        }
+    }
+
+    /** Carries the refused member's name out of Jackson's exception wrapping. */
+    private static final class UnknownValueRefused extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        private final String field;
+
+        UnknownValueRefused(String field) {
+            super(field, null, false, false);
+            this.field = field;
+        }
+    }
 
     /**
      * Overrides {@code Sensitive}'s own {@code @JsonSerialize} for this writer.
@@ -100,12 +179,24 @@ public final class ManagementTransport {
      * @param operation the canonical {@code namespace.operation} name, for the error message
      * @param body the request body to encode; must not be {@code null}
      * @return the UTF-8 JSON bytes to send
+     * @throws ValidationError if the body carries a value this SDK does not know
+     *         (an open enum's {@code UNKNOWN}) &mdash; refused locally, nothing sent
      * @throws NetworkError if the body cannot be encoded
      */
     public static byte[] encodeBody(String operation, Object body) {
         try {
             return WIRE.writeValueAsBytes(body);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof UnknownValueRefused refused) {
+                    throw LocalRefusal.of(operation, refused.field,
+                            "a value this SDK does not know (decoded as UNKNOWN) is never sent; "
+                            + "set a known value before writing it back (CONTRACT.md §34.2 P12.2)");
+                }
+            }
+            if (e instanceof RuntimeException runtime) {
+                throw runtime;
+            }
             throw new NetworkError(operation + ": could not encode the request body: "
                     + e.getMessage(), e);
         }

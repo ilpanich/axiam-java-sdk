@@ -63,6 +63,13 @@ IMPLICIT_TENANT_NAMESPACES = {
 # know. Each gains a decode-only `<Name>Unknown` arm (see emit_union).
 OPEN_UNIONS = {"ScimTargetAuth", "ScimTargetScope"}
 
+# String enums modelled as plain strings rather than a Java enum. §32.2: "An SDK
+# SHOULD model event types as strings with the six URIs as named constants" --
+# a Java enum cannot carry an event-type URI it does not list, so an unseen URI
+# was lost on decode (UNKNOWN) and re-sent as "" (contract 1.59 R-22). The
+# constants live in io.axiam.sdk.ssf.SsfEventTypes.
+STRING_ENUMS = {"SsfEventType"}
+
 # Sparse-body members where an explicit `null` is a different request from an
 # absent member (§27.4 rule 5, "null is not absent"). §30.2 names exactly two:
 # on `UpdateDirectoryConfig`, `null` clears the value and absence keeps it.
@@ -433,10 +440,11 @@ def java_type(schema: Any, *, boxed: bool = True) -> str:
     if not schema:
         return "JsonNode"
     if "$ref" in schema:
-        return pascal(schema["$ref"].split("/")[-1])
+        ref = schema["$ref"].split("/")[-1]
+        return "String" if ref in STRING_ENUMS else pascal(ref)
     inner = nullable_ref(schema)
     if inner:
-        return pascal(inner)
+        return "String" if inner in STRING_ENUMS else pascal(inner)
     if "oneOf" in schema or "anyOf" in schema:
         return "JsonNode"
 
@@ -885,12 +893,12 @@ def emit_enum(name: str, schema: Any) -> str:
         "every record on the page over one field of one of them -- including the "
         "records the caller was actually after.\n\n"
         "A Java enum constant cannot carry the string it was decoded from, so "
-        "this one does not pretend to. Its wire spelling is the empty string, "
-        "which no server value is: fifteen of these enums appear in request "
-        "bodies, and a read-modify-write that carried an unrecognised value back "
-        "is refused by the server with a 400 rather than silently writing a "
-        "spelling it never used. Do not send it deliberately -- read the field, "
-        "and if it is {@code UNKNOWN}, leave it out of the update.",
+        "this one does not pretend to. It is never sent (CONTRACT §34.2 P12.2): "
+        "a request body carrying it -- a read-modify-write that carried an "
+        "unrecognised value back -- is refused locally with a ValidationError "
+        "naming the field, before any request, rather than sent as a spelling "
+        "the server never used. Read the field, and if it is {@code UNKNOWN}, "
+        "set a value this SDK knows before writing it back.",
         "    "))
     lines.append('    UNKNOWN("");')
     lines.append("")
@@ -904,12 +912,12 @@ def emit_enum(name: str, schema: Any) -> str:
     lines.extend(javadoc(
         "Returns the spelling this value has on the wire.\n\n"
         "{@link #UNKNOWN} answers the empty string, which is not a value any "
-        "server sends. That is deliberate: it is what makes carrying an "
-        "unrecognised value back into an update a 400 from the server rather "
-        "than a silent rewrite into a spelling it never used. This accessor "
-        "cannot throw, because Jackson calls it on every constant while building "
-        "its deserializer -- a throwing one would break decoding for the whole "
-        "enum, which is the failure this type exists to avoid.",
+        "server sends; it is what a log line renders, and it never reaches the "
+        "wire, because the management transport refuses a request body carrying "
+        "{@code UNKNOWN} before sending it. This accessor cannot throw, because "
+        "Jackson calls it on every constant while building its deserializer -- a "
+        "throwing one would break decoding for the whole enum, which is the "
+        "failure this type exists to avoid.",
         "    ",
         ["@return the server's own spelling of this value, or the empty string "
          "for {@link #UNKNOWN}"]))
@@ -1402,6 +1410,8 @@ def emit_models() -> dict[str, str]:
     files: dict[str, str] = {}
     for name in schema_closure():
         schema = SCHEMAS[name]
+        if name in STRING_ENUMS:
+            continue
         if "enum" in schema and schema.get("type") == "string":
             files[f"{MODELS_DIR}/{pascal(name)}.java"] = emit_enum(name, schema)
             continue
@@ -1824,6 +1834,8 @@ def literal_for(name: str, secrets: set[str], depth: int = 0) -> str:
     """A Java expression constructing a minimal valid instance of ``name``."""
     schema = SCHEMAS.get(name, {})
     type_name = f"{MODELS_PACKAGE}.{pascal(name)}"
+    if name in STRING_ENUMS:
+        return f'"{schema["enum"][0]}"'
     if "enum" in schema and schema.get("type") == "string":
         return f"{type_name}.{enum_constant(schema['enum'][0])}"
     union = discriminated(schema)
@@ -2137,7 +2149,8 @@ def emit_open_values_test() -> str:
     would be asserted for a handful of them and assumed for the rest.
     """
     enums = [n for n in schema_closure()
-             if "enum" in SCHEMAS[n] and SCHEMAS[n].get("type") == "string"]
+             if "enum" in SCHEMAS[n] and SCHEMAS[n].get("type") == "string"
+             and n not in STRING_ENUMS]
     unions = [n for n in schema_closure() if n in OPEN_UNIONS and discriminated(SCHEMAS[n])]
     lines = [BANNER.rstrip("\n"), "package io.axiam.sdk.management;", "",
              "import com.fasterxml.jackson.databind.ObjectMapper;",

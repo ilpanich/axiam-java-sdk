@@ -2014,10 +2014,12 @@ Eight things worth knowing:
   the spec does not list now decodes to it rather than failing the whole
   response — a closed enum would turn the next `kind` or `status` the server
   adds into a parse error on an entire `list`, taking down every record on the
-  page over one field of one of them. `UNKNOWN.wire()` is the empty string,
-  which no server value is: carrying an unrecognised value back into an update
-  is refused by the server rather than silently written as a spelling it never
-  used.
+  page over one field of one of them. `UNKNOWN` is never sent: carrying an
+  unrecognised value back into a write is refused locally with a
+  `ValidationError` naming the field, before any request (§34.2 P12.2), and
+  rendering the body for a log line still works. SSF event types are not an enum
+  at all: they are strings (§32.2), so an event-type URI this SDK has not seen
+  keeps its value; `io.axiam.sdk.ssf.SsfEventTypes` names the known ones.
 
 Worked end to end in
 [`examples/management-basics`](examples/management-basics).
@@ -2126,7 +2128,7 @@ No response type has a member for the secret, and one met in a response is
 dropped. `scimTargets().delete` deprovisions nothing downstream; `reconcile`
 answers `202` and its outcome is on `state`. Unknown enum values and unknown
 `auth.type`/`scope.type` decode (as `UNKNOWN` / `ScimTargetAuthUnknown`) and are
-never sent. None of the writes is retried.
+never sent: a write carrying one is refused locally, before any request. None of the writes is retried.
 
 ## SSF receiver (`io.axiam.sdk.ssf`, §32.7)
 

@@ -42,11 +42,11 @@ public enum PermissionEffect {
      * of them -- including the records the caller was actually after.
      *
      * <p>A Java enum constant cannot carry the string it was decoded from, so this one does not
-     * pretend to. Its wire spelling is the empty string, which no server value is: fifteen of
-     * these enums appear in request bodies, and a read-modify-write that carried an unrecognised
-     * value back is refused by the server with a 400 rather than silently writing a spelling it
-     * never used. Do not send it deliberately -- read the field, and if it is {&#64;code UNKNOWN},
-     * leave it out of the update.
+     * pretend to. It is never sent (CONTRACT §34.2 P12.2): a request body carrying it -- a
+     * read-modify-write that carried an unrecognised value back -- is refused locally with a
+     * ValidationError naming the field, before any request, rather than sent as a spelling the
+     * server never used. Read the field, and if it is {&#64;code UNKNOWN}, set a value this SDK
+     * knows before writing it back.
      */
     UNKNOWN("");
 
@@ -60,12 +60,12 @@ public enum PermissionEffect {
     /**
      * Returns the spelling this value has on the wire.
      *
-     * <p>{&#64;link #UNKNOWN} answers the empty string, which is not a value any server sends.
-     * That is deliberate: it is what makes carrying an unrecognised value back into an update a
-     * 400 from the server rather than a silent rewrite into a spelling it never used. This
-     * accessor cannot throw, because Jackson calls it on every constant while building its
-     * deserializer -- a throwing one would break decoding for the whole enum, which is the failure
-     * this type exists to avoid.
+     * <p>{&#64;link #UNKNOWN} answers the empty string, which is not a value any server sends; it
+     * is what a log line renders, and it never reaches the wire, because the management transport
+     * refuses a request body carrying {&#64;code UNKNOWN} before sending it. This accessor cannot
+     * throw, because Jackson calls it on every constant while building its deserializer -- a
+     * throwing one would break decoding for the whole enum, which is the failure this type exists
+     * to avoid.
      *
      * @return the server's own spelling of this value, or the empty string for {@link #UNKNOWN}
      */

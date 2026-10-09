@@ -138,9 +138,17 @@ class SamlTest extends ManagementTestBase {
             assertFalse(Arrays.stream(type.getRecordComponents())
                     .anyMatch(c -> c.getName().equals("signAssertions")), "no signing switch");
         }
-        // An unknown value decodes but is never sent: replace the ACS binding
-        // before writing back.
+        // An unknown value decodes but is never sent (§34.2 P12.2): carried back
+        // into a write it is refused locally, never sent as "", and rendering the
+        // body for a log line still works.
         SamlServiceProviderInput read = ReplacementBodies.from(sp);
+        ValidationError refused = assertThrows(ValidationError.class,
+                () -> client.saml().updateServiceProvider(id, read));
+        assertTrue(refused.getMessage().contains("binding"), refused.getMessage());
+        assertEquals(0, put.calls(), "refused before sending");
+        assertTrue(read.toString().contains("UNKNOWN"));
+        assertTrue(JSON.writeValueAsString(read).contains("acs_urls"));
+        // Replace the ACS binding before writing back.
         AcsEndpoint acs = read.acsUrls().get(0);
         SamlServiceProviderInput fixed = new SamlServiceProviderInput(
                 List.of(new AcsEndpoint(SamlBinding.HTTP_POST, acs.index(), acs.isDefault(), acs.url())),
