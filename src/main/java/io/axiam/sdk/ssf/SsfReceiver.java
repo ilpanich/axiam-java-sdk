@@ -79,7 +79,7 @@ public final class SsfReceiver {
     private final OkHttpClient http;
     private final String baseUrl;
     private final boolean retryEnabled;
-    private final TelemetryDispatcher telemetry = new TelemetryDispatcher(null);
+    private final TelemetryDispatcher telemetry;
     private final SsfReceiverConfig config;
 
     /** Guards the key cache below. */
@@ -93,13 +93,15 @@ public final class SsfReceiver {
     /**
      * Builds a receiver over {@code client}'s transport.
      *
-     * @param client the client whose TLS policy, base URL and retry setting are used
+     * @param client the client whose TLS policy, base URL, retry setting and telemetry hook are used
      * @param config the receiver configuration
      */
     public SsfReceiver(AxiamClient client, SsfReceiverConfig config) {
         this.http = Sessionless.of(client.okHttpClient());
         this.baseUrl = client.baseUrl();
         this.retryEnabled = client.retryEnabled();
+        // §16.5: poll's retries are reported to the client's own §19 hook.
+        this.telemetry = new TelemetryDispatcher(client.telemetryHook());
         this.config = Objects.requireNonNull(config, "config");
     }
 

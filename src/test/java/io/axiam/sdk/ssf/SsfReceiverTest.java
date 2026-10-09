@@ -454,6 +454,27 @@ class SsfReceiverTest {
         assertTrue(receiver().poll("a/b", SsfPollOptions.none()).events().isEmpty(), "the stream id is path-escaped");
     }
 
+    /** &sect;16.5 / &sect;19: poll's retries reach the client's telemetry hook (R-41, F-J9). */
+    @Test
+    void pollRetriesReachTheClientsTelemetryHook() {
+        List<io.axiam.sdk.telemetry.TelemetryEvent> seen =
+                java.util.Collections.synchronizedList(new ArrayList<>());
+        AxiamClient hooked = AxiamClient.builder(server.base(), UUID.randomUUID().toString())
+                .telemetryHook(seen::add).build();
+        try {
+            server.on("POST", "/ssf/v1/poll/s-1", new MockResponse().setResponseCode(503),
+                    json(200, "{\"sets\":{},\"moreAvailable\":false}"));
+            SsfReceiver r = new SsfReceiver(hooked, SsfReceiverConfig.builder(ISSUER, AUDIENCE,
+                            SsfKeySource.jwksUri(server.base() + "/oauth2/jwks"))
+                    .accessTokenProvider(() -> Sensitive.of("cc-" + UUID.randomUUID())).build());
+            r.poll("s-1", SsfPollOptions.none());
+            assertTrue(seen.stream().anyMatch(e -> e instanceof io.axiam.sdk.telemetry.TelemetryEvent.Retry retry
+                    && "ssf.poll".equals(retry.operation())), "the retry is reported to the client's hook");
+        } finally {
+            hooked.close();
+        }
+    }
+
     @Test
     void discoverySuppliesTheJwksUriAndMustNameTheIssuer() throws Exception {
         OctetKeyPair key = key();

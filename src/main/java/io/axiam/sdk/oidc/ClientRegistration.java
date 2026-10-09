@@ -152,7 +152,10 @@ public record ClientRegistration(
      * Decodes a client information response, tolerating unknown members.
      *
      * <p>A member of an unexpected type is kept in {@link #extra()} rather
-     * than dropped: a replacement must not lose what the server holds.
+     * than dropped: a replacement must not lose what the server holds. The two
+     * secrets are the exception: a {@code client_secret} or
+     * {@code registration_access_token} that is not a string is dropped, so it
+     * reaches no rendering (&sect;28.12.4).
      *
      * @param wire the response body
      * @return the decoded registration
@@ -186,6 +189,10 @@ public record ClientRegistration(
         String jwksUri = takeString(rest, "jwks_uri");
         String secret = takeString(rest, "client_secret");
         String token = takeString(rest, "registration_access_token");
+        // §28.12.4: a secret member of any other type is dropped, never kept in extra(),
+        // where it would be rendered and sent back (an update never sends either).
+        rest.remove("client_secret");
+        rest.remove("registration_access_token");
         return new ClientRegistration(clientId, issuedAt, name, redirects, grants, responses,
                 authMethod, scope, uri, secretExpires, jwks, jwksUri,
                 secret == null ? null : Sensitive.of(secret),

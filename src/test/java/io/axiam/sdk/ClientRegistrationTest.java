@@ -309,6 +309,25 @@ class ClientRegistrationTest {
                 MAPPER.convertValue(changed.get("grant_types"), List.class));
     }
 
+    /** &sect;28.12.4: a secret member of an unexpected type is dropped, never kept in extra (R-41, F-J14). */
+    @Test
+    void aMistypedSecretIsDroppedNotKeptInExtra() throws Exception {
+        String token = freshToken();
+        String secret = freshToken();
+        ObjectNode body = registrationBody();
+        body.putObject("registration_access_token").put("value", token);
+        body.putArray("client_secret").add(secret);
+        ClientRegistration r = ClientRegistration.fromJson(body);
+        assertFalse(r.extra().containsKey("registration_access_token"));
+        assertFalse(r.extra().containsKey("client_secret"));
+        assertNull(r.registrationAccessToken());
+        assertNull(r.clientSecret());
+        for (String rendering : List.of(r.toString(), MAPPER.writeValueAsString(r), r.updateBody().toString())) {
+            Redaction.assertNoFragment("registration rendering", rendering, token);
+            Redaction.assertNoFragment("registration rendering", rendering, secret);
+        }
+    }
+
     @Test
     void decodingIsTolerantAndRefusesWhatIsNotARegistration() {
         ObjectNode odd = registrationBody();

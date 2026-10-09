@@ -23,6 +23,15 @@ public final class TelemetryDispatcher {
     }
 
     /**
+     * The wrapped hook.
+     *
+     * @return the caller's sink, or null
+     */
+    public @Nullable TelemetryHook hook() {
+        return hook;
+    }
+
+    /**
      * Whether a hook is installed.
      *
      * @return true when events will be delivered

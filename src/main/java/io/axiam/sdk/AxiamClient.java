@@ -985,6 +985,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return httpClient;
     }
 
+    /** The CONTRACT.md &sect;19 telemetry hook this client was built with
+     * ({@link Builder#telemetryHook}), or {@code null}. Read by helpers built over
+     * this client, e.g. {@link io.axiam.sdk.ssf.SsfReceiver}, so their requests and
+     * retries reach the same hook (&sect;16.5).
+     *
+     * @return the installed hook, or {@code null} when none was installed
+     */
+    public @Nullable TelemetryHook telemetryHook() {
+        return telemetry.hook();
+    }
+
     /** Whether the CONTRACT.md &sect;16 retry policy is on for this client
      * ({@link Builder#retryDisabled()} turns it off). Read by helpers built over
      * this client, e.g. {@link io.axiam.sdk.ssf.SsfReceiver}.
@@ -4491,10 +4502,17 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             if (!wire.path("auth_req_id").isTextual()) {
                 throw new NetworkError("cibaInitiate: the response carries no auth_req_id");
             }
+            // §33.2: expires_in is required. Read as 0 it was an immediate local
+            // expired_token for a request the user may be about to approve; refuse it.
+            JsonNode expiresIn = wire.path("expires_in");
+            if (!expiresIn.isIntegralNumber() || !expiresIn.canConvertToLong() || expiresIn.asLong() <= 0) {
+                throw new NetworkError("cibaInitiate: the response carries no positive expires_in "
+                        + "(CONTRACT.md §33.2)");
+            }
             long interval = wire.path("interval").asLong(0);
             return new io.axiam.sdk.oidc.CibaInitiateResponse(
                     Sensitive.of(wire.get("auth_req_id").asText()),
-                    wire.path("expires_in").asLong(0),
+                    expiresIn.asLong(),
                     interval > 0 ? interval : DEFAULT_CIBA_INTERVAL_SECONDS,
                     java.time.Instant.now());
         } catch (IOException e) {

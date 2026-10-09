@@ -386,6 +386,24 @@ class CibaTest {
         assertEquals(0, elsewhere.calls(), "the initiate does not follow a redirect");
     }
 
+    /**
+     * &sect;33.2 / &sect;33.7 rule 4: {@code expires_in} is required in the initiate response;
+     * a response without a positive one is refused rather than read as an already-expired
+     * request (R-41, F-J16).
+     */
+    @Test
+    void t04BAnInitiateResponseWithoutExpiresInIsRefused() throws Exception {
+        OidcConfiguration config = configuration();
+        AxiamClient client = client(random());
+        for (String extra : List.of("", ",\"expires_in\":0", ",\"expires_in\":\"120\"")) {
+            String id = random();
+            server.on("POST", "/oauth2/bc-authorize", json(200, "{\"auth_req_id\":\"" + id + "\"" + extra + "}"));
+            NetworkError e = assertThrows(NetworkError.class, () -> client.cibaInitiate(request(config).build()));
+            assertTrue(e.getMessage().contains("expires_in"));
+            Redaction.assertNoFragment("refusal", e + " " + e.getMessage(), id);
+        }
+    }
+
     // ── 5. Poll outcomes ─────────────────────────────────────────────────
 
     @Test
