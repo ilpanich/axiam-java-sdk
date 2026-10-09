@@ -279,6 +279,36 @@ class ClientRegistrationTest {
         }
     }
 
+    /**
+     * &sect;28.12.2 rule 4 as clarified by &sect;34.2 P12.4: the replacement is built from what
+     * the read carried. A list the read lacked is not sent (never as {@code []}), a list the
+     * read carried empty is sent empty, and a member of an unexpected shape is sent as read.
+     */
+    @Test
+    void theReplacementCarriesOnlyWhatTheReadCarriedAndAsItWasRead() {
+        ObjectNode lacking = registrationBody();
+        lacking.remove(List.of("redirect_uris", "grant_types", "response_types"));
+        ObjectNode sent = ClientRegistration.fromJson(lacking).updateBody();
+        for (String list : List.of("redirect_uris", "grant_types", "response_types")) {
+            assertFalse(sent.has(list), list + ": the read did not carry it, so it is not sent");
+        }
+
+        ObjectNode odd = registrationBody();
+        odd.putArray("redirect_uris");
+        odd.putArray("grant_types").add("client_credentials").add(7);
+        odd.put("response_types", "code");
+        ClientRegistration read = ClientRegistration.fromJson(odd);
+        ObjectNode replacement = read.updateBody();
+        assertEquals(odd.get("redirect_uris"), replacement.get("redirect_uris"), "an empty list stays empty");
+        assertEquals(odd.get("grant_types"), replacement.get("grant_types"), "no item is dropped");
+        assertEquals(odd.get("response_types"), replacement.get("response_types"), "kept as read");
+
+        // A list the caller sets replaces what was read.
+        ObjectNode changed = read.toBuilder().grantTypes(List.of("authorization_code")).build().updateBody();
+        assertEquals(List.of("authorization_code"),
+                MAPPER.convertValue(changed.get("grant_types"), List.class));
+    }
+
     @Test
     void decodingIsTolerantAndRefusesWhatIsNotARegistration() {
         ObjectNode odd = registrationBody();
