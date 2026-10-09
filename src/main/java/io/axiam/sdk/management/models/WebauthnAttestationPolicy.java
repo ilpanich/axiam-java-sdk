@@ -16,8 +16,9 @@ import java.util.UUID;
  * WebauthnAttestationPolicy::default}], which is today's behavior unchanged.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. An optional component left null is omitted and takes its default, not the value
+ * stored.
  *
  * @param allowedAaguids {@code None} = every AAGUID is allowed except {@code blocked_aaguids}.
  *     {@code Some(vec![])} is a deliberate "nothing may register" policy and is accepted as such:

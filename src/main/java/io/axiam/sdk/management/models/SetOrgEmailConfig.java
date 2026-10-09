@@ -12,8 +12,10 @@ import org.jspecify.annotations.Nullable;
  * Input for setting organization-level email config.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. A required component cannot be null: the constructor refuses it, rather than let
+ * it be omitted from the wire and refused by the server. An optional component left null is
+ * omitted and takes its default, not the value stored.
  *
  * @param enabled the server's enabled field
  * @param fromEmail the server's from_email field
@@ -30,4 +32,23 @@ public record SetOrgEmailConfig(
         @JsonProperty("provider") ProviderConfig provider,
         @JsonProperty("reply_to") @Nullable String replyTo
 ) {
+
+    /**
+     * Refuses a null for a required member: this body replaces the stored one, and a
+     * required member left null would be omitted and refused by the server (§27.4
+     * rule 5). Optional members may be null; they are omitted and take their default.
+     *
+     * @param enabled see the record component
+     * @param fromEmail see the record component
+     * @param fromName see the record component
+     * @param provider see the record component
+     * @param replyTo see the record component
+     * @throws NullPointerException naming the first required member that is null
+     */
+    public SetOrgEmailConfig {
+        java.util.Objects.requireNonNull(enabled, "enabled is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(fromEmail, "from_email is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(fromName, "from_name is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(provider, "provider is required (CONTRACT §27.4 rule 5)");
+    }
 }

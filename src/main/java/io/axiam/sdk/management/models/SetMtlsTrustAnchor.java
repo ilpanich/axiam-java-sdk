@@ -11,8 +11,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * Body for {@code PUT .../ca-certificates/{id}/mtls-trust-anchor}.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. A required component cannot be null: the constructor refuses it, rather than let
+ * it be omitted from the wire and refused by the server.
  *
  * @param enabled Whether this CA should be trusted for client-certificate authentication.
  */
@@ -21,4 +22,16 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record SetMtlsTrustAnchor(
         @JsonProperty("enabled") Boolean enabled
 ) {
+
+    /**
+     * Refuses a null for a required member: this body replaces the stored one, and a
+     * required member left null would be omitted and refused by the server (§27.4
+     * rule 5). Optional members may be null; they are omitted and take their default.
+     *
+     * @param enabled see the record component
+     * @throws NullPointerException naming the first required member that is null
+     */
+    public SetMtlsTrustAnchor {
+        java.util.Objects.requireNonNull(enabled, "enabled is required (CONTRACT §27.4 rule 5)");
+    }
 }

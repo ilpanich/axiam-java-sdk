@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.58**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.59**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32 and §33, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
@@ -47,7 +47,12 @@ the §33 CIBA client helpers (`cibaInitiate`, `cibaPoll`, `cibaAwait`,
 `cibaHandlePing`) including the §33.2 signed request form for all three algorithms
 (PS256, ES256, EdDSA). The §21.3.1 vector A amendment (the seventh
 `mtls_endpoint_aliases` member, `backchannel_authentication_endpoint`) is pinned.
-Nothing of §28.12–§33 is carved out.
+Nothing of §28.12–§33 is carved out, and those sections are met as the contract 1.59
+clarifications of §34.2 read them (P1 – P12; the Java follow-up F-59-04 is closed):
+`poll` never records a `jti` it does not return, a `5xx` on `cibaPoll` is transient
+whatever its body, no write goes out twice — not by OkHttp's connection-failure
+re-send, not by a refresh after a tenant-path `401`, not by a redirect — and an
+unknown value is refused locally rather than sent.
 
 §12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29,
 §30, §31, §32, §32.7, §33 and §33.2 signed are named
@@ -2014,10 +2019,12 @@ Eight things worth knowing:
   the spec does not list now decodes to it rather than failing the whole
   response — a closed enum would turn the next `kind` or `status` the server
   adds into a parse error on an entire `list`, taking down every record on the
-  page over one field of one of them. `UNKNOWN.wire()` is the empty string,
-  which no server value is: carrying an unrecognised value back into an update
-  is refused by the server rather than silently written as a spelling it never
-  used.
+  page over one field of one of them. `UNKNOWN` is never sent: carrying an
+  unrecognised value back into a write is refused locally with a
+  `ValidationError` naming the field, before any request (§34.2 P12.2), and
+  rendering the body for a log line still works. SSF event types are not an enum
+  at all: they are strings (§32.2), so an event-type URI this SDK has not seen
+  keeps its value; `io.axiam.sdk.ssf.SsfEventTypes` names the known ones.
 
 Worked end to end in
 [`examples/management-basics`](examples/management-basics).
@@ -2126,7 +2133,7 @@ No response type has a member for the secret, and one met in a response is
 dropped. `scimTargets().delete` deprovisions nothing downstream; `reconcile`
 answers `202` and its outcome is on `state`. Unknown enum values and unknown
 `auth.type`/`scope.type` decode (as `UNKNOWN` / `ScimTargetAuthUnknown`) and are
-never sent. None of the writes is retried.
+never sent: a write carrying one is refused locally, before any request. None of the writes is retried.
 
 ## SSF receiver (`io.axiam.sdk.ssf`, §32.7)
 
@@ -2158,7 +2165,11 @@ while (true) {
     ack = new ArrayList<>();
     setErrs = new LinkedHashMap<>();
     for (SecurityEvent e : page.events()) { process(e); ack.add(e.jti()); }
-    for (RefusedSet r : page.refused()) { setErrs.put(r.jti(), SetErr.fromReason(r.reason())); }
+    for (RefusedSet r : page.refused()) {
+        if (r.reason() == SetFailureReason.REPLAYED) ack.add(r.jti());   // accepted earlier (§34.2 P2)
+        else setErrs.put(r.jti(), SetErr.fromReason(r.reason()));
+    }
+    // page.unjudged(): not recorded, neither ack nor refuse them — they are offered again.
     if (!page.moreAvailable()) break;
 }
 ```
@@ -2171,7 +2182,15 @@ while (true) {
 - **A verified SET is recorded** in the replay store (default in-memory, pluggable
   via `ReplayStore`; window seven days, the floor — shorter is refused at
   configuration). Re-offered unacknowledged, it reads as `replayed`, so acknowledge
-  what you processed. `poll` never acknowledges anything itself.
+  what you processed — and acknowledge a SET refused as `replayed` too, since this
+  receiver accepted it earlier (§34.2 P2). `poll` never acknowledges anything itself.
+  The in-memory store is bounded by the window, not in count; a store that cannot
+  answer throws, which refuses the SET (fail closed) and is not a verdict.
+- **`poll` never records a `jti` it does not return** (§34.2 P1). It checks the whole
+  batch before recording any `jti`, so a JWKS or discovery failure raises having
+  recorded nothing and the batch is offered again. A replay store that fails
+  part-way returns the SETs already recorded and lists the rest in
+  `SsfPollResult.unjudged()`, unrecorded.
 - `SetFailureReason.pushErrorCode()` maps the SDK's reasons to RFC 8935 `err` codes:
   `malformed`, `invalid_type` and `replayed` answer `invalid_request`.
 - `poll` is retried per §16 on transport errors, `5xx`, `408` and `429`, never on

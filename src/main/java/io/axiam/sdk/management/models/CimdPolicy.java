@@ -38,9 +38,9 @@ import java.util.List;
  * how long its result may be trusted. Each is clamped again in code against the three constants
  * above, so a settings row written by hand cannot lift them.
  *
- * <p>Every component is optional, so this is a SPARSE body: what you leave null is left unchanged,
- * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
- * builder — a canonical constructor call with six nulls in it is not something a reader can check.
+ * <p>Every component is optional: what you leave null is omitted from the wire request entirely
+ * rather than sent as null (§27.4 rule 5). Use the builder or a factory — a canonical constructor
+ * call full of nulls is not something a reader can check.
  *
  * @param allowHttp Permit an {@code http://} {@code client_id} and an {@code http://} fetch.
  *     **Development only, and it does more than its name says.** AXIAM's shared SSRF guard couples the

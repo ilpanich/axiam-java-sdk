@@ -115,9 +115,9 @@ class SamlTest extends ManagementTestBase {
             assertTrue(sent.has(member), "a member of the replacement was not sent");
         }
         assertEquals("Payroll (EU)", sent.path("display_name").asText());
-        // display_name, entity_id and acs_urls are positional components of the
-        // canonical constructor: an input without them does not compile.
+        // display_name, entity_id and acs_urls cannot be null: the constructor refuses them.
         assertEquals(15, SamlServiceProviderInput.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(input(), "display_name", "entity_id", "acs_urls");
     }
 
     // ── 2. No signing switch, open decoding ──────────────────────────────
@@ -138,9 +138,17 @@ class SamlTest extends ManagementTestBase {
             assertFalse(Arrays.stream(type.getRecordComponents())
                     .anyMatch(c -> c.getName().equals("signAssertions")), "no signing switch");
         }
-        // An unknown value decodes but is never sent: replace the ACS binding
-        // before writing back.
+        // An unknown value decodes but is never sent (§34.2 P12.2): carried back
+        // into a write it is refused locally, never sent as "", and rendering the
+        // body for a log line still works.
         SamlServiceProviderInput read = ReplacementBodies.from(sp);
+        ValidationError refused = assertThrows(ValidationError.class,
+                () -> client.saml().updateServiceProvider(id, read));
+        assertTrue(refused.getMessage().contains("binding"), refused.getMessage());
+        assertEquals(0, put.calls(), "refused before sending");
+        assertTrue(read.toString().contains("UNKNOWN"));
+        assertTrue(JSON.writeValueAsString(read).contains("acs_urls"));
+        // Replace the ACS binding before writing back.
         AcsEndpoint acs = read.acsUrls().get(0);
         SamlServiceProviderInput fixed = new SamlServiceProviderInput(
                 List.of(new AcsEndpoint(SamlBinding.HTTP_POST, acs.index(), acs.isDefault(), acs.url())),
@@ -270,6 +278,25 @@ class SamlTest extends ManagementTestBase {
         for (Route r : routes) {
             assertEquals(1, r.calls(), "exactly one request per write");
         }
+    }
+
+    @Test
+    void noneOfTheSevenWritesIsResentAfterADroppedConnection() throws Exception {
+        UUID id = UUID.randomUUID();
+        SamlApi s = client.saml();
+        assertSentOnceOverADroppedConnection("POST", SAML + "/service-providers", () -> s.createServiceProvider(input()));
+        assertSentOnceOverADroppedConnection("PUT", SAML + "/service-providers/" + id,
+                () -> s.updateServiceProvider(id, input()));
+        assertSentOnceOverADroppedConnection("DELETE", SAML + "/service-providers/" + id,
+                () -> s.deleteServiceProvider(id));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/parse-sp-metadata",
+                () -> s.parseSpMetadata(ParseSamlSpMetadata.fromUrl("https://m")));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/idp-credentials",
+                () -> s.issueIdpCredential(new IssueSamlIdpCredential(UUID.randomUUID(), SamlIdpSlot.NEXT, null)));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/idp-credentials/" + id + "/promote",
+                () -> s.promoteIdpCredential(id));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/idp-credentials/" + id + "/retire",
+                () -> s.retireIdpCredential(id));
     }
 
     // ── 7. Errors ────────────────────────────────────────────────────────

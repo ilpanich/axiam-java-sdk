@@ -10,7 +10,6 @@ import io.axiam.sdk.errors.NetworkError;
 import io.axiam.sdk.errors.NotFoundError;
 import io.axiam.sdk.errors.ValidationError;
 import io.axiam.sdk.management.models.SsfDeliveryMethod;
-import io.axiam.sdk.management.models.SsfEventType;
 import io.axiam.sdk.management.models.SsfStatusActor;
 import io.axiam.sdk.management.models.SsfStream;
 import io.axiam.sdk.management.models.SsfStreamInput;
@@ -74,7 +73,7 @@ class SsfManagementTest extends ManagementTestBase {
 
     private static SsfStreamInput input(String header) {
         return new SsfStreamInput("https://rp.example", header == null ? null : Sensitive.of(header), null,
-                SsfDeliveryMethod.PUSH, "the RP", "https://rp.example/ssf", List.of(SsfEventType.SESSION_REVOKED),
+                SsfDeliveryMethod.PUSH, "the RP", "https://rp.example/ssf", List.of(REVOKED),
                 null, "rp-1", null, null, null);
     }
 
@@ -85,8 +84,8 @@ class SsfManagementTest extends ManagementTestBase {
         UUID id = UUID.randomUUID();
         Route put = mount("PUT", STREAMS + "/" + id, 200, streamBody().toString());
         SsfStreamInput body = new SsfStreamInput("https://rp.example", null, false, SsfDeliveryMethod.PUSH,
-                "the RP", "https://rp.example/ssf", List.of(SsfEventType.SESSION_REVOKED),
-                List.of(SsfEventType.SESSION_REVOKED), "rp-1", SsfStreamStatus.ENABLED, "ok",
+                "the RP", "https://rp.example/ssf", List.of(REVOKED),
+                List.of(REVOKED), "rp-1", SsfStreamStatus.ENABLED, "ok",
                 SsfSubjectFormat.ISS_SUB);
         SsfStream stream = client.ssf().updateStream(id, body);
         assertTrue(stream.transmitterActive());
@@ -98,9 +97,10 @@ class SsfManagementTest extends ManagementTestBase {
         }
         assertEquals(REVOKED, sent.path("events_allowed").get(0).asText());
         assertFalse(sent.has("authorization_header"), "absent keeps the stored header");
-        // The four required members are positional components of the canonical
-        // constructor: an input without them does not compile.
+        // The four required members cannot be null: the constructor refuses them.
         assertEquals(12, SsfStreamInput.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(input(null), "receiver_client_id", "audience", "delivery_method",
+                "events_allowed");
     }
 
     // ── 2. The header is Sensitive ───────────────────────────────────────
@@ -136,7 +136,15 @@ class SsfManagementTest extends ManagementTestBase {
         assertEquals(SsfDeliveryMethod.UNKNOWN, s.deliveryMethod());
         assertEquals(SsfSubjectFormat.UNKNOWN, s.subjectFormat());
         assertEquals(SsfStatusActor.UNKNOWN, s.statusActor());
-        assertEquals(SsfEventType.UNKNOWN, s.eventsAllowed().get(0));
+        // §32.2: event types are strings, so an unseen URI keeps its value (R-22).
+        assertEquals("https://example.test/event-type/new", s.eventsAllowed().get(0));
+        // §34.2 P12.2: an unknown status carried back into a write is refused locally.
+        UUID id = UUID.randomUUID();
+        Route put = mount("PUT", STREAMS + "/" + id, 200, streamBody().toString());
+        ValidationError refused = assertThrows(ValidationError.class,
+                () -> client.ssf().updateStream(id, ReplacementBodies.from(s)));
+        assertTrue(refused.getMessage().contains("delivery_method"), refused.getMessage());
+        assertEquals(0, put.calls(), "refused before sending");
 
         ObjectNode inactive = streamBody();
         inactive.put("transmitter_active", false);
@@ -180,6 +188,15 @@ class SsfManagementTest extends ManagementTestBase {
         for (Route r : routes) {
             assertEquals(1, r.calls(), "exactly one request per write");
         }
+    }
+
+    @Test
+    void noneOfTheThreeWritesIsResentAfterADroppedConnection() throws Exception {
+        UUID id = UUID.randomUUID();
+        SsfApi s = client.ssf();
+        assertSentOnceOverADroppedConnection("POST", STREAMS, () -> s.createStream(input(headerValue())));
+        assertSentOnceOverADroppedConnection("PUT", STREAMS + "/" + id, () -> s.updateStream(id, input(null)));
+        assertSentOnceOverADroppedConnection("DELETE", STREAMS + "/" + id, () -> s.deleteStream(id));
     }
 
     // ── 6. Errors ────────────────────────────────────────────────────────

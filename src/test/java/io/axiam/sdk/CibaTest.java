@@ -208,6 +208,8 @@ class CibaTest {
                 oauthError(400, "invalid_binding_message"));
         CibaInitiateRequest req = request(config).pingMode(Sensitive.of(notification)).bindingMessage("W4SCT").build();
         Redaction.assertNoFragment("request rendering", req.toString(), notification);
+        // §7 rule 2 / §33.5: the public members() view is a rendering sink too (R-19).
+        Redaction.assertNoFragment("members() rendering", req.members().toString(), notification);
         CibaInitiateResponse response = client.cibaInitiate(req);
         Redaction.assertNoFragment("response rendering",
                 response + " " + MAPPER.writeValueAsString(response), authReqId);
@@ -337,6 +339,71 @@ class CibaTest {
         }
     }
 
+    /**
+     * &sect;34.2 P11 / &sect;33.4: the &sect;9 exemption covers the OAuth2 endpoints in both
+     * issuer forms. A {@code 401} on a tenant-path {@code bc-authorize} (or token endpoint)
+     * from a client that also holds a session is the client's credential: it never enters
+     * the refresh guard, and the initiate is never sent twice.
+     */
+    @Test
+    void t04ATenantPath401NeverRefreshesOrReSendsTheInitiate() throws Exception {
+        String tenantPath = "/t/" + TENANT;
+        ObjectNode doc = discovery(server.base() + tenantPath + "/oauth2/bc-authorize");
+        doc.put("token_endpoint", server.base() + tenantPath + "/oauth2/token");
+        server.on("GET", "/.well-known/openid-configuration", json(200, doc.toString()));
+        server.mountLogin(TENANT);
+        RouteServer.Route refresh = server.onEach("POST", "/api/v1/auth/refresh", i -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Set-Cookie", "axiam_access=" + random() + "; Path=/")
+                .addHeader("Set-Cookie", "axiam_refresh=r" + random() + "; Path=/")
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"session_id\":\"" + UUID.randomUUID() + "\",\"expires_in\":900}"));
+        RouteServer.Route bc = server.on("POST", tenantPath + "/oauth2/bc-authorize",
+                oauthError(401, "invalid_client"));
+        RouteServer.Route token = server.on("POST", tenantPath + "/oauth2/token", oauthError(401, "invalid_client"));
+
+        AxiamClient client = client(random());
+        client.login("admin@example.test", random());
+        OidcConfiguration config = client.oidcDiscover();
+
+        OAuthProtocolError e = assertThrows(OAuthProtocolError.class,
+                () -> client.cibaInitiate(request(config).build()));
+        assertEquals("invalid_client", e.error());
+        assertEquals(1, bc.calls(), "the initiate is sent once, never re-sent after a refresh");
+
+        OAuthProtocolError p = assertThrows(OAuthProtocolError.class,
+                () -> client.cibaPoll(Sensitive.of(random()), null, config));
+        assertEquals("invalid_client", p.error());
+        assertEquals(1, token.calls(), "the poll is sent once");
+        assertEquals(0, refresh.calls(), "a 401 at an OAuth2 endpoint never enters the §9 refresh guard");
+
+        // Nor by a redirect: a 307 would re-send the initiate's POST to wherever it points.
+        RouteServer.Route moved = server.on("POST", tenantPath + "/oauth2/bc-authorize",
+                new MockResponse().setResponseCode(307).setHeader("Location", server.base() + "/elsewhere"));
+        RouteServer.Route elsewhere = server.on("POST", "/elsewhere", initiated(random(), null));
+        assertThrows(RuntimeException.class, () -> client.cibaInitiate(request(config).build()));
+        assertEquals(1, moved.calls());
+        assertEquals(0, elsewhere.calls(), "the initiate does not follow a redirect");
+    }
+
+    /**
+     * &sect;33.2 / &sect;33.7 rule 4: {@code expires_in} is required in the initiate response;
+     * a response without a positive one is refused rather than read as an already-expired
+     * request (R-41, F-J16).
+     */
+    @Test
+    void t04BAnInitiateResponseWithoutExpiresInIsRefused() throws Exception {
+        OidcConfiguration config = configuration();
+        AxiamClient client = client(random());
+        for (String extra : List.of("", ",\"expires_in\":0", ",\"expires_in\":\"120\"")) {
+            String id = random();
+            server.on("POST", "/oauth2/bc-authorize", json(200, "{\"auth_req_id\":\"" + id + "\"" + extra + "}"));
+            NetworkError e = assertThrows(NetworkError.class, () -> client.cibaInitiate(request(config).build()));
+            assertTrue(e.getMessage().contains("expires_in"));
+            Redaction.assertNoFragment("refusal", e + " " + e.getMessage(), id);
+        }
+    }
+
     // ── 5. Poll outcomes ─────────────────────────────────────────────────
 
     @Test
@@ -411,8 +478,10 @@ class CibaTest {
         OidcConfiguration config = configuration();
         AxiamClient client = client(random());
         TestClock clock = new TestClock();
+        // §34.2 P8: the 500 carries the body AXIAM's token endpoint really sends.
         RouteServer.Route token = tokenScript(clock, new ArrayList<>(), oauthError(400, "authorization_pending"),
-                status(500), oauthError(429, "rate_limit_exceeded"), tokensWithIdToken(config));
+                json(500, "{\"error\":\"server_error\"}"), oauthError(429, "rate_limit_exceeded"),
+                tokensWithIdToken(config));
         OidcTokenSet set = client.cibaAwait(new CibaInitiateResponse(Sensitive.of(random()), 600, 5, clock.start),
                 null, config, clock);
         assertFalse(set.accessToken().expose().isEmpty());
@@ -425,10 +494,50 @@ class CibaTest {
                 .oidcClientSecret(random()).retryDisabled().build();
         clients.add(noRetry);
         TestClock c = new TestClock();
-        RouteServer.Route flaky = tokenScript(c, new ArrayList<>(), status(503), tokensWithIdToken(config));
+        RouteServer.Route flaky = tokenScript(c, new ArrayList<>(),
+                json(503, "{\"error\":\"temporarily_unavailable\"}"), tokensWithIdToken(config));
         noRetry.cibaAwait(new CibaInitiateResponse(Sensitive.of(random()), 600, 5, c.start), null, config, c);
         assertEquals(2, flaky.calls());
         assertEquals(List.of(5L, 5L), c.sleeps, "a transient failure counts as one interval");
+
+        // And a single cibaPoll retries a 5xx under §16 whatever its body.
+        RouteServer.Route once = server.on("POST", "/oauth2/token", json(500, "{\"error\":\"server_error\"}"),
+                tokensWithIdToken(config));
+        assertNotNull(client.cibaPoll(Sensitive.of(random()), null, config).idClaims());
+        assertEquals(2, once.calls(), "the 500 is retried within the poll");
+    }
+
+    /**
+     * &sect;34.2 P9: only a transport failure, {@code 408}, {@code 429} and a {@code 5xx}
+     * are transient. A bodiless {@code 4xx} is decisive, and anything that fails after a
+     * {@code 200} &mdash; a body that does not decode, the key fetch ID-token validation
+     * needs &mdash; is terminal: the redemption is spent, so the loop polls no more.
+     */
+    @Test
+    void t08ADecisiveAnswersAndFailuresAfterThe200EndTheLoop() throws Exception {
+        OidcConfiguration config = configuration();
+        for (MockResponse decisive : List.of(status(400), status(404),
+                json(200, "{\"access_token\": not json"))) {
+            AxiamClient client = client(random());
+            TestClock c = new TestClock();
+            RouteServer.Route token = tokenScript(c, new ArrayList<>(), decisive, tokensWithIdToken(config));
+            assertThrows(NetworkError.class, () -> client.cibaAwait(
+                    new CibaInitiateResponse(Sensitive.of(random()), 600, 5, c.start), null, config, c));
+            assertEquals(1, token.calls(), "one poll, then the loop ends");
+        }
+
+        // A 200 whose ID token cannot be validated because the key fetch fails.
+        OctetKeyPair key = OidcTestSupport.generateEd25519KeyPair("ciba-" + UUID.randomUUID());
+        String idToken = OidcTestSupport.signEdDsa(key,
+                OidcTestSupport.validIdTokenClaims(config.issuer(), CLIENT_ID, null));
+        server.on("GET", "/oauth2/jwks", status(500));
+        AxiamClient client = client(random());
+        TestClock c = new TestClock();
+        RouteServer.Route token = tokenScript(c, new ArrayList<>(), json(200, "{\"access_token\":\"" + random()
+                + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"id_token\":\"" + idToken + "\"}"));
+        assertThrows(RuntimeException.class, () -> client.cibaAwait(
+                new CibaInitiateResponse(Sensitive.of(random()), 600, 5, c.start), null, config, c));
+        assertEquals(1, token.calls(), "a spent redemption is not polled again");
     }
 
     // ── 9. Single use ────────────────────────────────────────────────────

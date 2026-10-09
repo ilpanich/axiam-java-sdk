@@ -19,9 +19,9 @@ import java.util.List;
  * for anything they omitted, instead of a deserialization error listing fields they have never
  * heard of.
  *
- * <p>Every component is optional, so this is a SPARSE body: what you leave null is left unchanged,
- * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
- * builder — a canonical constructor call with six nulls in it is not something a reader can check.
+ * <p>Every component is optional: what you leave null is omitted from the wire request entirely
+ * rather than sent as null (§27.4 rule 5). Use the builder or a factory — a canonical constructor
+ * call full of nulls is not something a reader can check.
  *
  * @param acceptedAudiences Audiences an incoming subject token may name. Required (non-empty) when
  *     {@code enabled}; there is deliberately no accept-all value.

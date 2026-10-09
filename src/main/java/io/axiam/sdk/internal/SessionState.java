@@ -59,19 +59,22 @@ public final class SessionState {
     public static final String REFRESH_PATH = "/api/v1/auth/refresh";
 
     /**
-     * The three {@code /oauth2/*} paths CONTRACT.md &sect;12.3 rule 3 forbids
-     * from ever entering the &sect;9 single-flight refresh guard: a
-     * client-credential failure at one of these is not a session expiry, and
-     * retrying via the cookie-session refresh cannot fix it. Special-cased by
-     * {@code AuthAuthenticator} (reactive 401 handling) and
+     * The four OAuth2 endpoints CONTRACT.md &sect;12.3 rule 3 (and &sect;33.4 for
+     * {@code bc-authorize}) forbids from ever entering the &sect;9 single-flight
+     * refresh guard: a client-credential failure at one of these is not a session
+     * expiry, and retrying via the cookie-session refresh cannot fix it.
+     * Special-cased by {@code AuthAuthenticator} (reactive 401 handling) and
      * {@code AuthInterceptor} (proactive near-expiry refresh), mirroring how
      * {@link #REFRESH_PATH} is already special-cased for the same reason.
+     *
+     * <p>Matched on the endpoint, not on one literal path (&sect;34.2 P11): the
+     * issuer has two forms, {@code /oauth2/…} and {@code /t/{tenant_id}/oauth2/…},
+     * and a discovery document may name either. An exact-path set let a {@code 401}
+     * on {@code /t/{tid}/oauth2/bc-authorize} refresh the session and re-send the
+     * initiate &sect;33.7 rule 1 says is never sent twice.
      */
-    private static final java.util.Set<String> OAUTH2_SKIP_REFRESH_PATHS =
-            java.util.Set.of("/oauth2/token", "/oauth2/introspect", "/oauth2/revoke",
-                    // CONTRACT.md §33.4: a 401 at bc-authorize is the client's
-                    // credential, never a session expiry.
-                    "/oauth2/bc-authorize");
+    private static final java.util.regex.Pattern OAUTH2_SKIP_REFRESH_ENDPOINT =
+            java.util.regex.Pattern.compile("(?:.*/)?oauth2/(?:token|introspect|revoke|bc-authorize)");
 
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -203,17 +206,18 @@ public final class SessionState {
     }
 
     /**
-     * Checks whether {@code encodedPath} is one of the four {@code /oauth2/*}
-     * paths that must never enter the &sect;9 single-flight refresh guard
-     * (CONTRACT.md &sect;12.3 rule 3, &sect;33.4).
+     * Checks whether {@code encodedPath} is one of the four OAuth2 endpoints
+     * that must never enter the &sect;9 single-flight refresh guard
+     * (CONTRACT.md &sect;12.3 rule 3, &sect;33.4), in either issuer form
+     * (&sect;34.2 P11).
      *
      * @param encodedPath a request URL's encoded path
-     * @return {@code true} if {@code encodedPath} is {@code /oauth2/token},
-     *         {@code /oauth2/introspect}, {@code /oauth2/revoke} or
-     *         {@code /oauth2/bc-authorize}
+     * @return {@code true} if {@code encodedPath} names the token, introspection,
+     *         revocation or backchannel-authentication endpoint &mdash;
+     *         {@code /oauth2/token} or {@code /t/{tenant_id}/oauth2/token}, and so on
      */
     public static boolean isOauth2SkipRefreshPath(String encodedPath) {
-        return OAUTH2_SKIP_REFRESH_PATHS.contains(encodedPath);
+        return OAUTH2_SKIP_REFRESH_ENDPOINT.matcher(encodedPath).matches();
     }
 
     /**

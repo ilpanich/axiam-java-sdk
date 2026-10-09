@@ -45,9 +45,10 @@ import java.util.Objects;
  * @param clientId                the client's {@code client_id}
  * @param clientIdIssuedAt        when the id was issued (seconds since the epoch); never sent on an update
  * @param clientName              the registered display name
- * @param redirectUris            the registered redirect URIs
- * @param grantTypes              the registered grant types
- * @param responseTypes           the registered response types
+ * @param redirectUris            the registered redirect URIs; empty when the read carried none, or carried
+ *                                them in another shape (then they are in {@code extra}, verbatim)
+ * @param grantTypes              the registered grant types (as {@code redirectUris})
+ * @param responseTypes           the registered response types (as {@code redirectUris})
  * @param tokenEndpointAuthMethod how the client authenticates; the server refuses an update that changes it
  * @param scope                   the registered scope, space-separated
  * @param registrationClientUri   where this registration is read, replaced and deleted; never sent on an update
@@ -151,7 +152,10 @@ public record ClientRegistration(
      * Decodes a client information response, tolerating unknown members.
      *
      * <p>A member of an unexpected type is kept in {@link #extra()} rather
-     * than dropped: a replacement must not lose what the server holds.
+     * than dropped: a replacement must not lose what the server holds. The two
+     * secrets are the exception: a {@code client_secret} or
+     * {@code registration_access_token} that is not a string is dropped, so it
+     * reaches no rendering (&sect;28.12.4).
      *
      * @param wire the response body
      * @return the decoded registration
@@ -185,6 +189,10 @@ public record ClientRegistration(
         String jwksUri = takeString(rest, "jwks_uri");
         String secret = takeString(rest, "client_secret");
         String token = takeString(rest, "registration_access_token");
+        // §28.12.4: a secret member of any other type is dropped, never kept in extra(),
+        // where it would be rendered and sent back (an update never sends either).
+        rest.remove("client_secret");
+        rest.remove("registration_access_token");
         return new ClientRegistration(clientId, issuedAt, name, redirects, grants, responses,
                 authMethod, scope, uri, secretExpires, jwks, jwksUri,
                 secret == null ? null : Sensitive.of(secret),
@@ -200,6 +208,12 @@ public record ClientRegistration(
      * {@code client_secret} &mdash; with {@code client_id} set to this
      * registration's own.
      *
+     * <p>Built from what the read carried (&sect;34.2 P12.4): an empty
+     * {@link #redirectUris()}, {@link #grantTypes()} or {@link #responseTypes()}
+     * is not sent, so a list the read lacked is never sent as {@code []}; a list
+     * the read carried in another shape (or empty) is in {@link #extra()} and is
+     * sent exactly as read. A non-empty list set on the builder replaces it.
+     *
      * @return the JSON body an update sends
      */
     public ObjectNode updateBody() {
@@ -212,9 +226,17 @@ public record ClientRegistration(
         if (clientName != null) {
             body.put("client_name", clientName);
         }
-        body.set("redirect_uris", list(redirectUris));
-        body.set("grant_types", list(grantTypes));
-        body.set("response_types", list(responseTypes));
+        // §34.2 P12.4: a list the read did not carry is not sent — never as [] — and one
+        // of an unexpected shape (or empty) stays in extra and goes back as read.
+        if (!redirectUris.isEmpty()) {
+            body.set("redirect_uris", list(redirectUris));
+        }
+        if (!grantTypes.isEmpty()) {
+            body.set("grant_types", list(grantTypes));
+        }
+        if (!responseTypes.isEmpty()) {
+            body.set("response_types", list(responseTypes));
+        }
         if (tokenEndpointAuthMethod != null) {
             body.put("token_endpoint_auth_method", tokenEndpointAuthMethod);
         }
@@ -269,15 +291,19 @@ public record ClientRegistration(
             map.remove(key);
             return out;
         }
-        if (!node.isArray()) {
+        // Taken only as a non-empty array of strings. Anything else — an empty array,
+        // another shape, an array holding a non-string — stays in extra verbatim, so a
+        // replacement sends it back exactly as read (§28.12.2 rule 4, §34.2 P12.4).
+        if (!node.isArray() || node.isEmpty()) {
             return out;
         }
-        map.remove(key);
         for (JsonNode item : node) {
-            if (item.isTextual()) {
-                out.add(item.asText());
+            if (!item.isTextual()) {
+                return new ArrayList<>();
             }
+            out.add(item.asText());
         }
+        map.remove(key);
         return out;
     }
 

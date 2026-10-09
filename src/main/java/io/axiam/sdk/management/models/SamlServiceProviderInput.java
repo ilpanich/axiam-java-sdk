@@ -19,8 +19,10 @@ import java.util.UUID;
  * so a client written against a later revision of this struct keeps working.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. A required component cannot be null: the constructor refuses it, rather than let
+ * it be omitted from the wire and refused by the server. An optional component left null is
+ * omitted and takes its default, not the value stored.
  *
  * @param acsUrls The ACS allow-list. At least one, at most one default.
  * @param allowIdpInitiated Whether IdP-initiated SSO is allowed for this SP (D-3). A per-SP
@@ -67,4 +69,32 @@ public record SamlServiceProviderInput(
         @JsonProperty("sp_signing_cert_pem") @Nullable String spSigningCertPem,
         @JsonProperty("want_authn_requests_signed") @Nullable Boolean wantAuthnRequestsSigned
 ) {
+
+    /**
+     * Refuses a null for a required member: this body replaces the stored one, and a
+     * required member left null would be omitted and refused by the server (§27.4
+     * rule 5). Optional members may be null; they are omitted and take their default.
+     *
+     * @param acsUrls see the record component
+     * @param allowIdpInitiated see the record component
+     * @param allowedGroups see the record component
+     * @param attributeMappings see the record component
+     * @param displayName see the record component
+     * @param enabled see the record component
+     * @param encryptAssertions see the record component
+     * @param entityId see the record component
+     * @param nameIdFormat see the record component
+     * @param signResponses see the record component
+     * @param sloBinding see the record component
+     * @param sloUrl see the record component
+     * @param spEncryptionCertPem see the record component
+     * @param spSigningCertPem see the record component
+     * @param wantAuthnRequestsSigned see the record component
+     * @throws NullPointerException naming the first required member that is null
+     */
+    public SamlServiceProviderInput {
+        java.util.Objects.requireNonNull(acsUrls, "acs_urls is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(displayName, "display_name is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(entityId, "entity_id is required (CONTRACT §27.4 rule 5)");
+    }
 }

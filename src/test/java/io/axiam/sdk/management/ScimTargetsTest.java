@@ -126,9 +126,9 @@ class ScimTargetsTest extends ManagementTestBase {
         assertFalse(put.last().json().has("credential"), "no credential key");
         client.scimTargets().update(id, input(c));
         assertTrue(c.equals(put.last().json().path("credential").asText()), "the credential is sent");
-        // name, base_url, auth and scope are positional components: an input
-        // without them does not compile.
+        // name, base_url, auth and scope cannot be null: the constructor refuses them.
         assertEquals(9, ScimTargetInput.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(input(null), "name", "base_url", "auth", "scope");
 
         assertEquals(JSON.readTree("{\"type\":\"bearer\"}"), wire(new ScimTargetAuthBearer("bearer")));
         assertEquals(JSON.readTree("{\"type\":\"oauth2_client_credentials\",\"client_id\":\"axiam\","
@@ -169,6 +169,15 @@ class ScimTargetsTest extends ManagementTestBase {
         ScimTargetResponse first = page.items().get(0);
         assertInstanceOf(ScimTargetAuthUnknown.class, first.auth());
         assertEquals(DeprovisionPolicy.UNKNOWN, first.deprovision());
+        // §34.2 P12.2: carried back into a write, an unknown value is refused locally.
+        ObjectNode archived = targetBody();
+        archived.put("deprovision", "archive");
+        UUID id = UUID.randomUUID();
+        Route put = mount("PUT", TARGETS + "/" + id, 200, targetBody().toString());
+        ScimTargetInput back = ReplacementBodies.from(JSON.treeToValue(archived, ScimTargetResponse.class));
+        ValidationError refused = assertThrows(ValidationError.class, () -> client.scimTargets().update(id, back));
+        assertTrue(refused.getMessage().contains("deprovision"), refused.getMessage());
+        assertEquals(0, put.calls(), "refused before sending, never as \"\"");
         assertEquals(UserNameSource.UNKNOWN, first.userNameFrom());
         assertNull(first.state());
         List<ScimTargetResponse> all = client.scimTargets().listAll(PageRequest.matching(1, "downstream"));
@@ -202,6 +211,16 @@ class ScimTargetsTest extends ManagementTestBase {
         for (Route r : routes) {
             assertEquals(1, r.calls(), "exactly one request per write");
         }
+    }
+
+    @Test
+    void noWriteIsResentAfterADroppedConnection() throws Exception {
+        UUID id = UUID.randomUUID();
+        ScimTargetsApi t = client.scimTargets();
+        assertSentOnceOverADroppedConnection("POST", TARGETS, () -> t.create(input(credential())));
+        assertSentOnceOverADroppedConnection("PUT", TARGETS + "/" + id, () -> t.update(id, input(null)));
+        assertSentOnceOverADroppedConnection("DELETE", TARGETS + "/" + id, () -> t.delete(id));
+        assertSentOnceOverADroppedConnection("POST", TARGETS + "/" + id + "/reconcile", () -> t.reconcile(id));
     }
 
     // ── 6. Errors and reconcile ──────────────────────────────────────────

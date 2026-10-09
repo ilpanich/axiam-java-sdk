@@ -63,6 +63,13 @@ IMPLICIT_TENANT_NAMESPACES = {
 # know. Each gains a decode-only `<Name>Unknown` arm (see emit_union).
 OPEN_UNIONS = {"ScimTargetAuth", "ScimTargetScope"}
 
+# String enums modelled as plain strings rather than a Java enum. §32.2: "An SDK
+# SHOULD model event types as strings with the six URIs as named constants" --
+# a Java enum cannot carry an event-type URI it does not list, so an unseen URI
+# was lost on decode (UNKNOWN) and re-sent as "" (contract 1.59 R-22). The
+# constants live in io.axiam.sdk.ssf.SsfEventTypes.
+STRING_ENUMS = {"SsfEventType"}
+
 # Sparse-body members where an explicit `null` is a different request from an
 # absent member (§27.4 rule 5, "null is not absent"). §30.2 names exactly two:
 # on `UpdateDirectoryConfig`, `null` clears the value and absence keeps it.
@@ -175,8 +182,12 @@ CALL_SITE_NOTES: dict[str, str] = {
         "`ReplacementBodies.from(SsfStream)` turns a read into the body."
     ),
     "scim_targets.create": (
-        "`credential` is required here (§31.3 rule 2). It is write-only: no "
-        "response ever carries it, and the SDK keeps no copy."
+        "**The credential is bound to its URL** (§31.3 rule 2): `credential` is "
+        "required here, and it is bound to the target's `base_url` (and, for a "
+        "client-credentials target, `auth.token_url`) — a later `update` that "
+        "changes either, or `auth.type`, must carry the credential again or is "
+        "refused `400`. It is write-only: no response ever carries it, and the SDK "
+        "keeps no copy to re-send."
     ),
     "scim_targets.update": (
         "**The credential is bound to its URL** (§31.3 rule 2): absent `credential` "
@@ -429,10 +440,11 @@ def java_type(schema: Any, *, boxed: bool = True) -> str:
     if not schema:
         return "JsonNode"
     if "$ref" in schema:
-        return pascal(schema["$ref"].split("/")[-1])
+        ref = schema["$ref"].split("/")[-1]
+        return "String" if ref in STRING_ENUMS else pascal(ref)
     inner = nullable_ref(schema)
     if inner:
-        return pascal(inner)
+        return "String" if inner in STRING_ENUMS else pascal(inner)
     if "oneOf" in schema or "anyOf" in schema:
         return "JsonNode"
 
@@ -787,6 +799,33 @@ def replacement_schemas() -> set[str]:
     return out
 
 
+def sparse_update_schemas() -> set[str]:
+    """The request bodies of a sparse (patch-style) update, where null means "unchanged"."""
+    return {op["request_schema"].lstrip("[]")
+            for ns in REGISTRY["namespaces"].values()
+            for op in ns["operations"].values()
+            if op["update_style"] == "sparse" and op["request_schema"]}
+
+
+def null_checked_schemas() -> set[str]:
+    """The replacement bodies whose required components refuse null (§34.2, R-27).
+
+    §29.8 t1, §30.8 t4, §31.8 t3 and §32.8 t1 say the input "cannot be built
+    without" its required members. A positional record component still accepts
+    a Java null, which NON_NULL then drops and the server answers 400, so the
+    compact constructor refuses it instead. Not a body that is itself a
+    response (WebauthnAttestationPolicy is also what `get` returns, and a
+    decoded record must not fail on what the server sent). A body nested in a
+    response is checked all the same: the one case, SamlServiceProviderInput
+    inside SamlSpMetadataDraft, is a draft the caller submits as it is, and the
+    schema requires the same members there.
+    """
+    top_level_responses = {op["response"]["schema"].lstrip("[]")
+                           for ns in REGISTRY["namespaces"].values()
+                           for op in ns["operations"].values() if op["response"]["schema"]}
+    return replacement_schemas() - top_level_responses
+
+
 def extra_query_params(op: dict[str, Any]) -> list[dict[str, Any]]:
     """Query parameters that become method arguments, rather than ``PageRequest``.
 
@@ -854,12 +893,12 @@ def emit_enum(name: str, schema: Any) -> str:
         "every record on the page over one field of one of them -- including the "
         "records the caller was actually after.\n\n"
         "A Java enum constant cannot carry the string it was decoded from, so "
-        "this one does not pretend to. Its wire spelling is the empty string, "
-        "which no server value is: fifteen of these enums appear in request "
-        "bodies, and a read-modify-write that carried an unrecognised value back "
-        "is refused by the server with a 400 rather than silently writing a "
-        "spelling it never used. Do not send it deliberately -- read the field, "
-        "and if it is {@code UNKNOWN}, leave it out of the update.",
+        "this one does not pretend to. It is never sent (CONTRACT §34.2 P12.2): "
+        "a request body carrying it -- a read-modify-write that carried an "
+        "unrecognised value back -- is refused locally with a ValidationError "
+        "naming the field, before any request, rather than sent as a spelling "
+        "the server never used. Read the field, and if it is {@code UNKNOWN}, "
+        "set a value this SDK knows before writing it back.",
         "    "))
     lines.append('    UNKNOWN("");')
     lines.append("")
@@ -873,12 +912,12 @@ def emit_enum(name: str, schema: Any) -> str:
     lines.extend(javadoc(
         "Returns the spelling this value has on the wire.\n\n"
         "{@link #UNKNOWN} answers the empty string, which is not a value any "
-        "server sends. That is deliberate: it is what makes carrying an "
-        "unrecognised value back into an update a 400 from the server rather "
-        "than a silent rewrite into a spelling it never used. This accessor "
-        "cannot throw, because Jackson calls it on every constant while building "
-        "its deserializer -- a throwing one would break decoding for the whole "
-        "enum, which is the failure this type exists to avoid.",
+        "server sends; it is what a log line renders, and it never reaches the "
+        "wire, because the management transport refuses a request body carrying "
+        "{@code UNKNOWN} before sending it. This accessor cannot throw, because "
+        "Jackson calls it on every constant while building its deserializer -- a "
+        "throwing one would break decoding for the whole enum, which is the "
+        "failure this type exists to avoid.",
         "    ",
         ["@return the server's own spelling of this value, or the empty string "
          "for {@link #UNKNOWN}"]))
@@ -986,6 +1025,28 @@ OMIT_WHEN_EMPTY = {"tenantScope"}
 DEFAULT_TRUE_WHEN_ABSENT = {"inherit"}
 
 
+def emit_required_checks(type_name: str, fields: list[dict]) -> list[str]:
+    """A compact constructor refusing null for every required component."""
+    targets = [f for f in fields if f["required"]]
+    if not targets:
+        return []
+    out = ["", "    /**",
+           "     * Refuses a null for a required member: this body replaces the stored one, and a",
+           "     * required member left null would be omitted and refused by the server (§27.4",
+           "     * rule 5). Optional members may be null; they are omitted and take their default.",
+           "     *"]
+    for f in fields:
+        out.append(f"     * @param {f['name']} see the record component")
+    out.append("     * @throws NullPointerException naming the first required member that is null")
+    out.append("     */")
+    out.append(f"    public {type_name} {{")
+    for f in targets:
+        out.append(f'        java.util.Objects.requireNonNull({f["name"]}, '
+                   f'"{f["wire"]} is required (CONTRACT §27.4 rule 5)");')
+    out.append("    }")
+    return out
+
+
 def emit_omit_when_empty(type_name: str, fields: list[dict]) -> list[str]:
     """A compact constructor normalising an empty OMIT_WHEN_EMPTY list to null.
 
@@ -1045,16 +1106,26 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
     all_optional = bool(fields) and not required
 
     text = description or f"The {type_name} schema from the server's OpenAPI document."
-    if all_optional:
+    if all_optional and name in sparse_update_schemas():
         text += ("\n\nEvery component is optional, so this is a SPARSE body: what you leave "
                  "null is left unchanged, and is omitted from the wire request entirely rather "
                  "than sent as null (§27.4 rule 5). Use the builder — a canonical constructor "
-                 "call with six nulls in it is not something a reader can check.")
+                 "call full of nulls is not something a reader can check.")
+    elif all_optional:
+        text += ("\n\nEvery component is optional: what you leave null is omitted from the "
+                 "wire request entirely rather than sent as null (§27.4 rule 5). Use the builder "
+                 "or a factory — a canonical constructor call full of nulls is not something a "
+                 "reader can check.")
     elif replacement:
         text += ("\n\nThis body REPLACES rather than patches (§27.4 rule 5): what you do not "
                  "carry over from a prior read is not preserved, it is overwritten. The "
-                 "canonical constructor takes every component, so forgetting one is a compile "
-                 "error rather than a silent null on the wire.")
+                 "canonical constructor takes every component positionally.")
+        if name in null_checked_schemas():
+            text += (" A required component cannot be null: the constructor refuses it, rather "
+                     "than let it be omitted from the wire and refused by the server.")
+        if not all(f["required"] for f in fields):
+            text += (" An optional component left null is omitted and takes its default, not "
+                     "the value stored.")
 
     tags = []
     for f in fields:
@@ -1081,6 +1152,8 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
                 f["type"] = f"@Nullable {f['type']}"
         body.extend(component_lines(fields))
         body.append(") {")
+        if name in null_checked_schemas():
+            body.extend(emit_required_checks(type_name, fields))
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
         body.extend(emit_factories(name, type_name))
@@ -1337,6 +1410,8 @@ def emit_models() -> dict[str, str]:
     files: dict[str, str] = {}
     for name in schema_closure():
         schema = SCHEMAS[name]
+        if name in STRING_ENUMS:
+            continue
         if "enum" in schema and schema.get("type") == "string":
             files[f"{MODELS_DIR}/{pascal(name)}.java"] = emit_enum(name, schema)
             continue
@@ -1429,10 +1504,19 @@ def operation_doc(op: dict[str, Any], canonical: str = "") -> str:
         note = re.sub(r"\*\*(.+?)\*\*", "\x01\\1\x02", CALL_SITE_NOTES[canonical])
         text += "\n\n" + note
     if op["update_style"] == "replace":
-        text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the "
-                 "body is required, and what you do not carry over from a prior read is not "
-                 "preserved -- it is overwritten. Read first, change the field you mean, send "
-                 "the whole thing back.")
+        _, required, _ = flatten(op["request_schema"].lstrip("[]"))
+        props, _, _ = flatten(op["request_schema"].lstrip("[]"))
+        if set(props) <= set(required):
+            text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the "
+                     "body is required, and what you do not carry over from a prior read is not "
+                     "preserved -- it is overwritten. Read first, change the field you mean, send "
+                     "the whole thing back.")
+        else:
+            text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). The body's required "
+                     "members must be set; an optional member left null is omitted and takes its "
+                     "default -- not the value stored. What you do not carry over from a prior "
+                     "read is not preserved. Read first, change the field you mean, send the whole "
+                     "thing back.")
     if op["sensitive_response_fields"]:
         joined = ", ".join(op["sensitive_response_fields"])
         text += (f"\n\nReturns secret material, once. {joined} is returned by this call and by "
@@ -1750,6 +1834,8 @@ def literal_for(name: str, secrets: set[str], depth: int = 0) -> str:
     """A Java expression constructing a minimal valid instance of ``name``."""
     schema = SCHEMAS.get(name, {})
     type_name = f"{MODELS_PACKAGE}.{pascal(name)}"
+    if name in STRING_ENUMS:
+        return f'"{schema["enum"][0]}"'
     if "enum" in schema and schema.get("type") == "string":
         return f"{type_name}.{enum_constant(schema['enum'][0])}"
     union = discriminated(schema)
@@ -2063,7 +2149,8 @@ def emit_open_values_test() -> str:
     would be asserted for a handful of them and assumed for the rest.
     """
     enums = [n for n in schema_closure()
-             if "enum" in SCHEMAS[n] and SCHEMAS[n].get("type") == "string"]
+             if "enum" in SCHEMAS[n] and SCHEMAS[n].get("type") == "string"
+             and n not in STRING_ENUMS]
     unions = [n for n in schema_closure() if n in OPEN_UNIONS and discriminated(SCHEMAS[n])]
     lines = [BANNER.rstrip("\n"), "package io.axiam.sdk.management;", "",
              "import com.fasterxml.jackson.databind.ObjectMapper;",

@@ -15,7 +15,7 @@ import java.util.List;
  *
  * <p>Every component is optional, so this is a SPARSE body: what you leave null is left unchanged,
  * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
- * builder — a canonical constructor call with six nulls in it is not something a reader can check.
+ * builder — a canonical constructor call full of nulls is not something a reader can check.
  *
  * @param description the server's description field
  * @param enabled the server's enabled field
