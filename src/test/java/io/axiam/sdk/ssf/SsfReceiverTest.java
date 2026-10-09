@@ -346,6 +346,90 @@ class SsfReceiverTest {
         assertTrue(again.events().isEmpty() && !again.moreAvailable());
     }
 
+    /**
+     * &sect;32.8 helper test 8 as amended by contract 1.59 (&sect;34.2 P1): a batch of two
+     * whose second SET names an unknown {@code kid} while the refetch fails. Afterwards the
+     * first SET's {@code jti} is not in the store &mdash; this SDK takes P1's first form: steps
+     * 1&ndash;8 run over the whole batch before any {@code jti} is recorded, so the poll raises
+     * having recorded nothing, and the transmitter offers both SETs again.
+     */
+    @Test
+    void aBatchOfTwoWhoseSecondKeyFetchFailsRecordsNothing() throws Exception {
+        OctetKeyPair key = key();
+        List<com.nimbusds.jose.jwk.JWK> pub = List.of(key.toPublicJWK());
+        RouteServer.Route keys = server.onEach("GET", "/oauth2/jwks",
+                i -> i == 0 ? json(200, new JWKSet(pub).toString()) : json(500, "{}"));
+        String stream = UUID.randomUUID().toString();
+        ObjectNode first = claims();
+        ObjectNode second = claims();
+        String firstSet = signSet(key, first);
+        ObjectNode reply = MAPPER.createObjectNode();
+        ObjectNode sets = reply.putObject("sets");
+        sets.put(first.path("jti").asText(), firstSet);
+        sets.put(second.path("jti").asText(), signSet(key(), second));
+        server.on("POST", "/ssf/v1/poll/" + stream, json(200, reply.toString()));
+
+        List<String> recorded = new ArrayList<>();
+        MemoryReplayStore memory = new MemoryReplayStore();
+        SsfReceiver r = new SsfReceiver(client, SsfReceiverConfig.builder(ISSUER, AUDIENCE,
+                        SsfKeySource.jwksUri(server.base() + "/oauth2/jwks"))
+                .accessTokenProvider(() -> Sensitive.of("cc-" + UUID.randomUUID()))
+                .replayStore((jti, window) -> {
+                    recorded.add(jti);
+                    return memory.checkAndRecord(jti, window);
+                }).build());
+        assertThrows(NetworkError.class, () -> r.poll(stream, SsfPollOptions.none()),
+                "the failed key fetch is no verdict: the poll raises");
+        assertEquals(2, keys.calls(), "the cold fetch and the one refetch");
+        assertEquals(List.of(), recorded, "the first SET's jti is not in the store");
+        // Offered again once the keys are back, it verifies rather than reading replayed.
+        assertEquals(first.path("jti").asText(), r.verifySet(firstSet).jti());
+    }
+
+    /**
+     * &sect;34.2 P1's second form, for a replay store that cannot answer part-way through
+     * recording: what was judged is returned, and the SETs left unjudged are unrecorded and
+     * listed apart, so the caller neither acknowledges nor refuses them.
+     */
+    @Test
+    void aStoreThatFailsPartWayReturnsWhatWasJudgedAndRecordsNothingElse() throws Exception {
+        OctetKeyPair key = key();
+        jwks(key);
+        String stream = UUID.randomUUID().toString();
+        ObjectNode first = claims();
+        ObjectNode second = claims();
+        ObjectNode reply = MAPPER.createObjectNode();
+        ObjectNode sets = reply.putObject("sets");
+        sets.put(first.path("jti").asText(), signSet(key, first));
+        sets.put(second.path("jti").asText(), signSet(key, second));
+        server.on("POST", "/ssf/v1/poll/" + stream, json(200, reply.toString()));
+
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        SsfReceiver r = new SsfReceiver(client, SsfReceiverConfig.builder(ISSUER, AUDIENCE,
+                        SsfKeySource.jwksUri(server.base() + "/oauth2/jwks"))
+                .accessTokenProvider(() -> Sensitive.of("cc-" + UUID.randomUUID()))
+                .replayStore((jti, window) -> {
+                    if (calls.incrementAndGet() > 1) {
+                        throw new IllegalStateException("store unavailable");
+                    }
+                    return true;
+                }).build());
+        SsfPollResult result = r.poll(stream, SsfPollOptions.none());
+        assertEquals(List.of(first.path("jti").asText()),
+                result.events().stream().map(SecurityEvent::jti).toList());
+        assertEquals(List.of(), result.refused());
+        assertEquals(List.of(second.path("jti").asText()), result.unjudged());
+
+        // A store that cannot answer for the first SET: nothing was recorded, so the poll raises.
+        SsfReceiver down = new SsfReceiver(client, SsfReceiverConfig.builder(ISSUER, AUDIENCE,
+                        SsfKeySource.jwksUri(server.base() + "/oauth2/jwks"))
+                .accessTokenProvider(() -> Sensitive.of("cc-" + UUID.randomUUID()))
+                .replayStore((jti, window) -> {
+                    throw new IllegalStateException("store unavailable");
+                }).build());
+        assertThrows(IllegalStateException.class, () -> down.poll(stream, SsfPollOptions.none()));
+    }
+
     @Test
     void pollIsNotRetriedOn400ButIsOn503() {
         RouteServer.Route bad = server.on("POST", "/ssf/v1/poll/s-1",

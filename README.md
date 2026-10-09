@@ -2158,7 +2158,11 @@ while (true) {
     ack = new ArrayList<>();
     setErrs = new LinkedHashMap<>();
     for (SecurityEvent e : page.events()) { process(e); ack.add(e.jti()); }
-    for (RefusedSet r : page.refused()) { setErrs.put(r.jti(), SetErr.fromReason(r.reason())); }
+    for (RefusedSet r : page.refused()) {
+        if (r.reason() == SetFailureReason.REPLAYED) ack.add(r.jti());   // accepted earlier (§34.2 P2)
+        else setErrs.put(r.jti(), SetErr.fromReason(r.reason()));
+    }
+    // page.unjudged(): not recorded, neither ack nor refuse them — they are offered again.
     if (!page.moreAvailable()) break;
 }
 ```
@@ -2171,7 +2175,15 @@ while (true) {
 - **A verified SET is recorded** in the replay store (default in-memory, pluggable
   via `ReplayStore`; window seven days, the floor — shorter is refused at
   configuration). Re-offered unacknowledged, it reads as `replayed`, so acknowledge
-  what you processed. `poll` never acknowledges anything itself.
+  what you processed — and acknowledge a SET refused as `replayed` too, since this
+  receiver accepted it earlier (§34.2 P2). `poll` never acknowledges anything itself.
+  The in-memory store is bounded by the window, not in count; a store that cannot
+  answer throws, which refuses the SET (fail closed) and is not a verdict.
+- **`poll` never records a `jti` it does not return** (§34.2 P1). It checks the whole
+  batch before recording any `jti`, so a JWKS or discovery failure raises having
+  recorded nothing and the batch is offered again. A replay store that fails
+  part-way returns the SETs already recorded and lists the rest in
+  `SsfPollResult.unjudged()`, unrecorded.
 - `SetFailureReason.pushErrorCode()` maps the SDK's reasons to RFC 8935 `err` codes:
   `malformed`, `invalid_type` and `replayed` answer `invalid_request`.
 - `poll` is retried per §16 on transport errors, `5xx`, `408` and `429`, never on

@@ -144,7 +144,7 @@ public final class SsfReceiver {
      *         &mdash; which is not a verdict on the SET
      */
     public SecurityEvent verifySet(String set) {
-        return verify(set, null);
+        return record(verify(set, null));
     }
 
     private static SetVerificationError refuse(SetFailureReason reason, String detail) {
@@ -246,13 +246,22 @@ public final class SsfReceiver {
             throw refuse(SetFailureReason.INVALID_REQUEST, "the poll key is not the SET's jti");
         }
         Map.Entry<String, JsonNode> event = events.properties().iterator().next();
-        // 9.
-        if (!config.replayStore().checkAndRecord(jti, config.replayWindow())) {
-            throw refuse(SetFailureReason.REPLAYED, "jti already seen");
-        }
+        // Step 9 is record(), run once every SET of a poll has passed steps 1–8.
         return new SecurityEvent(jti, iat.asLong(), iss, aud.deepCopy(),
                 claims.path("txn").isTextual() ? claims.get("txn").asText() : null,
                 event.getKey(), event.getValue().deepCopy(), subId.deepCopy());
+    }
+
+    /**
+     * Step 9: records {@code event}'s {@code jti}, or refuses it as {@code replayed}.
+     * A store that cannot answer throws its own exception &mdash; no verdict, and never
+     * an acceptance (&sect;34.2 P3, P4).
+     */
+    private SecurityEvent record(SecurityEvent event) {
+        if (!config.replayStore().checkAndRecord(event.jti(), config.replayWindow())) {
+            throw refuse(SetFailureReason.REPLAYED, "jti already seen");
+        }
+        return event;
     }
 
     // ------------------------------------------------------------------
@@ -361,9 +370,20 @@ public final class SsfReceiver {
      * unset is not sent, so {@link SsfPollOptions#none()} sends {@code {}}.
      * <strong>Nothing is acknowledged on your behalf</strong>: acknowledge, on the
      * next call, the {@code jti}s you processed, and pass each refused one in
-     * {@code setErrs} ({@link SetErr#fromReason(SetFailureReason)}). A SET you
-     * neither acknowledge nor refuse is re-offered, and &mdash; having been
-     * recorded when it verified &mdash; then reads as {@code replayed}.
+     * {@code setErrs} ({@link SetErr#fromReason(SetFailureReason)}) &mdash; except a
+     * {@code replayed} one, which this receiver accepted earlier: acknowledge that
+     * (&sect;34.2 P2). A SET you neither acknowledge nor refuse is re-offered, and
+     * &mdash; having been recorded when it verified &mdash; then reads as
+     * {@code replayed}.
+     *
+     * <p><strong>A {@code jti} this call does not return is never recorded</strong>
+     * (&sect;34.2 P1). Every SET of the batch is checked (steps 1&ndash;8) before any is
+     * recorded, so a JWKS or discovery fetch that fails raises that
+     * {@code NetworkError} having recorded nothing, and the transmitter offers the
+     * whole batch again. A replay store that cannot answer raises its own exception
+     * when nothing was recorded yet; part-way through, the SETs already recorded
+     * are returned and the rest are listed in {@link SsfPollResult#unjudged()},
+     * unrecorded &mdash; neither acknowledge nor refuse those.
      *
      * <p>Retried per &sect;16 on a transport failure, a {@code 5xx}, a
      * {@code 408} or a {@code 429}; never on another {@code 4xx}, which maps as
@@ -371,8 +391,8 @@ public final class SsfReceiver {
      * {@code 404} &rarr; {@code NotFoundError}, {@code 401} &rarr;
      * {@code AuthError}, {@code 403} &rarr; {@code AuthzError}). A SET that is
      * not a string, or whose verified {@code jti} differs from the key it came
-     * under, is refused; a JWKS fetch failure aborts the poll with that error
-     * rather than refusing SETs it could not judge.
+     * under, is refused; a JWKS fetch failure aborts the poll with that error,
+     * recording nothing, rather than refusing SETs it could not judge.
      *
      * @param streamId the stream's id
      * @param options  what to send
@@ -436,7 +456,12 @@ public final class SsfReceiver {
             }
         });
 
-        List<SecurityEvent> events = new ArrayList<>();
+        // CONTRACT.md §34.2 P1: poll never keeps a jti it does not return. Steps 1–8 run
+        // over the WHOLE batch first, recording nothing, so a failure that is no verdict
+        // (a JWKS or discovery fetch, P3) raises with nothing recorded: every SET of the
+        // batch is offered again. A SET whose verdict depends on nothing but itself is
+        // refused here as before.
+        List<SecurityEvent> verified = new ArrayList<>();
         List<RefusedSet> refused = new ArrayList<>();
         JsonNode sets = reply.path("sets");
         if (sets.isObject()) {
@@ -446,13 +471,34 @@ public final class SsfReceiver {
                     continue;
                 }
                 try {
-                    events.add(verify(entry.getValue().asText(), entry.getKey()));
+                    verified.add(verify(entry.getValue().asText(), entry.getKey()));
                 } catch (SetVerificationError e) {
                     refused.add(new RefusedSet(entry.getKey(), e.failureReason()));
                 }
             }
         }
-        return new SsfPollResult(events, reply.path("moreAvailable").asBoolean(false), refused);
+        // Step 9, in order. A store that cannot answer before anything was recorded raises
+        // (still nothing recorded); one that fails part-way leaves the rest unjudged and
+        // unrecorded, and the SETs already recorded are returned (P1's second form).
+        List<SecurityEvent> events = new ArrayList<>();
+        List<String> unjudged = new ArrayList<>();
+        for (SecurityEvent event : verified) {
+            if (!unjudged.isEmpty()) {
+                unjudged.add(event.jti());
+                continue;
+            }
+            try {
+                events.add(record(event));
+            } catch (SetVerificationError e) {
+                refused.add(new RefusedSet(event.jti(), e.failureReason()));
+            } catch (RuntimeException storeFailure) {
+                if (events.isEmpty()) {
+                    throw storeFailure; // nothing recorded yet: raise, as for a key fetch
+                }
+                unjudged.add(event.jti());
+            }
+        }
+        return new SsfPollResult(events, reply.path("moreAvailable").asBoolean(false), refused, unjudged);
     }
 
     /**
