@@ -799,38 +799,23 @@ def sparse_update_schemas() -> set[str]:
             if op["update_style"] == "sparse" and op["request_schema"]}
 
 
-def response_closure() -> set[str]:
-    """Every schema a response can carry, transitively.
-
-    A record in this set is DECODED, so it must accept whatever the server sends;
-    only a body that is never decoded may refuse a null at construction.
-    """
-    seeds = {op["response"]["schema"].lstrip("[]")
-             for ns in REGISTRY["namespaces"].values()
-             for op in ns["operations"].values() if op["response"]["schema"]}
-    seen: set[str] = set()
-    frontier = list(seeds)
-    while frontier:
-        name = frontier.pop()
-        if name in seen or name not in SCHEMAS:
-            continue
-        seen.add(name)
-        text = json.dumps(SCHEMAS[name])
-        frontier.extend(ref for ref in re.findall(r'"#/components/schemas/([^"]+)"', text)
-                        if ref not in seen)
-    return seen
-
-
 def null_checked_schemas() -> set[str]:
     """The replacement bodies whose required components refuse null (§34.2, R-27).
 
     §29.8 t1, §30.8 t4, §31.8 t3 and §32.8 t1 say the input "cannot be built
     without" its required members. A positional record component still accepts
     a Java null, which NON_NULL then drops and the server answers 400, so the
-    compact constructor refuses it instead. Only bodies no response carries:
-    a decoded record must not fail on what the server sent.
+    compact constructor refuses it instead. Not a body that is itself a
+    response (WebauthnAttestationPolicy is also what `get` returns, and a
+    decoded record must not fail on what the server sent). A body nested in a
+    response is checked all the same: the one case, SamlServiceProviderInput
+    inside SamlSpMetadataDraft, is a draft the caller submits as it is, and the
+    schema requires the same members there.
     """
-    return replacement_schemas() - response_closure()
+    top_level_responses = {op["response"]["schema"].lstrip("[]")
+                           for ns in REGISTRY["namespaces"].values()
+                           for op in ns["operations"].values() if op["response"]["schema"]}
+    return replacement_schemas() - top_level_responses
 
 
 def extra_query_params(op: dict[str, Any]) -> list[dict[str, Any]]:
