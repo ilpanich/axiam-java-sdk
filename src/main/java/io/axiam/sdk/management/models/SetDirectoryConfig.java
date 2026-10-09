@@ -19,8 +19,10 @@ import io.axiam.sdk.Sensitive;
  * its default**, not kept.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. A required component cannot be null: the constructor refuses it, rather than let
+ * it be omitted from the wire and refused by the server. An optional component left null is
+ * omitted and takes its default, not the value stored.
  *
  * @param baseDn Where users are searched for.
  * @param bindDn The service account the search runs as.
@@ -65,4 +67,38 @@ public record SetDirectoryConfig(
         @JsonProperty("user_attribute_map") @Nullable UserAttributeMap userAttributeMap,
         @JsonProperty("user_filter") String userFilter
 ) {
+
+    /**
+     * Refuses a null for a required member: this body replaces the stored one, and a
+     * required member left null would be omitted and refused by the server (§27.4
+     * rule 5). Optional members may be null; they are omitted and take their default.
+     *
+     * @param baseDn see the record component
+     * @param bindDn see the record component
+     * @param bindSecret see the record component
+     * @param enabled see the record component
+     * @param groupBaseDn see the record component
+     * @param groupFilter see the record component
+     * @param groupMappings see the record component
+     * @param groupMemberAttribute see the record component
+     * @param groupNestingDepth see the record component
+     * @param jitProvisioning see the record component
+     * @param kind see the record component
+     * @param startTls see the record component
+     * @param syncIntervalSecs see the record component
+     * @param trustAnchorsPem see the record component
+     * @param url see the record component
+     * @param userAttributeMap see the record component
+     * @param userFilter see the record component
+     * @throws NullPointerException naming the first required member that is null
+     */
+    public SetDirectoryConfig {
+        java.util.Objects.requireNonNull(baseDn, "base_dn is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(bindDn, "bind_dn is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(enabled, "enabled is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(kind, "kind is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(startTls, "start_tls is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(url, "url is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(userFilter, "user_filter is required (CONTRACT §27.4 rule 5)");
+    }
 }

@@ -98,9 +98,10 @@ class SsfManagementTest extends ManagementTestBase {
         }
         assertEquals(REVOKED, sent.path("events_allowed").get(0).asText());
         assertFalse(sent.has("authorization_header"), "absent keeps the stored header");
-        // The four required members are positional components of the canonical
-        // constructor: an input without them does not compile.
+        // The four required members cannot be null: the constructor refuses them.
         assertEquals(12, SsfStreamInput.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(input(null), "receiver_client_id", "audience", "delivery_method",
+                "events_allowed");
     }
 
     // ── 2. The header is Sensitive ───────────────────────────────────────

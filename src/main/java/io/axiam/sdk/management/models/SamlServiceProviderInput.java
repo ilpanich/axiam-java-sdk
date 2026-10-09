@@ -19,8 +19,9 @@ import java.util.UUID;
  * so a client written against a later revision of this struct keeps working.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. An optional component left null is omitted and takes its default, not the value
+ * stored.
  *
  * @param acsUrls The ACS allow-list. At least one, at most one default.
  * @param allowIdpInitiated Whether IdP-initiated SSO is allowed for this SP (D-3). A per-SP

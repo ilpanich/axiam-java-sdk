@@ -126,9 +126,9 @@ class ScimTargetsTest extends ManagementTestBase {
         assertFalse(put.last().json().has("credential"), "no credential key");
         client.scimTargets().update(id, input(c));
         assertTrue(c.equals(put.last().json().path("credential").asText()), "the credential is sent");
-        // name, base_url, auth and scope are positional components: an input
-        // without them does not compile.
+        // name, base_url, auth and scope cannot be null: the constructor refuses them.
         assertEquals(9, ScimTargetInput.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(input(null), "name", "base_url", "auth", "scope");
 
         assertEquals(JSON.readTree("{\"type\":\"bearer\"}"), wire(new ScimTargetAuthBearer("bearer")));
         assertEquals(JSON.readTree("{\"type\":\"oauth2_client_credentials\",\"client_id\":\"axiam\","

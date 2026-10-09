@@ -15,8 +15,10 @@ import io.axiam.sdk.Sensitive;
  * {@code create_stream} and {@code update_stream} (a **replacement**) body.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. A required component cannot be null: the constructor refuses it, rather than let
+ * it be omitted from the wire and refused by the server. An optional component left null is
+ * omitted and takes its default, not the value stored.
  *
  * @param audience 1–512 bytes; unique across the deployment.
  * @param authorizationHeader **Write-only.** The {@code Authorization} header value AXIAM sends to
@@ -54,4 +56,30 @@ public record SsfStreamInput(
         @JsonProperty("status_reason") @Nullable String statusReason,
         @JsonProperty("subject_format") @Nullable SsfSubjectFormat subjectFormat
 ) {
+
+    /**
+     * Refuses a null for a required member: this body replaces the stored one, and a
+     * required member left null would be omitted and refused by the server (§27.4
+     * rule 5). Optional members may be null; they are omitted and take their default.
+     *
+     * @param audience see the record component
+     * @param authorizationHeader see the record component
+     * @param clearAuthorizationHeader see the record component
+     * @param deliveryMethod see the record component
+     * @param description see the record component
+     * @param endpointUrl see the record component
+     * @param eventsAllowed see the record component
+     * @param eventsRequested see the record component
+     * @param receiverClientId see the record component
+     * @param status see the record component
+     * @param statusReason see the record component
+     * @param subjectFormat see the record component
+     * @throws NullPointerException naming the first required member that is null
+     */
+    public SsfStreamInput {
+        java.util.Objects.requireNonNull(audience, "audience is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(deliveryMethod, "delivery_method is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(eventsAllowed, "events_allowed is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(receiverClientId, "receiver_client_id is required (CONTRACT §27.4 rule 5)");
+    }
 }

@@ -145,10 +145,11 @@ class DirectoryTest extends ManagementTestBase {
 
     @Test
     void setSendsEveryRequiredMemberAndDecodes201And200() throws Exception {
-        // SetDirectoryConfig's canonical constructor takes every component
-        // positionally, so a body without the seven required members does not
-        // compile; what is left to check is the wire.
+        // SetDirectoryConfig's seven required members cannot be null: the
+        // constructor refuses each one; what is left to check is the wire.
         assertEquals(17, SetDirectoryConfig.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(setBody(null), "enabled", "kind", "url", "start_tls", "bind_dn", "base_dn",
+                "user_filter");
         for (int status : new int[] {201, 200}) {
             Route put = mount("PUT", DIRECTORY, status, configBody().toString());
             DirectoryConfig config = client.directory().set(setBody(null));

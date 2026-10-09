@@ -115,9 +115,9 @@ class SamlTest extends ManagementTestBase {
             assertTrue(sent.has(member), "a member of the replacement was not sent");
         }
         assertEquals("Payroll (EU)", sent.path("display_name").asText());
-        // display_name, entity_id and acs_urls are positional components of the
-        // canonical constructor: an input without them does not compile.
+        // display_name, entity_id and acs_urls cannot be null: the constructor refuses them.
         assertEquals(15, SamlServiceProviderInput.class.getRecordComponents().length);
+        assertCannotBeBuiltWithout(input(), "display_name", "entity_id", "acs_urls");
     }
 
     // ── 2. No signing switch, open decoding ──────────────────────────────

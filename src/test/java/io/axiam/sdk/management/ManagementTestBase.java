@@ -270,6 +270,40 @@ abstract class ManagementTestBase {
                         + " times; a dropped connection must not re-send it");
     }
 
+    /**
+     * &sect;29.8 t1, &sect;30.8 t4, &sect;31.8 t3, &sect;32.8 t1 ("the input cannot be built
+     * without ..."): in Java a positional record component still accepts {@code null}, so
+     * the claim is held at construction. For each named member, rebuilds {@code sample}
+     * through its canonical constructor with that one component {@code null} and asserts
+     * the constructor refuses it, naming the member.
+     */
+    protected static void assertCannotBeBuiltWithout(Record sample, String... wireNames) throws Exception {
+        java.lang.reflect.RecordComponent[] components = sample.getClass().getRecordComponents();
+        Class<?>[] types = new Class<?>[components.length];
+        for (int i = 0; i < components.length; i++) {
+            types[i] = components[i].getType();
+        }
+        java.lang.reflect.Constructor<?> canonical = sample.getClass().getDeclaredConstructor(types);
+        for (String wire : wireNames) {
+            Object[] args = new Object[components.length];
+            boolean found = false;
+            for (int i = 0; i < components.length; i++) {
+                com.fasterxml.jackson.annotation.JsonProperty json =
+                        components[i].getAccessor().getAnnotation(com.fasterxml.jackson.annotation.JsonProperty.class);
+                boolean target = json != null && wire.equals(json.value());
+                found |= target;
+                args[i] = target ? null : components[i].getAccessor().invoke(sample);
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(found, "no component " + wire);
+            java.lang.reflect.InvocationTargetException e = org.junit.jupiter.api.Assertions.assertThrows(
+                    java.lang.reflect.InvocationTargetException.class, () -> canonical.newInstance(args),
+                    sample.getClass().getSimpleName() + " was built without " + wire);
+            org.junit.jupiter.api.Assertions.assertInstanceOf(NullPointerException.class, e.getCause());
+            org.junit.jupiter.api.Assertions.assertTrue(e.getCause().getMessage().contains(wire),
+                    "the refusal names " + wire);
+        }
+    }
+
     /** The route mounted at {@code method path}, for assertions. */
     protected Route route(String method, String path) {
         Route found = routes.get(method + " " + path);

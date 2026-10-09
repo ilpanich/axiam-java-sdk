@@ -787,6 +787,40 @@ def replacement_schemas() -> set[str]:
     return out
 
 
+def response_closure() -> set[str]:
+    """Every schema a response can carry, transitively.
+
+    A record in this set is DECODED, so it must accept whatever the server sends;
+    only a body that is never decoded may refuse a null at construction.
+    """
+    seeds = {op["response"]["schema"].lstrip("[]")
+             for ns in REGISTRY["namespaces"].values()
+             for op in ns["operations"].values() if op["response"]["schema"]}
+    seen: set[str] = set()
+    frontier = list(seeds)
+    while frontier:
+        name = frontier.pop()
+        if name in seen or name not in SCHEMAS:
+            continue
+        seen.add(name)
+        text = json.dumps(SCHEMAS[name])
+        frontier.extend(ref for ref in re.findall(r'"#/components/schemas/([^"]+)"', text)
+                        if ref not in seen)
+    return seen
+
+
+def null_checked_schemas() -> set[str]:
+    """The replacement bodies whose required components refuse null (§34.2, R-27).
+
+    §29.8 t1, §30.8 t4, §31.8 t3 and §32.8 t1 say the input "cannot be built
+    without" its required members. A positional record component still accepts
+    a Java null, which NON_NULL then drops and the server answers 400, so the
+    compact constructor refuses it instead. Only bodies no response carries:
+    a decoded record must not fail on what the server sent.
+    """
+    return replacement_schemas() - response_closure()
+
+
 def extra_query_params(op: dict[str, Any]) -> list[dict[str, Any]]:
     """Query parameters that become method arguments, rather than ``PageRequest``.
 
@@ -986,6 +1020,28 @@ OMIT_WHEN_EMPTY = {"tenantScope"}
 DEFAULT_TRUE_WHEN_ABSENT = {"inherit"}
 
 
+def emit_required_checks(type_name: str, fields: list[dict]) -> list[str]:
+    """A compact constructor refusing null for every required component."""
+    targets = [f for f in fields if f["required"]]
+    if not targets:
+        return []
+    out = ["", "    /**",
+           "     * Refuses a null for a required member: this body replaces the stored one, and a",
+           "     * required member left null would be omitted and refused by the server (§27.4",
+           "     * rule 5). Optional members may be null; they are omitted and take their default.",
+           "     *"]
+    for f in fields:
+        out.append(f"     * @param {f['name']} see the record component")
+    out.append("     * @throws NullPointerException naming the first required member that is null")
+    out.append("     */")
+    out.append(f"    public {type_name} {{")
+    for f in targets:
+        out.append(f'        java.util.Objects.requireNonNull({f["name"]}, '
+                   f'"{f["wire"]} is required (CONTRACT §27.4 rule 5)");')
+    out.append("    }")
+    return out
+
+
 def emit_omit_when_empty(type_name: str, fields: list[dict]) -> list[str]:
     """A compact constructor normalising an empty OMIT_WHEN_EMPTY list to null.
 
@@ -1053,8 +1109,13 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
     elif replacement:
         text += ("\n\nThis body REPLACES rather than patches (§27.4 rule 5): what you do not "
                  "carry over from a prior read is not preserved, it is overwritten. The "
-                 "canonical constructor takes every component, so forgetting one is a compile "
-                 "error rather than a silent null on the wire.")
+                 "canonical constructor takes every component positionally.")
+        if name in null_checked_schemas():
+            text += (" A required component cannot be null: the constructor refuses it, rather "
+                     "than let it be omitted from the wire and refused by the server.")
+        if not all(f["required"] for f in fields):
+            text += (" An optional component left null is omitted and takes its default, not "
+                     "the value stored.")
 
     tags = []
     for f in fields:
@@ -1081,6 +1142,8 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
                 f["type"] = f"@Nullable {f['type']}"
         body.extend(component_lines(fields))
         body.append(") {")
+        if name in null_checked_schemas():
+            body.extend(emit_required_checks(type_name, fields))
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
         body.extend(emit_factories(name, type_name))

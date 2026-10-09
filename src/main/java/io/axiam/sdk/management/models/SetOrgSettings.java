@@ -14,8 +14,10 @@ import java.util.List;
  * Input for setting organization-level security settings.
  *
  * <p>This body REPLACES rather than patches (§27.4 rule 5): what you do not carry over from a
- * prior read is not preserved, it is overwritten. The canonical constructor takes every component,
- * so forgetting one is a compile error rather than a silent null on the wire.
+ * prior read is not preserved, it is overwritten. The canonical constructor takes every component
+ * positionally. A required component cannot be null: the constructor refuses it, rather than let
+ * it be omitted from the wire and refused by the server. An optional component left null is
+ * omitted and takes its default, not the value stored.
  *
  * @param accessTokenLifetimeSecs the server's access_token_lifetime_secs field
  * @param adminNotificationsEnabled the server's admin_notifications_enabled field
@@ -102,4 +104,71 @@ public record SetOrgSettings(
         @JsonProperty("ssf_enabled") @Nullable Boolean ssfEnabled,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
+
+    /**
+     * Refuses a null for a required member: this body replaces the stored one, and a
+     * required member left null would be omitted and refused by the server (§27.4
+     * rule 5). Optional members may be null; they are omitted and take their default.
+     *
+     * @param accessTokenLifetimeSecs see the record component
+     * @param adminNotificationsEnabled see the record component
+     * @param cimd see the record component
+     * @param dcrAllowedRedirectHosts see the record component
+     * @param dcrAllowedScopes see the record component
+     * @param dcrMaxClients see the record component
+     * @param dcrUnusedClientTtlDays see the record component
+     * @param defaultCertValidityDays see the record component
+     * @param defaultLocale see the record component
+     * @param deletionGracePeriodDays see the record component
+     * @param dynamicRegistration see the record component
+     * @param emailVerificationGracePeriodHours see the record component
+     * @param emailVerificationRequired see the record component
+     * @param externalClientAllowedResources see the record component
+     * @param hibpCheckEnabled see the record component
+     * @param lockoutBackoffMultiplier see the record component
+     * @param lockoutDurationSecs see the record component
+     * @param maxCertValidityDays see the record component
+     * @param maxFailedLoginAttempts see the record component
+     * @param maxLockoutDurationSecs see the record component
+     * @param mfaChallengeLifetimeSecs see the record component
+     * @param mfaEnforced see the record component
+     * @param minLength see the record component
+     * @param opaqueKsf see the record component
+     * @param opaqueMode see the record component
+     * @param opaqueSuite see the record component
+     * @param passwordHistoryCount see the record component
+     * @param refreshTokenLifetimeSecs see the record component
+     * @param requireDigits see the record component
+     * @param requireLowercase see the record component
+     * @param requireSymbols see the record component
+     * @param requireUppercase see the record component
+     * @param samlIdpEnabled see the record component
+     * @param sensitiveScopesEnabled see the record component
+     * @param serverCertAllowedNames see the record component
+     * @param ssfEnabled see the record component
+     * @param webauthnUserVerification see the record component
+     * @throws NullPointerException naming the first required member that is null
+     */
+    public SetOrgSettings {
+        java.util.Objects.requireNonNull(accessTokenLifetimeSecs, "access_token_lifetime_secs is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(adminNotificationsEnabled, "admin_notifications_enabled is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(defaultCertValidityDays, "default_cert_validity_days is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(emailVerificationGracePeriodHours, "email_verification_grace_period_hours is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(emailVerificationRequired, "email_verification_required is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(hibpCheckEnabled, "hibp_check_enabled is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(lockoutBackoffMultiplier, "lockout_backoff_multiplier is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(lockoutDurationSecs, "lockout_duration_secs is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(maxCertValidityDays, "max_cert_validity_days is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(maxFailedLoginAttempts, "max_failed_login_attempts is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(maxLockoutDurationSecs, "max_lockout_duration_secs is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(mfaChallengeLifetimeSecs, "mfa_challenge_lifetime_secs is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(mfaEnforced, "mfa_enforced is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(minLength, "min_length is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(passwordHistoryCount, "password_history_count is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(refreshTokenLifetimeSecs, "refresh_token_lifetime_secs is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(requireDigits, "require_digits is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(requireLowercase, "require_lowercase is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(requireSymbols, "require_symbols is required (CONTRACT §27.4 rule 5)");
+        java.util.Objects.requireNonNull(requireUppercase, "require_uppercase is required (CONTRACT §27.4 rule 5)");
+    }
 }
