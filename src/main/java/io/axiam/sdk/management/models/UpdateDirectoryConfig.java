@@ -20,7 +20,7 @@ import io.axiam.sdk.management.JsonNullable;
  *
  * <p>Every component is optional, so this is a SPARSE body: what you leave null is left unchanged,
  * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
- * builder — a canonical constructor call with six nulls in it is not something a reader can check.
+ * builder — a canonical constructor call full of nulls is not something a reader can check.
  *
  * @param baseDn See [{@code SetDirectoryConfig::base_dn}].
  * @param bindDn See [{@code SetDirectoryConfig::bind_dn}].

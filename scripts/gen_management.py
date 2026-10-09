@@ -175,8 +175,12 @@ CALL_SITE_NOTES: dict[str, str] = {
         "`ReplacementBodies.from(SsfStream)` turns a read into the body."
     ),
     "scim_targets.create": (
-        "`credential` is required here (§31.3 rule 2). It is write-only: no "
-        "response ever carries it, and the SDK keeps no copy."
+        "**The credential is bound to its URL** (§31.3 rule 2): `credential` is "
+        "required here, and it is bound to the target's `base_url` (and, for a "
+        "client-credentials target, `auth.token_url`) — a later `update` that "
+        "changes either, or `auth.type`, must carry the credential again or is "
+        "refused `400`. It is write-only: no response ever carries it, and the SDK "
+        "keeps no copy to re-send."
     ),
     "scim_targets.update": (
         "**The credential is bound to its URL** (§31.3 rule 2): absent `credential` "
@@ -787,6 +791,14 @@ def replacement_schemas() -> set[str]:
     return out
 
 
+def sparse_update_schemas() -> set[str]:
+    """The request bodies of a sparse (patch-style) update, where null means "unchanged"."""
+    return {op["request_schema"].lstrip("[]")
+            for ns in REGISTRY["namespaces"].values()
+            for op in ns["operations"].values()
+            if op["update_style"] == "sparse" and op["request_schema"]}
+
+
 def response_closure() -> set[str]:
     """Every schema a response can carry, transitively.
 
@@ -1101,11 +1113,16 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
     all_optional = bool(fields) and not required
 
     text = description or f"The {type_name} schema from the server's OpenAPI document."
-    if all_optional:
+    if all_optional and name in sparse_update_schemas():
         text += ("\n\nEvery component is optional, so this is a SPARSE body: what you leave "
                  "null is left unchanged, and is omitted from the wire request entirely rather "
                  "than sent as null (§27.4 rule 5). Use the builder — a canonical constructor "
-                 "call with six nulls in it is not something a reader can check.")
+                 "call full of nulls is not something a reader can check.")
+    elif all_optional:
+        text += ("\n\nEvery component is optional: what you leave null is omitted from the "
+                 "wire request entirely rather than sent as null (§27.4 rule 5). Use the builder "
+                 "or a factory — a canonical constructor call full of nulls is not something a "
+                 "reader can check.")
     elif replacement:
         text += ("\n\nThis body REPLACES rather than patches (§27.4 rule 5): what you do not "
                  "carry over from a prior read is not preserved, it is overwritten. The "
@@ -1492,10 +1509,19 @@ def operation_doc(op: dict[str, Any], canonical: str = "") -> str:
         note = re.sub(r"\*\*(.+?)\*\*", "\x01\\1\x02", CALL_SITE_NOTES[canonical])
         text += "\n\n" + note
     if op["update_style"] == "replace":
-        text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the "
-                 "body is required, and what you do not carry over from a prior read is not "
-                 "preserved -- it is overwritten. Read first, change the field you mean, send "
-                 "the whole thing back.")
+        _, required, _ = flatten(op["request_schema"].lstrip("[]"))
+        props, _, _ = flatten(op["request_schema"].lstrip("[]"))
+        if set(props) <= set(required):
+            text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the "
+                     "body is required, and what you do not carry over from a prior read is not "
+                     "preserved -- it is overwritten. Read first, change the field you mean, send "
+                     "the whole thing back.")
+        else:
+            text += ("\n\nThis is a REPLACEMENT, not a patch (§27.4 rule 5). The body's required "
+                     "members must be set; an optional member left null is omitted and takes its "
+                     "default -- not the value stored. What you do not carry over from a prior "
+                     "read is not preserved. Read first, change the field you mean, send the whole "
+                     "thing back.")
     if op["sensitive_response_fields"]:
         joined = ", ".join(op["sensitive_response_fields"])
         text += (f"\n\nReturns secret material, once. {joined} is returned by this call and by "

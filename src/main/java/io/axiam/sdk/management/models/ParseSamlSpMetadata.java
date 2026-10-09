@@ -11,9 +11,9 @@ import org.jspecify.annotations.Nullable;
 /**
  * {@code POST …/saml/parse-sp-metadata} body: **exactly one** of the two members.
  *
- * <p>Every component is optional, so this is a SPARSE body: what you leave null is left unchanged,
- * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
- * builder — a canonical constructor call with six nulls in it is not something a reader can check.
+ * <p>Every component is optional: what you leave null is omitted from the wire request entirely
+ * rather than sent as null (§27.4 rule 5). Use the builder or a factory — a canonical constructor
+ * call full of nulls is not something a reader can check.
  *
  * @param metadataUrl An {@code https} URL the server fetches the document from, once, through its
  *     SSRF guard.

@@ -73,8 +73,11 @@ public final class ScimTargetsApi {
     /**
      * Issues POST /api/v1/scim-targets.
      *
-     * <p>{@code credential} is required here (§31.3 rule 2). It is write-only: no response ever
-     * carries it, and the SDK keeps no copy.
+     * <p><strong>The credential is bound to its URL</strong> (§31.3 rule 2): {@code credential} is required here,
+     * and it is bound to the target's {@code base_url} (and, for a client-credentials target,
+     * {@code auth.token_url}) — a later {@code update} that changes either, or {@code auth.type},
+     * must carry the credential again or is refused {@code 400}. It is write-only: no response
+     * ever carries it, and the SDK keeps no copy to re-send.
      *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
@@ -127,9 +130,10 @@ public final class ScimTargetsApi {
      * ReplacementBodies.from(ScimTargetResponse)} turns a read into the body). An update overtaken
      * by another administrator's write is {@code 409} (§31.3 rule 4): reload, then retry yourself.
      *
-     * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). Every field of the body is required,
-     * and what you do not carry over from a prior read is not preserved -- it is overwritten. Read
-     * first, change the field you mean, send the whole thing back.
+     * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). The body's required members must be
+     * set; an optional member left null is omitted and takes its default -- not the value stored.
+     * What you do not carry over from a prior read is not preserved. Read first, change the field
+     * you mean, send the whole thing back.
      *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
