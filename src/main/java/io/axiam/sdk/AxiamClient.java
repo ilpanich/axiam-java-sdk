@@ -4521,8 +4521,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * {@code authorization_pending} and {@code slow_down} (non-terminal),
      * {@code access_denied} and {@code expired_token} (terminal and distinct &mdash;
      * {@link OAuthProtocolError#isAccessDenied()}, {@link OAuthProtocolError#isExpiredToken()}),
-     * {@code invalid_grant}; none is retried. A transport failure, a {@code 5xx}, a
-     * {@code 408} or a bodiless {@code 429} is retried per &sect;16 within the call.
+     * {@code invalid_grant}; none is retried. A transport failure, a {@code 5xx} &mdash;
+     * whatever its body, {@code 500 {"error":"server_error"}} included (&sect;34.2 P8)
+     * &mdash; a {@code 408} or a bodiless {@code 429} is retried per &sect;16 within the call.
      * A {@code 200} is the &sect;12 token set, its ID token validated (no nonce).
      *
      * <p><strong>Store the returned tokens before anything else</strong>: a request
@@ -4540,31 +4541,75 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public OidcTokenSet cibaPoll(Sensitive authReqId, @Nullable UUID tenantId,
                                  @Nullable OidcConfiguration configuration) {
         ensureOpen();
+        // The credential is checked before discovery, as before: no request without one.
+        appendCibaClientAuth(new FormBody.Builder(), "cibaPoll");
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+        JsonNode wire;
+        try {
+            wire = cibaRedeem(authReqId, tenantId, config);
+        } catch (CibaTransientFailure t) {
+            throw t.error;
+        }
+        return buildTokenSet(wire, config, null);
+    }
+
+    /**
+     * A {@code ciba_poll} failure that outlived &sect;16 and is transient under
+     * &sect;33.7 rule 5 (&sect;34.2 P9): a transport failure, a {@code 408}, a
+     * bodiless {@code 429} or a {@code 5xx}. Never escapes this class:
+     * {@link #cibaPoll} throws the {@link NetworkError} inside it and
+     * {@link #cibaAwait} polls again.
+     */
+    private static final class CibaTransientFailure extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        /** The failure a caller of {@link #cibaPoll} sees. */
+        private final transient NetworkError error;
+
+        CibaTransientFailure(NetworkError error) {
+            super(error.getMessage(), null, false, false);
+            this.error = error;
+        }
+    }
+
+    /**
+     * One {@code ciba_poll} under &sect;16, returning the {@code 200}'s body.
+     *
+     * <p>A {@code 5xx} is retried whatever its body (&sect;34.2 P8: AXIAM's token
+     * endpoint answers {@code 500 {"error":"server_error"}}) and maps by status, to
+     * {@link NetworkError}; a protocol answer at any other status is an
+     * {@link OAuthProtocolError}. A transient failure that outlived the retries
+     * leaves as {@link CibaTransientFailure}; everything else, including a
+     * {@code 200} whose body does not parse, leaves as itself.
+     */
+    private JsonNode cibaRedeem(Sensitive authReqId, @Nullable UUID tenantId, OidcConfiguration config) {
         FormBody.Builder form = new FormBody.Builder()
                 .add("grant_type", CIBA_GRANT_TYPE)
                 .add("auth_req_id", authReqId.expose());
         appendCibaClientAuth(form, "cibaPoll");
         FormBody body = form.build();
-        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         String url = oauth2Url(preferredEndpoint(config, MtlsEndpointAliases::token_endpoint,
                 config.token_endpoint()), tenantId);
-        JsonNode wire = io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "ciba_poll", n -> {
+        return io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "ciba_poll", n -> {
             Request request = new Request.Builder().url(url).post(body).build();
             Response response;
             try {
                 response = httpClient.newCall(request).execute();
             } catch (IOException e) {
-                throw new io.axiam.sdk.internal.StatusRetry.Transient(
-                        new NetworkError("cibaPoll request failed: " + e.getMessage(), e), 0);
+                throw new io.axiam.sdk.internal.StatusRetry.Transient(new CibaTransientFailure(
+                        new NetworkError("cibaPoll request failed: " + e.getMessage(), e)), 0);
             }
             try (response) {
                 if (!response.isSuccessful()) {
-                    RuntimeException err = ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response,
-                            "cibaPoll failed");
+                    int code = response.code();
+                    // §34.2 P8: a 5xx is transient on ciba_poll whatever its body.
+                    RuntimeException err = code >= 500
+                            ? ErrorMapper.fromHttpResponse(code, "cibaPoll failed", response)
+                            : ErrorMapper.fromOAuth2ErrorAtAnyStatus(code, response, "cibaPoll failed");
                     // The protocol answers are decisive, and so is any other 4xx but 408/429.
-                    if (!(err instanceof OAuthProtocolError)
-                            && io.axiam.sdk.internal.StatusRetry.retryableStatus(response.code())) {
-                        throw new io.axiam.sdk.internal.StatusRetry.Transient(err,
+                    if (err instanceof NetworkError network
+                            && io.axiam.sdk.internal.StatusRetry.retryableStatus(code)) {
+                        throw new io.axiam.sdk.internal.StatusRetry.Transient(new CibaTransientFailure(network),
                                 io.axiam.sdk.internal.StatusRetry.retryAfterMillis(response));
                     }
                     throw err;
@@ -4574,7 +4619,6 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 return readJson(response);
             }
         });
-        return buildTokenSet(wire, config, null);
     }
 
     /** {@link #cibaPoll(Sensitive, UUID, OidcConfiguration)} with the client's tenant and a discovered document.
@@ -4608,10 +4652,14 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      *       {@code slow_down} and a longer wait.</li>
      *   <li>{@code slow_down} adds 5 s to the interval, cumulatively and permanently;
      *       {@code authorization_pending} never lowers it.</li>
-     *   <li>A transport failure, a {@code 5xx} or a {@code 429}
-     *       ({@code rate_limit_exceeded}) that outlived {@link #cibaPoll}'s own
+     *   <li>A transport failure, a {@code 5xx} (whatever its body), a {@code 408} or a
+     *       {@code 429} ({@code rate_limit_exceeded}) that outlived {@link #cibaPoll}'s own
      *       &sect;16 retries is not terminal: the loop waits one interval and polls
-     *       again.</li>
+     *       again. Anything else ends the loop: a {@code 4xx} without an {@code error}
+     *       member, and anything that fails after the {@code 200} &mdash; a body that
+     *       does not decode, an ID token that does not validate or whose key cannot be
+     *       fetched &mdash; because the redemption is spent (&sect;33.7 rule 7, &sect;34.2
+     *       P9). Start a new request then.</li>
      *   <li>Polling stops at {@code receivedAt + expiresIn}, even if the server has
      *       not said {@code expired_token}; the same {@code expired_token}
      *       ({@link OAuthProtocolError#isExpiredToken()}) is then raised locally,
@@ -4634,7 +4682,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return the token set
      * @throws OAuthProtocolError on a terminal answer &mdash; {@code access_denied},
      *         {@code expired_token} (also the local deadline), {@code invalid_grant}, &hellip;
-     * @throws NetworkError if the wait is interrupted
+     * @throws NetworkError if the wait is interrupted, on a bodiless {@code 4xx}, or
+     *         when the {@code 200} cannot be read
      */
     public OidcTokenSet cibaAwait(io.axiam.sdk.oidc.CibaInitiateResponse initiated, @Nullable UUID tenantId,
                                   @Nullable OidcConfiguration configuration,
@@ -4656,8 +4705,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 Thread.currentThread().interrupt();
                 throw new NetworkError("CIBA polling was interrupted", e);
             }
+            ensureOpen();
+            JsonNode wire;
             try {
-                return cibaPoll(initiated.authReqId(), tenantId, config);
+                wire = cibaRedeem(initiated.authReqId(), tenantId, config);
             } catch (OAuthProtocolError e) {
                 switch (e.error()) {
                     case "authorization_pending", "rate_limit_exceeded" -> {
@@ -4666,9 +4717,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                     case "slow_down" -> interval += CIBA_SLOW_DOWN_INCREMENT_SECONDS;
                     default -> throw e;
                 }
-            } catch (NetworkError e) {
+                continue;
+            } catch (CibaTransientFailure e) {
                 // §33.7 rule 5: an approved request must survive a server restart.
+                continue;
             }
+            // §34.2 P9: a bodiless 4xx left above as itself, and anything failing after
+            // the 200 — the ID token's validation, its key fetch — is terminal: the
+            // redemption is spent, and polling again can only answer invalid_grant.
+            return buildTokenSet(wire, config, null);
         }
     }
 

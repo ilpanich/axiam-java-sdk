@@ -458,8 +458,10 @@ class CibaTest {
         OidcConfiguration config = configuration();
         AxiamClient client = client(random());
         TestClock clock = new TestClock();
+        // §34.2 P8: the 500 carries the body AXIAM's token endpoint really sends.
         RouteServer.Route token = tokenScript(clock, new ArrayList<>(), oauthError(400, "authorization_pending"),
-                status(500), oauthError(429, "rate_limit_exceeded"), tokensWithIdToken(config));
+                json(500, "{\"error\":\"server_error\"}"), oauthError(429, "rate_limit_exceeded"),
+                tokensWithIdToken(config));
         OidcTokenSet set = client.cibaAwait(new CibaInitiateResponse(Sensitive.of(random()), 600, 5, clock.start),
                 null, config, clock);
         assertFalse(set.accessToken().expose().isEmpty());
@@ -472,10 +474,50 @@ class CibaTest {
                 .oidcClientSecret(random()).retryDisabled().build();
         clients.add(noRetry);
         TestClock c = new TestClock();
-        RouteServer.Route flaky = tokenScript(c, new ArrayList<>(), status(503), tokensWithIdToken(config));
+        RouteServer.Route flaky = tokenScript(c, new ArrayList<>(),
+                json(503, "{\"error\":\"temporarily_unavailable\"}"), tokensWithIdToken(config));
         noRetry.cibaAwait(new CibaInitiateResponse(Sensitive.of(random()), 600, 5, c.start), null, config, c);
         assertEquals(2, flaky.calls());
         assertEquals(List.of(5L, 5L), c.sleeps, "a transient failure counts as one interval");
+
+        // And a single cibaPoll retries a 5xx under §16 whatever its body.
+        RouteServer.Route once = server.on("POST", "/oauth2/token", json(500, "{\"error\":\"server_error\"}"),
+                tokensWithIdToken(config));
+        assertNotNull(client.cibaPoll(Sensitive.of(random()), null, config).idClaims());
+        assertEquals(2, once.calls(), "the 500 is retried within the poll");
+    }
+
+    /**
+     * &sect;34.2 P9: only a transport failure, {@code 408}, {@code 429} and a {@code 5xx}
+     * are transient. A bodiless {@code 4xx} is decisive, and anything that fails after a
+     * {@code 200} &mdash; a body that does not decode, the key fetch ID-token validation
+     * needs &mdash; is terminal: the redemption is spent, so the loop polls no more.
+     */
+    @Test
+    void t08ADecisiveAnswersAndFailuresAfterThe200EndTheLoop() throws Exception {
+        OidcConfiguration config = configuration();
+        for (MockResponse decisive : List.of(status(400), status(404),
+                json(200, "{\"access_token\": not json"))) {
+            AxiamClient client = client(random());
+            TestClock c = new TestClock();
+            RouteServer.Route token = tokenScript(c, new ArrayList<>(), decisive, tokensWithIdToken(config));
+            assertThrows(NetworkError.class, () -> client.cibaAwait(
+                    new CibaInitiateResponse(Sensitive.of(random()), 600, 5, c.start), null, config, c));
+            assertEquals(1, token.calls(), "one poll, then the loop ends");
+        }
+
+        // A 200 whose ID token cannot be validated because the key fetch fails.
+        OctetKeyPair key = OidcTestSupport.generateEd25519KeyPair("ciba-" + UUID.randomUUID());
+        String idToken = OidcTestSupport.signEdDsa(key,
+                OidcTestSupport.validIdTokenClaims(config.issuer(), CLIENT_ID, null));
+        server.on("GET", "/oauth2/jwks", status(500));
+        AxiamClient client = client(random());
+        TestClock c = new TestClock();
+        RouteServer.Route token = tokenScript(c, new ArrayList<>(), json(200, "{\"access_token\":\"" + random()
+                + "\",\"token_type\":\"Bearer\",\"expires_in\":900,\"id_token\":\"" + idToken + "\"}"));
+        assertThrows(RuntimeException.class, () -> client.cibaAwait(
+                new CibaInitiateResponse(Sensitive.of(random()), 600, 5, c.start), null, config, c));
+        assertEquals(1, token.calls(), "a spent redemption is not polled again");
     }
 
     // ── 9. Single use ────────────────────────────────────────────────────
