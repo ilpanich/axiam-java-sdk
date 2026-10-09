@@ -272,6 +272,25 @@ class SamlTest extends ManagementTestBase {
         }
     }
 
+    @Test
+    void noneOfTheSevenWritesIsResentAfterADroppedConnection() throws Exception {
+        UUID id = UUID.randomUUID();
+        SamlApi s = client.saml();
+        assertSentOnceOverADroppedConnection("POST", SAML + "/service-providers", () -> s.createServiceProvider(input()));
+        assertSentOnceOverADroppedConnection("PUT", SAML + "/service-providers/" + id,
+                () -> s.updateServiceProvider(id, input()));
+        assertSentOnceOverADroppedConnection("DELETE", SAML + "/service-providers/" + id,
+                () -> s.deleteServiceProvider(id));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/parse-sp-metadata",
+                () -> s.parseSpMetadata(ParseSamlSpMetadata.fromUrl("https://m")));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/idp-credentials",
+                () -> s.issueIdpCredential(new IssueSamlIdpCredential(UUID.randomUUID(), SamlIdpSlot.NEXT, null)));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/idp-credentials/" + id + "/promote",
+                () -> s.promoteIdpCredential(id));
+        assertSentOnceOverADroppedConnection("POST", SAML + "/idp-credentials/" + id + "/retire",
+                () -> s.retireIdpCredential(id));
+    }
+
     // ── 7. Errors ────────────────────────────────────────────────────────
 
     @Test

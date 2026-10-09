@@ -7,6 +7,7 @@ import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,6 +74,8 @@ abstract class ManagementTestBase {
         private final int status;
         private final String body;
         private final java.util.function.@Nullable Function<Recorded, String> responder;
+        /** Read the request, then close the connection without answering. */
+        private final boolean drop;
         private final List<Recorded> requests = new ArrayList<>();
 
         Route(int status, String body) {
@@ -80,9 +83,15 @@ abstract class ManagementTestBase {
         }
 
         Route(int status, String body, java.util.function.@Nullable Function<Recorded, String> responder) {
+            this(status, body, responder, false);
+        }
+
+        Route(int status, String body, java.util.function.@Nullable Function<Recorded, String> responder,
+              boolean drop) {
             this.status = status;
             this.body = body;
             this.responder = responder;
+            this.drop = drop;
         }
 
         /** Every request this route saw, in order. */
@@ -168,6 +177,9 @@ abstract class ManagementTestBase {
                 Recorded recorded = new Recorded(request.getMethod(), bare, query,
                         request.getBody().readUtf8(), headers);
                 route.requests.add(recorded);
+                if (route.drop) {
+                    return new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST);
+                }
 
                 String answer = route.responder == null ? route.body : route.responder.apply(recorded);
                 MockResponse response = new MockResponse().setResponseCode(route.status);
@@ -228,6 +240,34 @@ abstract class ManagementTestBase {
             String items = offset < 2 ? item.get() : "";
             return "{\"items\":[" + items + "],\"total\":2,\"offset\":" + offset + ",\"limit\":1}";
         });
+    }
+
+    /**
+     * CONTRACT.md &sect;34.2 P11: "MUST NOT be retried" includes the HTTP library's own
+     * transparent re-send after a dropped connection. Mounts {@code method path} as a route
+     * that reads the request and then closes the connection without answering, first parks a
+     * live keep-alive connection in the client's pool (the case OkHttp's
+     * {@code retryOnConnectionFailure} re-sends on: a pooled connection that fails after the
+     * server read the request), runs {@code write}, and asserts the server received the
+     * request exactly once and the caller got a {@code NetworkError}.
+     */
+    protected void assertSentOnceOverADroppedConnection(String method, String path,
+                                                       org.junit.jupiter.api.function.Executable write)
+            throws Exception {
+        Route dropped = new Route(0, "", null, true);
+        routes.put(method + " " + path, dropped);
+        Route warm = mount("GET", "/warm-connection", 200, "{}");
+        try (okhttp3.Response response = client.okHttpClient().newCall(new okhttp3.Request.Builder()
+                .url(server.url("/warm-connection")).build()).execute()) {
+            org.junit.jupiter.api.Assertions.assertEquals(200, response.code());
+            response.body().string();
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(1, warm.calls());
+        org.junit.jupiter.api.Assertions.assertInstanceOf(io.axiam.sdk.errors.NetworkError.class,
+                org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, write));
+        org.junit.jupiter.api.Assertions.assertEquals(1, dropped.calls(),
+                method + " " + path + ": the server received the write " + dropped.calls()
+                        + " times; a dropped connection must not re-send it");
     }
 
     /** The route mounted at {@code method path}, for assertions. */

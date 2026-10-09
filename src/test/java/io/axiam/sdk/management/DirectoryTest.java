@@ -186,6 +186,17 @@ class DirectoryTest extends ManagementTestBase {
         }
     }
 
+    @Test
+    void noWriteIsResentAfterADroppedConnection() throws Exception {
+        DirectoryApi d = client.directory();
+        assertSentOnceOverADroppedConnection("PUT", DIRECTORY, () -> d.set(setBody(secret())));
+        assertSentOnceOverADroppedConnection("PATCH", DIRECTORY,
+                () -> d.update(UpdateDirectoryConfig.builder().build()));
+        assertSentOnceOverADroppedConnection("DELETE", DIRECTORY, d::delete);
+        assertSentOnceOverADroppedConnection("POST", DIRECTORY + "/links",
+                () -> d.linkAccount(new LinkDirectoryAccount(UUID.randomUUID())));
+    }
+
     // ── 6. Errors and link_account ───────────────────────────────────────
 
     @Test

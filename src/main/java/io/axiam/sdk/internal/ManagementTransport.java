@@ -112,6 +112,16 @@ public final class ManagementTransport {
     }
 
     private final OkHttpClient http;
+    /**
+     * {@link #http} with OkHttp's transparent connection-failure retry off, for every
+     * write. CONTRACT.md &sect;34.2 P11: "MUST NOT be retried" (&sect;27.4 rule 8,
+     * &sect;29.7, &sect;30.7, &sect;31.7, &sect;32's writes) includes the HTTP
+     * library's own re-send after a dropped connection — with it on, a pooled
+     * connection that fails after the server read a {@code PUT} sends the {@code PUT}
+     * again. Built with {@code newBuilder()}, so it shares {@link #http}'s connection
+     * pool, dispatcher, interceptors and authenticator.
+     */
+    private final OkHttpClient writeHttp;
     private final String baseUrl;
     private final SessionState session;
     private final TelemetryDispatcher telemetry;
@@ -158,6 +168,9 @@ public final class ManagementTransport {
                                TelemetryDispatcher telemetry, boolean retryEnabled,
                                Runnable ensureOpen, @Nullable UUID actingTenant) {
         this.http = http;
+        this.writeHttp = http.retryOnConnectionFailure()
+                ? http.newBuilder().retryOnConnectionFailure(false).build()
+                : http;
         this.baseUrl = baseUrl;
         this.session = session;
         this.telemetry = telemetry;
@@ -276,7 +289,10 @@ public final class ManagementTransport {
 
     private Response execute(String operation, Request request) {
         try {
-            return http.newCall(request).execute();
+            // A write goes out exactly once, a dropped connection included (§34.2 P11);
+            // a GET keeps OkHttp's transparent retry under §16's own runner.
+            OkHttpClient client = "GET".equals(request.method()) ? http : writeHttp;
+            return client.newCall(request).execute();
         } catch (IOException e) {
             throw new NetworkError(operation + ": request failed: " + e.getMessage(), e);
         }

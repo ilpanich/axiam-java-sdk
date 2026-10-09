@@ -204,6 +204,16 @@ class ScimTargetsTest extends ManagementTestBase {
         }
     }
 
+    @Test
+    void noWriteIsResentAfterADroppedConnection() throws Exception {
+        UUID id = UUID.randomUUID();
+        ScimTargetsApi t = client.scimTargets();
+        assertSentOnceOverADroppedConnection("POST", TARGETS, () -> t.create(input(credential())));
+        assertSentOnceOverADroppedConnection("PUT", TARGETS + "/" + id, () -> t.update(id, input(null)));
+        assertSentOnceOverADroppedConnection("DELETE", TARGETS + "/" + id, () -> t.delete(id));
+        assertSentOnceOverADroppedConnection("POST", TARGETS + "/" + id + "/reconcile", () -> t.reconcile(id));
+    }
+
     // ── 6. Errors and reconcile ──────────────────────────────────────────
 
     @Test

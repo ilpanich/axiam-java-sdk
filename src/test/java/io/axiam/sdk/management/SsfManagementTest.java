@@ -182,6 +182,15 @@ class SsfManagementTest extends ManagementTestBase {
         }
     }
 
+    @Test
+    void noneOfTheThreeWritesIsResentAfterADroppedConnection() throws Exception {
+        UUID id = UUID.randomUUID();
+        SsfApi s = client.ssf();
+        assertSentOnceOverADroppedConnection("POST", STREAMS, () -> s.createStream(input(headerValue())));
+        assertSentOnceOverADroppedConnection("PUT", STREAMS + "/" + id, () -> s.updateStream(id, input(null)));
+        assertSentOnceOverADroppedConnection("DELETE", STREAMS + "/" + id, () -> s.deleteStream(id));
+    }
+
     // ── 6. Errors ────────────────────────────────────────────────────────
 
     @Test
