@@ -113,8 +113,9 @@ public final class ErrorMapper {
      * Maps an HTTP status code from an {@code /oauth2/*} endpoint
      * (CONTRACT.md &sect;12.1/&sect;12.3 rule 3): a {@code 400} or
      * {@code 401} response carrying an {@code OAuth2ErrorResponse} body
-     * (both {@code error} and {@code error_description} present and
-     * string-typed) becomes {@link OAuthProtocolError} instead of the
+     * (a non-empty string {@code error}; {@code error_description} is
+     * optional, as RFC 6749 &sect;5.2 makes it) becomes
+     * {@link OAuthProtocolError} instead of the
      * generic &sect;2 row for that status. Any other status, or a
      * {@code 400}/{@code 401} whose body is not an
      * {@code OAuth2ErrorResponse}, falls through to {@link #fromHttpStatus}.
@@ -132,23 +133,70 @@ public final class ErrorMapper {
      * @return the mapped exception, ready to throw
      */
     public static RuntimeException fromOAuth2Response(int status, @Nullable Response response, String message) {
-        if ((status == 400 || status == 401) && response != null && response.body() != null) {
-            try {
-                ResponseBody peeked = response.peekBody(MAX_AUTHZ_BODY_PEEK_BYTES);
-                String bodyString = peeked.string();
-                if (!bodyString.isBlank()) {
-                    JsonNode root = JSON.readTree(bodyString);
-                    if (root.hasNonNull("error") && root.hasNonNull("error_description")
-                            && root.get("error").isTextual() && root.get("error_description").isTextual()) {
-                        return new OAuthProtocolError(root.get("error").asText(), root.get("error_description").asText());
-                    }
-                }
-            } catch (IOException | RuntimeException ignored) {
-                // Malformed/non-JSON body: fall through to the generic mapping below
-                // rather than let a parse failure mask the real status.
+        if (status == 400 || status == 401) {
+            OAuthProtocolError protocolError = oauth2ErrorBody(response);
+            if (protocolError != null) {
+                return protocolError;
             }
         }
         return fromHttpStatus(status, message, response);
+    }
+
+    /**
+     * Maps a failed response from an RFC 6749-family endpoint whose contract
+     * section dispatches on the {@code error} member <em>at any status</em>
+     * (CONTRACT.md &sect;2's {@code /oauth2/*} row as &sect;28.12.3 and
+     * &sect;33.4 apply it): a body carrying a non-empty string {@code error}
+     * is an {@link OAuthProtocolError} &mdash; a {@code 401}
+     * {@code invalid_token}, a {@code 429} {@code rate_limit_exceeded}
+     * included &mdash; with {@code error_description} optional. Anything else
+     * falls through to {@link #fromHttpStatus}, so a bodiless {@code 429} or
+     * {@code 5xx} is a {@link NetworkError}.
+     *
+     * <p>Kept apart from {@link #fromOAuth2Response}, whose callers predate
+     * contract 1.12 and pin its {@code 400}/{@code 401} scope in their tests.
+     *
+     * @param status   the HTTP response status code
+     * @param response the live response, or {@code null}
+     * @param message  a human-readable description, used only on fall-through
+     * @return the mapped exception, ready to throw
+     */
+    public static RuntimeException fromOAuth2ErrorAtAnyStatus(int status, @Nullable Response response,
+                                                              String message) {
+        OAuthProtocolError protocolError = oauth2ErrorBody(response);
+        if (protocolError != null) {
+            return protocolError;
+        }
+        return fromHttpStatus(status, message, response);
+    }
+
+    /**
+     * Reads an {@code OAuth2ErrorResponse} body without consuming it: a JSON
+     * object whose {@code error} is a non-empty string, with an optional
+     * string {@code error_description}. {@code null} for anything else,
+     * including a malformed body &mdash; a parse failure must never mask the
+     * real status.
+     */
+    private static @Nullable OAuthProtocolError oauth2ErrorBody(@Nullable Response response) {
+        if (response == null || response.body() == null) {
+            return null;
+        }
+        try {
+            String bodyString = response.peekBody(MAX_AUTHZ_BODY_PEEK_BYTES).string();
+            if (bodyString.isBlank()) {
+                return null;
+            }
+            JsonNode root = JSON.readTree(bodyString);
+            JsonNode error = root.get("error");
+            if (error == null || !error.isTextual() || error.asText().isEmpty()) {
+                return null;
+            }
+            JsonNode description = root.get("error_description");
+            return new OAuthProtocolError(error.asText(),
+                    description != null && description.isTextual() ? description.asText() : null);
+        } catch (IOException | RuntimeException ignored) {
+            return null;
+        }
     }
 
     /**

@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>a call NOT going over mTLS keeps the top-level entry;</li>
  *   <li>an ABSENT member means "no separate mTLS host", never
  *       "unsupported";</li>
- *   <li>only the six listed endpoints are ever aliased — not
+ *   <li>only the seven listed endpoints are ever aliased — not
  *       {@code authorization_endpoint}, {@code end_session_endpoint} or
  *       {@code jwks_uri};</li>
  *   <li>{@code issuer} is not an endpoint, does not move, and still governs
@@ -82,6 +82,8 @@ class AxiamClientMtlsEndpointAliasesTest {
                 body = "{\"request_uri\":\"urn:ietf:params:oauth:request_uri:x\",\"expires_in\":60}";
             }
             case "/oauth2/introspect" -> body = "{\"active\":true}";
+            case "/oauth2/bc-authorize" -> body = "{\"auth_req_id\":\"" + UUID.randomUUID()
+                    + "\",\"expires_in\":120,\"interval\":5}";
             case "/oauth2/revoke" -> body = "{}";
             default -> body = "{\"access_token\":\"a\",\"token_type\":\"Bearer\",\"expires_in\":900}";
         }
@@ -90,7 +92,7 @@ class AxiamClientMtlsEndpointAliasesTest {
     }
 
     /**
-     * The discovery document, with the six aliases pointing at {@code mtlsBase}
+     * The discovery document, with the seven aliases pointing at {@code mtlsBase}
      * when {@code aliases} is non-null. {@code aliasesJson} is inserted
      * verbatim so a test can publish a partial object.
      */
@@ -115,13 +117,14 @@ class AxiamClientMtlsEndpointAliasesTest {
                 + "\"device_authorization_endpoint\":\"" + t + "/oauth2/device_authorization\","
                 + "\"pushed_authorization_request_endpoint\":\"" + t + "/oauth2/par\","
                 + "\"end_session_endpoint\":\"" + t + "/oauth2/end_session\","
+                + "\"backchannel_authentication_endpoint\":\"" + t + "/oauth2/bc-authorize\","
                 + "\"backchannel_logout_supported\":true,"
                 + "\"backchannel_logout_session_supported\":true"
                 + (aliasesJson == null ? "" : ",\"mtls_endpoint_aliases\":" + aliasesJson)
                 + "}";
     }
 
-    /** All six aliases on {@code mtlsBase}. */
+    /** All seven aliases on {@code mtlsBase} (CONTRACT.md §21.3.1 vector A, as amended in contract 1.58). */
     private static String allAliases(String mtlsBase) {
         String m = strip(mtlsBase);
         return "{"
@@ -130,7 +133,8 @@ class AxiamClientMtlsEndpointAliasesTest {
                 + "\"revocation_endpoint\":\"" + m + "/oauth2/revoke\","
                 + "\"introspection_endpoint\":\"" + m + "/oauth2/introspect\","
                 + "\"device_authorization_endpoint\":\"" + m + "/oauth2/device_authorization\","
-                + "\"pushed_authorization_request_endpoint\":\"" + m + "/oauth2/par\""
+                + "\"pushed_authorization_request_endpoint\":\"" + m + "/oauth2/par\","
+                + "\"backchannel_authentication_endpoint\":\"" + m + "/oauth2/bc-authorize\""
                 + "}";
     }
 
@@ -222,10 +226,13 @@ class AxiamClientMtlsEndpointAliasesTest {
                 OidcConfiguration config = client.oidcDiscover();
                 AuthorizationRequest request = client.oidcBegin(config, "https://app.example.com/cb");
                 client.oidcPar(config, request, "https://app.example.com/cb", "openid", TENANT_UUID);
+                client.cibaInitiate(io.axiam.sdk.oidc.CibaInitiateRequest
+                        .builder("openid", io.axiam.sdk.oidc.CibaUserHint.loginHint("ada"))
+                        .tenantId(TENANT_UUID).configuration(config).build());
             }
 
             assertEquals(List.of("/oauth2/token", "/oauth2/introspect", "/oauth2/revoke",
-                    "/oauth2/device_authorization", "/oauth2/par"), mtlsHits);
+                    "/oauth2/device_authorization", "/oauth2/par", "/oauth2/bc-authorize"), mtlsHits);
             assertTrue(conventionalHits.isEmpty(),
                     "no aliasable endpoint may reach the conventional host: " + conventionalHits);
         }
@@ -278,7 +285,7 @@ class AxiamClientMtlsEndpointAliasesTest {
         try (MockWebServer mtls = new MockWebServer(); MockWebServer conv = new MockWebServer()) {
             mtls.setDispatcher(recordingDispatcher(mtlsHits, () -> "{}"));
             mtls.start();
-            // RFC 8705 §5 does not require an OP to alias all six, and the
+            // RFC 8705 §5 does not require an OP to alias all seven, and the
             // shape of this member must never be why a client stops working.
             String partial = "{\"token_endpoint\":\"" + strip(mtls.url("/").toString()) + "/oauth2/token\"}";
             conv.setDispatcher(recordingDispatcher(conventionalHits,
@@ -352,22 +359,75 @@ class AxiamClientMtlsEndpointAliasesTest {
     }
 
     @Test
-    void theAliasRecordCarriesOnlyTheSixAliasableEndpoints() {
+    void theAliasRecordCarriesOnlyTheSevenAliasableEndpoints() {
         // Naming them as a closed set is what makes authorization_endpoint,
         // end_session_endpoint and jwks_uri unrepresentable rather than merely
-        // unused. A seventh component here would be an alias the SDK could
-        // synthesise.
+        // unused. An eighth component here would be an alias the SDK could
+        // synthesise. Contract 1.58 amended §21.3.1 vector A in place to add
+        // the seventh, backchannel_authentication_endpoint (CIBA, §33).
         List<String> components = java.util.Arrays.stream(MtlsEndpointAliases.class.getRecordComponents())
                 .map(java.lang.reflect.RecordComponent::getName)
                 .sorted()
                 .toList();
         assertEquals(List.of(
+                "backchannel_authentication_endpoint",
                 "device_authorization_endpoint",
                 "introspection_endpoint",
                 "pushed_authorization_request_endpoint",
                 "revocation_endpoint",
                 "token_endpoint",
                 "userinfo_endpoint"), components);
+    }
+
+    /** CONTRACT.md §21.3.1 vector A, verbatim (amended in place in contract 1.58: seven aliases). */
+    private static final String VECTOR_A = """
+            {
+              "issuer": "https://iam.example.test",
+              "authorization_endpoint": "https://iam.example.test/oauth2/authorize?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "token_endpoint": "https://iam.example.test/oauth2/token?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "userinfo_endpoint": "https://iam.example.test/oauth2/userinfo",
+              "jwks_uri": "https://iam.example.test/oauth2/jwks",
+              "revocation_endpoint": "https://iam.example.test/oauth2/revoke?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "introspection_endpoint": "https://iam.example.test/oauth2/introspect?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "device_authorization_endpoint": "https://iam.example.test/oauth2/device_authorization?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "pushed_authorization_request_endpoint": "https://iam.example.test/oauth2/par?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "backchannel_authentication_endpoint": "https://iam.example.test/oauth2/bc-authorize?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+              "end_session_endpoint": "https://iam.example.test/oauth2/logout",
+              "mtls_endpoint_aliases": {
+                "token_endpoint": "https://mtls.iam.example.test/oauth2/token?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+                "userinfo_endpoint": "https://mtls.iam.example.test/oauth2/userinfo",
+                "revocation_endpoint": "https://mtls.iam.example.test/oauth2/revoke?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+                "introspection_endpoint": "https://mtls.iam.example.test/oauth2/introspect?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+                "device_authorization_endpoint": "https://mtls.iam.example.test/oauth2/device_authorization?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+                "pushed_authorization_request_endpoint": "https://mtls.iam.example.test/oauth2/par?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b",
+                "backchannel_authentication_endpoint": "https://mtls.iam.example.test/oauth2/bc-authorize?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b"
+              }
+            }
+            """;
+
+    @Test
+    void vectorADecodesAllSevenAliasesAndTheTopLevelCibaEndpoint() throws Exception {
+        try (MockWebServer conv = new MockWebServer()) {
+            conv.setDispatcher(recordingDispatcher(conventionalHits, () -> VECTOR_A));
+            conv.start();
+            try (AxiamClient client = client(conv, false)) {
+                OidcConfiguration config = client.oidcDiscover();
+                MtlsEndpointAliases a = config.mtls_endpoint_aliases();
+                assertNotNull(a);
+                String q = "?tenant_id=6f3e0a5c-1b2d-4e8f-9a7b-0c1d2e3f4a5b";
+                String m = "https://mtls.iam.example.test/oauth2/";
+                assertEquals(List.of(m + "token" + q, m + "userinfo", m + "revoke" + q, m + "introspect" + q,
+                                m + "device_authorization" + q, m + "par" + q, m + "bc-authorize" + q),
+                        java.util.Arrays.asList(a.token_endpoint(), a.userinfo_endpoint(), a.revocation_endpoint(),
+                                a.introspection_endpoint(), a.device_authorization_endpoint(),
+                                a.pushed_authorization_request_endpoint(), a.backchannel_authentication_endpoint()));
+                assertEquals("https://iam.example.test/oauth2/bc-authorize" + q,
+                        config.backchannel_authentication_endpoint());
+                assertEquals("https://iam.example.test", config.issuer());
+            }
+        }
+        // The pre-1.58 arity still compiles and leaves the seventh absent.
+        assertNull(new MtlsEndpointAliases("t", "u", "r", "i", "d", "p").backchannel_authentication_endpoint());
     }
 
     // ── Consequence 3: issuer is never aliased ─────────────────────────────

@@ -24,11 +24,14 @@ import java.util.List;
  * <p>* [{@code Self::sensitive_scopes_enabled}], validated **disable-only** — the mirror image of
  * {@code mfa_enforced}, because releasing personal data is the less-restrictive direction, so a
  * tenant can turn its organization's decision off but never on. * [{@code
- * Self::dynamic_registration}], on the ladder {@code disabled} → {@code initial_access_token} →
- * {@code anonymous}: a tenant may move down it and never up. * [{@code Self::dcr_max_clients}] and
- * [{@code Self::dcr_unused_client_ttl_days}], on the ordinary {@code tenant &lt;= org} rule — with
- * the wrinkle that {@code 0} on the second means *never sweep*, which is the longest window of all
- * and is handled by [{@code dcr_ttl_strictness}].
+ * Self::saml_idp_enabled}], validated **disable-only** exactly like [{@code
+ * Self::sensitive_scopes_enabled}] (D-20): a tenant may turn its organization's {@code true} off
+ * and never its {@code false} on. * [{@code Self::ssf_enabled}], validated **disable-only** the
+ * same way (D-45). * [{@code Self::dynamic_registration}], on the ladder {@code disabled} → {@code
+ * initial_access_token} → {@code anonymous}: a tenant may move down it and never up. * [{@code
+ * Self::dcr_max_clients}] and [{@code Self::dcr_unused_client_ttl_days}], on the ordinary {@code
+ * tenant &lt;= org} rule — with the wrinkle that {@code 0} on the second means *never sweep*,
+ * which is the longest window of all and is handled by [{@code dcr_ttl_strictness}].
  *
  * <p>**Not ordered**, therefore never validated against the baseline and never clamped:
  *
@@ -96,6 +99,19 @@ import java.util.List;
  *     today's {@code axiam:user} tokens — which AXIAM's own APIs accept. That is why the interlock
  *     exists: the empty list is not a safe default for an *open* registration endpoint, it is the most
  *     dangerous one. Shared with T5 (CIMD), which inherits the same list for the same reason.
+ * @param samlIdpEnabled G-2 / D-20 — whether this tenant may act as a SAML 2.0 identity provider:
+ *     publish IdP metadata and accept {@code AuthnRequest}s on {@code
+ *     /saml/v2/{tenant}/{metadata,sso,slo}}. **Off unless an organization turns it on.** A SAML IdP
+ *     issues assertions that other systems accept as proof of identity, so a deployment that has never
+ *     decided to be one issues none, and the three endpoints answer {@code 404} as if they did not
+ *     exist. The switch lives on this policy, beside the other OpenID Provider surface controls,
+ *     because the SSO endpoint is the same browser login hop and OP session with a different wire
+ *     format. **Disable-only**, with the shape of [{@code Self::sensitive_scopes_enabled}]: a tenant
+ *     may turn its organization's {@code true} off but never its {@code false} on, because the
+ *     decision to issue identity assertions on behalf of the organization's tenants is the
+ *     organization's. A deployment built without the {@code saml} feature answers {@code 404} whatever
+ *     this says; the setting is a capability, not a grant (each SP must still be registered, and
+ *     {@code allow_idp_initiated} is its own opt-in).
  * @param sensitiveScopesEnabled Whether {@code address} and {@code phone} may be registered on a
  *     client, requested at the authorization endpoint, and released at UserInfo (X7 G8). **Off unless
  *     an organization turns it on.** The two scopes release a postal address and a telephone number —
@@ -105,6 +121,15 @@ import java.util.List;
  *     is a *capability*, not a grant: with it on, a client still has to register the scope, the
  *     request still has to ask for it, and the user still has to have consented. It is the first of
  *     four gates, and it is the only one an operator can close for everybody at once.
+ * @param ssfEnabled G-5 / D-45 — whether the tenant is a Shared Signals Framework transmitter: its
+ *     {@code /.well-known/ssf-configuration} is served, its receivers can use the stream management
+ *     API, and events are signed and transmitted on its streams. Default **{@code false}**.
+ *     **Disable-only**, with the shape of [{@code Self::saml_idp_enabled}]: sending security events
+ *     about the organization's users to third parties is the organization's decision. Streams can be
+ *     registered while it is off; they carry nothing until it is on.
+ * @param ssfInactiveReason **Read-only**, D-55: set on a settings response when {@code
+ *     ssf_enabled} is on but the transmitter is inactive anyway, saying why — the deployment holds
+ *     more than one tenant and serves no per-tenant issuers. Never stored.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -117,6 +142,9 @@ public record OidcPolicy(
         @JsonProperty("default_locale") @Nullable String defaultLocale,
         @JsonProperty("dynamic_registration") @Nullable String dynamicRegistration,
         @JsonProperty("external_client_allowed_resources") @Nullable List<String> externalClientAllowedResources,
-        @JsonProperty("sensitive_scopes_enabled") Boolean sensitiveScopesEnabled
+        @JsonProperty("saml_idp_enabled") @Nullable Boolean samlIdpEnabled,
+        @JsonProperty("sensitive_scopes_enabled") Boolean sensitiveScopesEnabled,
+        @JsonProperty("ssf_enabled") @Nullable Boolean ssfEnabled,
+        @JsonProperty("ssf_inactive_reason") @Nullable String ssfInactiveReason
 ) {
 }

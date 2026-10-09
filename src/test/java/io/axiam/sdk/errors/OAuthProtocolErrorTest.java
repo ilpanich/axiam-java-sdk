@@ -105,6 +105,40 @@ class OAuthProtocolErrorTest {
         assertTrue(!(mapped instanceof OAuthProtocolError));
     }
 
+    @Test
+    void errorDescriptionIsOptional() throws Exception {
+        RuntimeException mapped = ErrorMapper.fromOAuth2Response(400,
+                jsonResponse(400, "{\"error\":\"invalid_grant\"}"), "token request failed");
+        OAuthProtocolError protocolError = assertInstanceOf(OAuthProtocolError.class, mapped);
+        assertEquals("invalid_grant", protocolError.error());
+        assertEquals(null, protocolError.errorDescription());
+        assertEquals("invalid_grant", protocolError.getMessage());
+    }
+
+    @Test
+    void anyStatusMappingDispatchesOnANonEmptyErrorMember() throws Exception {
+        OAuthProtocolError limited = assertInstanceOf(OAuthProtocolError.class,
+                ErrorMapper.fromOAuth2ErrorAtAnyStatus(429,
+                        jsonResponse(429, "{\"error\":\"rate_limit_exceeded\",\"error_description\":7}"), "x"));
+        assertEquals("rate_limit_exceeded", limited.error());
+        assertEquals(null, limited.errorDescription(), "a non-string description is treated as absent");
+        assertInstanceOf(NetworkError.class,
+                ErrorMapper.fromOAuth2ErrorAtAnyStatus(429, jsonResponse(429, ""), "x"));
+        assertInstanceOf(NetworkError.class,
+                ErrorMapper.fromOAuth2ErrorAtAnyStatus(400, jsonResponse(400, "{\"error\":\"\"}"), "x"));
+        assertInstanceOf(NetworkError.class,
+                ErrorMapper.fromOAuth2ErrorAtAnyStatus(503, jsonResponse(503, "{not json"), "x"));
+        assertInstanceOf(AuthError.class, ErrorMapper.fromOAuth2ErrorAtAnyStatus(401, null, "x"));
+    }
+
+    @Test
+    void theTwoTerminalPollOutcomesAreDistinct() {
+        OAuthProtocolError denied = new OAuthProtocolError("access_denied", null);
+        OAuthProtocolError expired = new OAuthProtocolError("expired_token", "late");
+        assertTrue(denied.isAccessDenied() && !denied.isExpiredToken());
+        assertTrue(expired.isExpiredToken() && !expired.isAccessDenied());
+    }
+
     private static Response jsonResponse(int status, String body) {
         return new Response.Builder()
                 .request(new Request.Builder().url("https://axiam.example.com/oauth2/token").build())

@@ -751,7 +751,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void oauth2ClientsCreate() throws Exception {
         mount("POST", "/api/v1/oauth2-clients", 201, "{\"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"redirect_uris\": [], \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().oauth2Clients().create(new io.axiam.sdk.management.models.CreateOAuth2ClientRequest(null, null, null, null, null, null, java.util.List.of(), null, null, "example", null, null, java.util.List.of(), null, java.util.List.of(), null, null, null, null, null, null));
+        client.management().oauth2Clients().create(new io.axiam.sdk.management.models.CreateOAuth2ClientRequest(null, null, null, null, null, null, null, null, null, null, java.util.List.of(), null, null, "example", null, null, java.util.List.of(), null, java.util.List.of(), null, null, null, null, null, null));
     }
 
     /** Exercises oauth2_clients.get. */
@@ -765,7 +765,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void oauth2ClientsUpdate() throws Exception {
         mount("PUT", "/api/v1/oauth2-clients/" + EXAMPLE_ID + "", 200, "{\"allowed_resources\": [], \"authn_request_params\": \"ignore\", \"browser_sso\": true, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"dpop_bound_access_tokens\": true, \"dpop_require_nonce\": true, \"grant_types\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"managed_by\": \"admin\", \"name\": \"example\", \"profile\": \"standard\", \"redirect_uris\": [], \"require_par\": true, \"scopes\": [], \"self_signed_tls_client_auth_thumbprints\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"tls_client_certificate_bound_access_tokens\": true, \"token_endpoint_auth_method\": \"client_secret_post\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().oauth2Clients().update(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateOAuth2ClientRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        client.management().oauth2Clients().update(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateOAuth2ClientRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises oauth2_clients.delete. */
@@ -945,6 +945,205 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().emailConfig().testTenant();
     }
 
+    /** Exercises directory.get. */
+    @Test
+    void directoryGet() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/directory", 200, "{\"base_dn\": \"example\", \"bind_dn\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"enabled\": true, \"group_mappings\": [], \"group_member_attribute\": \"example\", \"group_nesting_depth\": 1, \"id\": \"11111111-1111-4111-8111-111111111111\", \"jit_provisioning\": true, \"kind\": \"open_ldap\", \"start_tls\": true, \"sync_interval_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"trust_anchors_pem\": [], \"updated_at\": \"2026-08-26T00:00:00Z\", \"url\": \"example\", \"user_attribute_map\": {\"display_name\": \"example\", \"email\": \"example\", \"external_id\": \"example\", \"username\": \"example\"}, \"user_filter\": \"example\"}");
+        client.management().directory().get();
+    }
+
+    /** Exercises directory.set. */
+    @Test
+    void directorySet() throws Exception {
+        mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/directory", 200, "{\"base_dn\": \"example\", \"bind_dn\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"enabled\": true, \"group_mappings\": [], \"group_member_attribute\": \"example\", \"group_nesting_depth\": 1, \"id\": \"11111111-1111-4111-8111-111111111111\", \"jit_provisioning\": true, \"kind\": \"open_ldap\", \"start_tls\": true, \"sync_interval_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"trust_anchors_pem\": [], \"updated_at\": \"2026-08-26T00:00:00Z\", \"url\": \"example\", \"user_attribute_map\": {\"display_name\": \"example\", \"email\": \"example\", \"external_id\": \"example\", \"username\": \"example\"}, \"user_filter\": \"example\"}");
+        client.management().directory().set(new io.axiam.sdk.management.models.SetDirectoryConfig("example", "example", io.axiam.sdk.Sensitive.of("example"), true, null, null, null, null, null, null, io.axiam.sdk.management.models.DirectoryKind.OPEN_LDAP, true, null, null, "example", null, "example"));
+    }
+
+    /** Exercises directory.update. */
+    @Test
+    void directoryUpdate() throws Exception {
+        mount("PATCH", "/api/v1/tenants/" + TENANT_ID + "/directory", 200, "{\"base_dn\": \"example\", \"bind_dn\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"enabled\": true, \"group_mappings\": [], \"group_member_attribute\": \"example\", \"group_nesting_depth\": 1, \"id\": \"11111111-1111-4111-8111-111111111111\", \"jit_provisioning\": true, \"kind\": \"open_ldap\", \"start_tls\": true, \"sync_interval_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"trust_anchors_pem\": [], \"updated_at\": \"2026-08-26T00:00:00Z\", \"url\": \"example\", \"user_attribute_map\": {\"display_name\": \"example\", \"email\": \"example\", \"external_id\": \"example\", \"username\": \"example\"}, \"user_filter\": \"example\"}");
+        client.management().directory().update(new io.axiam.sdk.management.models.UpdateDirectoryConfig(null, null, io.axiam.sdk.Sensitive.of("example"), null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+    }
+
+    /** Exercises directory.delete. */
+    @Test
+    void directoryDelete() throws Exception {
+        mount("DELETE", "/api/v1/tenants/" + TENANT_ID + "/directory", 204, "");
+        client.management().directory().delete();
+    }
+
+    /** Exercises directory.link_account. */
+    @Test
+    void directoryLinkAccount() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/directory/links", 200, "{\"certificates_revoked\": 1, \"directory_external_id\": \"example\", \"user_id\": \"11111111-1111-4111-8111-111111111111\", \"was_already_linked\": true, \"webauthn_credentials_deleted\": 1}");
+        client.management().directory().linkAccount(new io.axiam.sdk.management.models.LinkDirectoryAccount(EXAMPLE_ID));
+    }
+
+    /** Exercises directory.get_sync_status. */
+    @Test
+    void directoryGetSyncStatus() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/directory/sync-status", 200, "{\"full_required\": true, \"has_watermark\": true}");
+        client.management().directory().getSyncStatus();
+    }
+
+    /** Exercises saml.get_idp. */
+    @Test
+    void samlGetIdp() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/saml/idp", 200, "{\"entity_id\": \"example\", \"metadata_served\": true, \"metadata_url\": \"example\", \"saml_available\": true, \"saml_idp_enabled\": true, \"slo_url\": \"example\", \"sso_url\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}");
+        client.management().saml().getIdp();
+    }
+
+    /** Exercises saml.list_service_providers. */
+    @Test
+    void samlListServiceProviders() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/saml/service-providers", 200, "{\"items\": [{\"acs_urls\": [], \"allow_idp_initiated\": true, \"allowed_groups\": [], \"attribute_mappings\": [], \"created_at\": \"2026-08-26T00:00:00Z\", \"display_name\": \"example\", \"enabled\": true, \"encrypt_assertions\": true, \"entity_id\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name_id_format\": \"persistent\", \"sign_responses\": true, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"want_authn_requests_signed\": true}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        client.management().saml().listServiceProviders(PageRequest.of(50));
+        client.management().saml().listServiceProvidersAll(PageRequest.of(50));
+    }
+
+    /** Exercises saml.create_service_provider. */
+    @Test
+    void samlCreateServiceProvider() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/saml/service-providers", 201, "{\"acs_urls\": [], \"allow_idp_initiated\": true, \"allowed_groups\": [], \"attribute_mappings\": [], \"created_at\": \"2026-08-26T00:00:00Z\", \"display_name\": \"example\", \"enabled\": true, \"encrypt_assertions\": true, \"entity_id\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name_id_format\": \"persistent\", \"sign_responses\": true, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"want_authn_requests_signed\": true}");
+        client.management().saml().createServiceProvider(new io.axiam.sdk.management.models.SamlServiceProviderInput(java.util.List.of(), null, null, null, "example", null, null, "example", null, null, null, null, null, null, null));
+    }
+
+    /** Exercises saml.get_service_provider. */
+    @Test
+    void samlGetServiceProvider() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/saml/service-providers/" + EXAMPLE_ID + "", 200, "{\"acs_urls\": [], \"allow_idp_initiated\": true, \"allowed_groups\": [], \"attribute_mappings\": [], \"created_at\": \"2026-08-26T00:00:00Z\", \"display_name\": \"example\", \"enabled\": true, \"encrypt_assertions\": true, \"entity_id\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name_id_format\": \"persistent\", \"sign_responses\": true, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"want_authn_requests_signed\": true}");
+        client.management().saml().getServiceProvider(EXAMPLE_ID);
+    }
+
+    /** Exercises saml.update_service_provider. */
+    @Test
+    void samlUpdateServiceProvider() throws Exception {
+        mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/saml/service-providers/" + EXAMPLE_ID + "", 200, "{\"acs_urls\": [], \"allow_idp_initiated\": true, \"allowed_groups\": [], \"attribute_mappings\": [], \"created_at\": \"2026-08-26T00:00:00Z\", \"display_name\": \"example\", \"enabled\": true, \"encrypt_assertions\": true, \"entity_id\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"name_id_format\": \"persistent\", \"sign_responses\": true, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"want_authn_requests_signed\": true}");
+        client.management().saml().updateServiceProvider(EXAMPLE_ID, new io.axiam.sdk.management.models.SamlServiceProviderInput(java.util.List.of(), null, null, null, "example", null, null, "example", null, null, null, null, null, null, null));
+    }
+
+    /** Exercises saml.delete_service_provider. */
+    @Test
+    void samlDeleteServiceProvider() throws Exception {
+        mount("DELETE", "/api/v1/tenants/" + TENANT_ID + "/saml/service-providers/" + EXAMPLE_ID + "", 204, "");
+        client.management().saml().deleteServiceProvider(EXAMPLE_ID);
+    }
+
+    /** Exercises saml.parse_sp_metadata. */
+    @Test
+    void samlParseSpMetadata() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/saml/parse-sp-metadata", 200, "{\"service_provider\": {\"acs_urls\": [], \"display_name\": \"example\", \"entity_id\": \"example\"}, \"warnings\": []}");
+        client.management().saml().parseSpMetadata(io.axiam.sdk.management.models.ParseSamlSpMetadata.fromUrl("https://sp.example/metadata"));
+    }
+
+    /** Exercises saml.list_idp_credentials. */
+    @Test
+    void samlListIdpCredentials() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/saml/idp-credentials", 200, "[{\"certificate_pem\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"serial\": \"example\", \"status\": \"active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}]");
+        client.management().saml().listIdpCredentials();
+    }
+
+    /** Exercises saml.issue_idp_credential. */
+    @Test
+    void samlIssueIdpCredential() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/saml/idp-credentials", 201, "{\"certificate_pem\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"serial\": \"example\", \"status\": \"active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}");
+        client.management().saml().issueIdpCredential(new io.axiam.sdk.management.models.IssueSamlIdpCredential(EXAMPLE_ID, io.axiam.sdk.management.models.SamlIdpSlot.ACTIVE, null));
+    }
+
+    /** Exercises saml.promote_idp_credential. */
+    @Test
+    void samlPromoteIdpCredential() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/saml/idp-credentials/" + EXAMPLE_ID + "/promote", 200, "{\"active\": {\"certificate_pem\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"serial\": \"example\", \"status\": \"active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}}");
+        client.management().saml().promoteIdpCredential(EXAMPLE_ID);
+    }
+
+    /** Exercises saml.retire_idp_credential. */
+    @Test
+    void samlRetireIdpCredential() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/saml/idp-credentials/" + EXAMPLE_ID + "/retire", 200, "{\"certificate_pem\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"serial\": \"example\", \"status\": \"active\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}");
+        client.management().saml().retireIdpCredential(EXAMPLE_ID);
+    }
+
+    /** Exercises ssf.list_streams. */
+    @Test
+    void ssfListStreams() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams", 200, "{\"items\": [{\"audience\": \"example\", \"authorization_header_set\": true, \"created_at\": \"2026-08-26T00:00:00Z\", \"delivery_method\": \"push\", \"events_allowed\": [], \"events_delivered\": [], \"events_requested\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"receiver_client_id\": \"example\", \"status\": \"enabled\", \"status_actor\": \"admin\", \"subject_format\": \"iss_sub\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"transmitter_active\": true, \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        client.management().ssf().listStreams(PageRequest.of(50));
+        client.management().ssf().listStreamsAll(PageRequest.of(50));
+    }
+
+    /** Exercises ssf.create_stream. */
+    @Test
+    void ssfCreateStream() throws Exception {
+        mount("POST", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams", 201, "{\"audience\": \"example\", \"authorization_header_set\": true, \"created_at\": \"2026-08-26T00:00:00Z\", \"delivery_method\": \"push\", \"events_allowed\": [], \"events_delivered\": [], \"events_requested\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"receiver_client_id\": \"example\", \"status\": \"enabled\", \"status_actor\": \"admin\", \"subject_format\": \"iss_sub\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"transmitter_active\": true, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        client.management().ssf().createStream(new io.axiam.sdk.management.models.SsfStreamInput("example", io.axiam.sdk.Sensitive.of("example"), null, io.axiam.sdk.management.models.SsfDeliveryMethod.PUSH, null, null, java.util.List.of(), null, "example", null, null, null));
+    }
+
+    /** Exercises ssf.get_stream. */
+    @Test
+    void ssfGetStream() throws Exception {
+        mount("GET", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams/" + EXAMPLE_ID + "", 200, "{\"audience\": \"example\", \"authorization_header_set\": true, \"created_at\": \"2026-08-26T00:00:00Z\", \"delivery_method\": \"push\", \"events_allowed\": [], \"events_delivered\": [], \"events_requested\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"receiver_client_id\": \"example\", \"status\": \"enabled\", \"status_actor\": \"admin\", \"subject_format\": \"iss_sub\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"transmitter_active\": true, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        client.management().ssf().getStream(EXAMPLE_ID);
+    }
+
+    /** Exercises ssf.update_stream. */
+    @Test
+    void ssfUpdateStream() throws Exception {
+        mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams/" + EXAMPLE_ID + "", 200, "{\"audience\": \"example\", \"authorization_header_set\": true, \"created_at\": \"2026-08-26T00:00:00Z\", \"delivery_method\": \"push\", \"events_allowed\": [], \"events_delivered\": [], \"events_requested\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"receiver_client_id\": \"example\", \"status\": \"enabled\", \"status_actor\": \"admin\", \"subject_format\": \"iss_sub\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"transmitter_active\": true, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        client.management().ssf().updateStream(EXAMPLE_ID, new io.axiam.sdk.management.models.SsfStreamInput("example", io.axiam.sdk.Sensitive.of("example"), null, io.axiam.sdk.management.models.SsfDeliveryMethod.PUSH, null, null, java.util.List.of(), null, "example", null, null, null));
+    }
+
+    /** Exercises ssf.delete_stream. */
+    @Test
+    void ssfDeleteStream() throws Exception {
+        mount("DELETE", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams/" + EXAMPLE_ID + "", 204, "");
+        client.management().ssf().deleteStream(EXAMPLE_ID);
+    }
+
+    /** Exercises scim_targets.list. */
+    @Test
+    void scimTargetsList() throws Exception {
+        mount("GET", "/api/v1/scim-targets", 200, "{\"items\": [{\"auth\": {\"type\": \"bearer\"}, \"base_url\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"deprovision\": \"deactivate\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"push_groups\": true, \"scope\": {\"type\": \"all_users\"}, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"user_name_from\": \"username\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        client.management().scimTargets().list(PageRequest.of(50));
+        client.management().scimTargets().listAll(PageRequest.of(50));
+    }
+
+    /** Exercises scim_targets.create. */
+    @Test
+    void scimTargetsCreate() throws Exception {
+        mount("POST", "/api/v1/scim-targets", 201, "{\"auth\": {\"type\": \"bearer\"}, \"base_url\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"deprovision\": \"deactivate\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"push_groups\": true, \"scope\": {\"type\": \"all_users\"}, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"user_name_from\": \"username\"}");
+        client.management().scimTargets().create(new io.axiam.sdk.management.models.ScimTargetInput(new io.axiam.sdk.management.models.ScimTargetAuthBearer("bearer"), "example", io.axiam.sdk.Sensitive.of("example"), null, null, "example", null, new io.axiam.sdk.management.models.ScimTargetScopeAllUsers("all_users"), null));
+    }
+
+    /** Exercises scim_targets.get. */
+    @Test
+    void scimTargetsGet() throws Exception {
+        mount("GET", "/api/v1/scim-targets/" + EXAMPLE_ID + "", 200, "{\"auth\": {\"type\": \"bearer\"}, \"base_url\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"deprovision\": \"deactivate\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"push_groups\": true, \"scope\": {\"type\": \"all_users\"}, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"user_name_from\": \"username\"}");
+        client.management().scimTargets().get(EXAMPLE_ID);
+    }
+
+    /** Exercises scim_targets.update. */
+    @Test
+    void scimTargetsUpdate() throws Exception {
+        mount("PUT", "/api/v1/scim-targets/" + EXAMPLE_ID + "", 200, "{\"auth\": {\"type\": \"bearer\"}, \"base_url\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"deprovision\": \"deactivate\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"push_groups\": true, \"scope\": {\"type\": \"all_users\"}, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"user_name_from\": \"username\"}");
+        client.management().scimTargets().update(EXAMPLE_ID, new io.axiam.sdk.management.models.ScimTargetInput(new io.axiam.sdk.management.models.ScimTargetAuthBearer("bearer"), "example", io.axiam.sdk.Sensitive.of("example"), null, null, "example", null, new io.axiam.sdk.management.models.ScimTargetScopeAllUsers("all_users"), null));
+    }
+
+    /** Exercises scim_targets.delete. */
+    @Test
+    void scimTargetsDelete() throws Exception {
+        mount("DELETE", "/api/v1/scim-targets/" + EXAMPLE_ID + "", 204, "");
+        client.management().scimTargets().delete(EXAMPLE_ID);
+    }
+
+    /** Exercises scim_targets.reconcile. */
+    @Test
+    void scimTargetsReconcile() throws Exception {
+        mount("POST", "/api/v1/scim-targets/" + EXAMPLE_ID + "/reconcile", 202, "{\"status\": \"example\", \"target_id\": \"11111111-1111-4111-8111-111111111111\"}");
+        client.management().scimTargets().reconcile(EXAMPLE_ID);
+    }
+
     /** Exercises settings.get_org. */
     @Test
     void settingsGetOrg() throws Exception {
@@ -956,7 +1155,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetOrg() throws Exception {
         mount("PUT", "/api/v1/organizations/" + ORG_ID + "/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
-        client.management().settings().setOrg(new io.axiam.sdk.management.models.SetOrgSettings(1L, true, null, null, null, null, null, 1, null, null, null, 1, true, null, true, 1.0, 1L, 1, 1, 1L, 1L, true, 1, null, null, null, 1, 1L, true, true, true, true, null, null, null));
+        client.management().settings().setOrg(new io.axiam.sdk.management.models.SetOrgSettings(1L, true, null, null, null, null, null, 1, null, null, null, 1, true, null, true, 1.0, 1L, 1, 1, 1L, 1L, true, 1, null, null, null, 1, 1L, true, true, true, true, null, null, null, null, null));
     }
 
     /** Exercises settings.get_effective. */
@@ -970,7 +1169,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetEffective() throws Exception {
         mount("PUT", "/api/v1/settings", 200, "{\"certificate\": {\"default_cert_validity_days\": 1, \"max_cert_validity_days\": 1}, \"created_at\": \"2026-08-26T00:00:00Z\", \"email\": {\"email_verification_grace_period_hours\": 1, \"email_verification_required\": true}, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lockout\": {\"lockout_backoff_multiplier\": 1, \"lockout_duration_secs\": 1, \"max_failed_login_attempts\": 1, \"max_lockout_duration_secs\": 1}, \"mfa\": {\"mfa_challenge_lifetime_secs\": 1, \"mfa_enforced\": true}, \"notification\": {\"admin_notifications_enabled\": true}, \"oidc\": {\"sensitive_scopes_enabled\": true}, \"opaque\": {\"opaque_ksf\": \"example\", \"opaque_mode\": \"example\", \"opaque_suite\": \"example\"}, \"password\": {\"hibp_check_enabled\": true, \"min_length\": 1, \"password_history_count\": 1, \"require_digits\": true, \"require_lowercase\": true, \"require_symbols\": true, \"require_uppercase\": true}, \"privacy\": {\"deletion_grace_period_days\": 1}, \"scope\": \"Org\", \"scope_id\": \"11111111-1111-4111-8111-111111111111\", \"token\": {\"access_token_lifetime_secs\": 1, \"refresh_token_lifetime_secs\": 1}, \"updated_at\": \"2026-08-26T00:00:00Z\", \"webauthn\": {\"webauthn_user_verification\": \"example\"}}");
-        client.management().settings().setEffective(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        client.management().settings().setEffective(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises settings.get_tenant_override. */
@@ -984,7 +1183,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void settingsSetTenantOverride() throws Exception {
         mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/settings", 200, "{}");
-        client.management().settings().setTenantOverride(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
+        client.management().settings().setTenantOverride(new io.axiam.sdk.management.models.TenantSettingsOverride(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises settings.delete_tenant_override. */
@@ -1147,7 +1346,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises platform.health. */
     @Test
     void platformHealth() throws Exception {
-        mount("GET", "/health", 200, "{\"status\": \"example\"}");
+        mount("GET", "/health", 200, "{\"profile\": \"example\", \"status\": \"example\"}");
         client.management().platform().health();
     }
 
@@ -1200,6 +1399,12 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "certificates.list",
                 "certificates.revoke",
                 "certificates.sign_csr",
+                "directory.delete",
+                "directory.get",
+                "directory.get_sync_status",
+                "directory.link_account",
+                "directory.set",
+                "directory.update",
                 "email_config.delete_org",
                 "email_config.delete_tenant",
                 "email_config.get_org",
@@ -1296,6 +1501,23 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "roles.unassign_from_service_account",
                 "roles.unassign_from_user",
                 "roles.update",
+                "saml.create_service_provider",
+                "saml.delete_service_provider",
+                "saml.get_idp",
+                "saml.get_service_provider",
+                "saml.issue_idp_credential",
+                "saml.list_idp_credentials",
+                "saml.list_service_providers",
+                "saml.parse_sp_metadata",
+                "saml.promote_idp_credential",
+                "saml.retire_idp_credential",
+                "saml.update_service_provider",
+                "scim_targets.create",
+                "scim_targets.delete",
+                "scim_targets.get",
+                "scim_targets.list",
+                "scim_targets.reconcile",
+                "scim_targets.update",
                 "scim_tokens.create",
                 "scim_tokens.list",
                 "scim_tokens.revoke",
@@ -1320,6 +1542,11 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "settings.set_effective",
                 "settings.set_org",
                 "settings.set_tenant_override",
+                "ssf.create_stream",
+                "ssf.delete_stream",
+                "ssf.get_stream",
+                "ssf.list_streams",
+                "ssf.update_stream",
                 "tenants.create",
                 "tenants.delete",
                 "tenants.export_audit",
@@ -1345,7 +1572,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(162, exercised.size(),
+        assertEquals(190, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

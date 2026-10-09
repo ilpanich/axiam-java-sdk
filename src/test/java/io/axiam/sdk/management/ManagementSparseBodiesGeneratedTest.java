@@ -13,14 +13,17 @@ import io.axiam.sdk.management.models.AuthnRequestParamsMode;
 import io.axiam.sdk.management.models.CimdPolicy;
 import io.axiam.sdk.management.models.ClientAuthMethod;
 import io.axiam.sdk.management.models.ClientProfile;
+import io.axiam.sdk.management.models.DirectoryKind;
 import io.axiam.sdk.management.models.EmailConfigOverride;
 import io.axiam.sdk.management.models.FailurePolicy;
+import io.axiam.sdk.management.models.ParseSamlSpMetadata;
 import io.axiam.sdk.management.models.ProviderConfigSmtp;
 import io.axiam.sdk.management.models.ReactorMode;
 import io.axiam.sdk.management.models.RetryPolicy;
 import io.axiam.sdk.management.models.TenantSettingsOverride;
 import io.axiam.sdk.management.models.TenantStatus;
 import io.axiam.sdk.management.models.TokenExchangeTrustRequest;
+import io.axiam.sdk.management.models.UpdateDirectoryConfig;
 import io.axiam.sdk.management.models.UpdateFederationConfigRequest;
 import io.axiam.sdk.management.models.UpdateGroup;
 import io.axiam.sdk.management.models.UpdateNotificationRuleRequest;
@@ -35,6 +38,7 @@ import io.axiam.sdk.management.models.UpdateServiceAccount;
 import io.axiam.sdk.management.models.UpdateTenant;
 import io.axiam.sdk.management.models.UpdateUserRequest;
 import io.axiam.sdk.management.models.UpdateWebhookRequest;
+import io.axiam.sdk.management.models.UserAttributeMap;
 import io.axiam.sdk.management.models.UserStatus;
 import org.junit.jupiter.api.Test;
 
@@ -139,6 +143,21 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(EmailConfigOverride.builder().build());
     }
 
+    /** §27.4 rule 5 for ParseSamlSpMetadata: each setter sets exactly its own key. */
+    @Test
+    void parseSamlSpMetadataSendsOnlyWhatWasSet() throws Exception {
+        assertKeys(ParseSamlSpMetadata.builder()
+                .metadataUrl("example").build(), "metadata_url");
+        assertKeys(ParseSamlSpMetadata.builder()
+                .metadataXml("example").build(), "metadata_xml");
+        assertKeys(ParseSamlSpMetadata.builder()
+                .metadataUrl("example")
+                .metadataXml("example")
+                .build(),
+                "metadata_url", "metadata_xml");
+        assertKeys(ParseSamlSpMetadata.builder().build());
+    }
+
     /** §27.4 rule 5 for TenantSettingsOverride: each setter sets exactly its own key. */
     @Test
     void tenantSettingsOverrideSendsOnlyWhatWasSet() throws Exception {
@@ -207,9 +226,13 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .requireUppercase(true).build(), "require_uppercase");
         assertKeys(TenantSettingsOverride.builder()
+                .samlIdpEnabled(true).build(), "saml_idp_enabled");
+        assertKeys(TenantSettingsOverride.builder()
                 .sensitiveScopesEnabled(true).build(), "sensitive_scopes_enabled");
         assertKeys(TenantSettingsOverride.builder()
                 .serverCertAllowedNames(java.util.List.of()).build(), "server_cert_allowed_names");
+        assertKeys(TenantSettingsOverride.builder()
+                .ssfEnabled(true).build(), "ssf_enabled");
         assertKeys(TenantSettingsOverride.builder()
                 .webauthnUserVerification("example").build(), "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder()
@@ -245,8 +268,10 @@ class ManagementSparseBodiesGeneratedTest {
                 .requireLowercase(true)
                 .requireSymbols(true)
                 .requireUppercase(true)
+                .samlIdpEnabled(true)
                 .sensitiveScopesEnabled(true)
                 .serverCertAllowedNames(java.util.List.of())
+                .ssfEnabled(true)
                 .webauthnUserVerification("example")
                 .build(),
                 "access_token_lifetime_secs", "admin_notifications_enabled", "cimd",
@@ -259,7 +284,8 @@ class ManagementSparseBodiesGeneratedTest {
                 "mfa_challenge_lifetime_secs", "mfa_enforced", "min_length", "opaque_ksf",
                 "opaque_mode", "opaque_suite", "password_history_count", "refresh_token_lifetime_secs",
                 "require_digits", "require_lowercase", "require_symbols", "require_uppercase",
-                "sensitive_scopes_enabled", "server_cert_allowed_names", "webauthn_user_verification");
+                "saml_idp_enabled", "sensitive_scopes_enabled", "server_cert_allowed_names",
+                "ssf_enabled", "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder().build());
     }
 
@@ -289,6 +315,71 @@ class ManagementSparseBodiesGeneratedTest {
                 "accepted_audiences", "enabled", "max_lifetime_secs", "max_token_age_secs",
                 "scope_map", "subject_mapping");
         assertKeys(TokenExchangeTrustRequest.builder().build());
+    }
+
+    /** §27.4 rule 5 for UpdateDirectoryConfig: each setter sets exactly its own key. */
+    @Test
+    void updateDirectoryConfigSendsOnlyWhatWasSet() throws Exception {
+        assertKeys(UpdateDirectoryConfig.builder()
+                .baseDn("example").build(), "base_dn");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .bindDn("example").build(), "bind_dn");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .bindSecret(Sensitive.of("example")).build(), "bind_secret");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .enabled(true).build(), "enabled");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .groupBaseDn("example").build(), "group_base_dn");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .groupFilter("example").build(), "group_filter");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .groupMappings(java.util.List.of()).build(), "group_mappings");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .groupMemberAttribute("example").build(), "group_member_attribute");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .groupNestingDepth(1).build(), "group_nesting_depth");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .jitProvisioning(true).build(), "jit_provisioning");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .kind(DirectoryKind.OPEN_LDAP).build(), "kind");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .startTls(true).build(), "start_tls");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .syncIntervalSecs(1L).build(), "sync_interval_secs");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .trustAnchorsPem(java.util.List.of()).build(), "trust_anchors_pem");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .url("example").build(), "url");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .userAttributeMap(new UserAttributeMap("example", "example", "example", "example")).build(), "user_attribute_map");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .userFilter("example").build(), "user_filter");
+        assertKeys(UpdateDirectoryConfig.builder()
+                .baseDn("example")
+                .bindDn("example")
+                .bindSecret(Sensitive.of("example"))
+                .enabled(true)
+                .groupBaseDn("example")
+                .groupFilter("example")
+                .groupMappings(java.util.List.of())
+                .groupMemberAttribute("example")
+                .groupNestingDepth(1)
+                .jitProvisioning(true)
+                .kind(DirectoryKind.OPEN_LDAP)
+                .startTls(true)
+                .syncIntervalSecs(1L)
+                .trustAnchorsPem(java.util.List.of())
+                .url("example")
+                .userAttributeMap(new UserAttributeMap("example", "example", "example", "example"))
+                .userFilter("example")
+                .build(),
+                "base_dn", "bind_dn", "bind_secret", "enabled", "group_base_dn",
+                "group_filter", "group_mappings", "group_member_attribute", "group_nesting_depth",
+                "jit_provisioning", "kind", "start_tls", "sync_interval_secs",
+                "trust_anchors_pem", "url", "user_attribute_map", "user_filter");
+        assertKeys(UpdateDirectoryConfig.builder().build());
+        assertExplicitNull(UpdateDirectoryConfig.builder().groupBaseDn(null).build(), "group_base_dn");
+        assertExplicitNull(UpdateDirectoryConfig.builder().groupFilter(null).build(), "group_filter");
     }
 
     /** §27.4 rule 5 for UpdateFederationConfigRequest: each setter sets exactly its own key. */
@@ -414,7 +505,15 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .authnRequestParams(AuthnRequestParamsMode.IGNORE).build(), "authn_request_params");
         assertKeys(UpdateOAuth2ClientRequest.builder()
+                .backchannelAuthenticationRequestSigningAlg("example").build(), "backchannel_authentication_request_signing_alg");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
+                .backchannelClientNotificationEndpoint("example").build(), "backchannel_client_notification_endpoint");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
                 .backchannelLogoutUri("example").build(), "backchannel_logout_uri");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
+                .backchannelTokenDeliveryMode("example").build(), "backchannel_token_delivery_mode");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
+                .backchannelUserCodeParameter(true).build(), "backchannel_user_code_parameter");
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .browserSso(true).build(), "browser_sso");
         assertKeys(UpdateOAuth2ClientRequest.builder()
@@ -454,7 +553,11 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .allowedResources(java.util.List.of())
                 .authnRequestParams(AuthnRequestParamsMode.IGNORE)
+                .backchannelAuthenticationRequestSigningAlg("example")
+                .backchannelClientNotificationEndpoint("example")
                 .backchannelLogoutUri("example")
+                .backchannelTokenDeliveryMode("example")
+                .backchannelUserCodeParameter(true)
                 .browserSso(true)
                 .dpopBoundAccessTokens(true)
                 .dpopRequireNonce(true)
@@ -474,7 +577,9 @@ class ManagementSparseBodiesGeneratedTest {
                 .tlsClientCertificateBoundAccessTokens(true)
                 .tokenEndpointAuthMethod(ClientAuthMethod.CLIENT_SECRET_POST)
                 .build(),
-                "allowed_resources", "authn_request_params", "backchannel_logout_uri",
+                "allowed_resources", "authn_request_params", "backchannel_authentication_request_signing_alg",
+                "backchannel_client_notification_endpoint", "backchannel_logout_uri",
+                "backchannel_token_delivery_mode", "backchannel_user_code_parameter",
                 "browser_sso", "dpop_bound_access_tokens", "dpop_require_nonce",
                 "grant_types", "jwks", "jwks_uri", "name", "post_logout_redirect_uris",
                 "profile", "redirect_uris", "require_par", "scopes", "self_signed_tls_client_auth_thumbprints",
@@ -698,8 +803,22 @@ class ManagementSparseBodiesGeneratedTest {
     void everySparseBodyIsCovered() {
         long cases = java.util.Arrays.stream(ManagementSparseBodiesGeneratedTest.class.getDeclaredMethods())
                 .filter(m -> m.getName().endsWith("SendsOnlyWhatWasSet")).count();
-        assertEquals(19L, cases,
+        assertEquals(21L, cases,
                 "one case per sparse body the schema closure declares");
+    }
+
+    /**
+     * Asserts the encoded body carries exactly the one wire key, and that its value is JSON null:
+     * present, not absent.
+     *
+     * @param body the request body to render
+     * @param wire the one wire key it must carry
+     * @throws Exception if the encoded body is not readable JSON
+     */
+    private static void assertExplicitNull(Object body, String wire) throws Exception {
+        assertKeys(body, wire);
+        JsonNode node = JSON.readTree(ManagementTransport.encodeBody("test", body));
+        assertEquals(true, node.get(wire).isNull(), wire + ": an explicit null is sent as null");
     }
 
     /**

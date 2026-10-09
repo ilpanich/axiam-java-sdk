@@ -52,9 +52,13 @@ import java.util.List;
  * @param requireLowercase the server's require_lowercase field
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
+ * @param samlIdpEnabled G-2 / D-20 — defaulted, so an API client written before the SAML identity
+ *     provider existed lands on {@code false}, which is what every deployment did before (I1).
  * @param sensitiveScopesEnabled the server's sensitive_scopes_enabled field
  * @param serverCertAllowedNames S-7 — defaulted to empty, so an API client written before the
  *     field lands on "no {@code Server} certificate is issued" (I1).
+ * @param ssfEnabled G-5 / D-45 — defaulted, so an API client written before the SSF transmitter
+ *     existed lands on {@code false}, which is what every deployment did before (I1).
  * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -92,8 +96,10 @@ public record SetOrgSettings(
         @JsonProperty("require_lowercase") Boolean requireLowercase,
         @JsonProperty("require_symbols") Boolean requireSymbols,
         @JsonProperty("require_uppercase") Boolean requireUppercase,
+        @JsonProperty("saml_idp_enabled") @Nullable Boolean samlIdpEnabled,
         @JsonProperty("sensitive_scopes_enabled") @Nullable Boolean sensitiveScopesEnabled,
         @JsonProperty("server_cert_allowed_names") @Nullable List<String> serverCertAllowedNames,
+        @JsonProperty("ssf_enabled") @Nullable Boolean ssfEnabled,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 }

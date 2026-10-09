@@ -20,8 +20,12 @@ import java.util.List;
  * @param allowedResources T21.3 — see [{@code CreateOAuth2ClientRequest::allowed_resources}]. A
  *     whole-list replacement; {@code []} withdraws every target.
  * @param authnRequestParams the server's authn_request_params field
+ * @param backchannelAuthenticationRequestSigningAlg G-7 — see the create DTO. {@code ""} clears.
+ * @param backchannelClientNotificationEndpoint G-7 — see the create DTO. {@code ""} clears.
  * @param backchannelLogoutUri Pass an empty string to clear a previously registered URI — the one
  *     edit an operator makes when an RP is decommissioned.
+ * @param backchannelTokenDeliveryMode G-7 — see the create DTO. {@code ""} clears.
+ * @param backchannelUserCodeParameter G-7 — {@code true} refused, as on create.
  * @param browserSso X7.3 — see [{@code CreateOAuth2ClientRequest::browser_sso}].
  * @param dpopBoundAccessTokens the server's dpop_bound_access_tokens field
  * @param dpopRequireNonce the server's dpop_require_nonce field
@@ -50,7 +54,11 @@ import java.util.List;
 public record UpdateOAuth2ClientRequest(
         @JsonProperty("allowed_resources") @Nullable List<String> allowedResources,
         @JsonProperty("authn_request_params") @Nullable AuthnRequestParamsMode authnRequestParams,
+        @JsonProperty("backchannel_authentication_request_signing_alg") @Nullable String backchannelAuthenticationRequestSigningAlg,
+        @JsonProperty("backchannel_client_notification_endpoint") @Nullable String backchannelClientNotificationEndpoint,
         @JsonProperty("backchannel_logout_uri") @Nullable String backchannelLogoutUri,
+        @JsonProperty("backchannel_token_delivery_mode") @Nullable String backchannelTokenDeliveryMode,
+        @JsonProperty("backchannel_user_code_parameter") @Nullable Boolean backchannelUserCodeParameter,
         @JsonProperty("browser_sso") @Nullable Boolean browserSso,
         @JsonProperty("dpop_bound_access_tokens") @Nullable Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") @Nullable Boolean dpopRequireNonce,
@@ -96,7 +104,11 @@ public record UpdateOAuth2ClientRequest(
 
         private @Nullable List<String> allowedResources;
         private @Nullable AuthnRequestParamsMode authnRequestParams;
+        private @Nullable String backchannelAuthenticationRequestSigningAlg;
+        private @Nullable String backchannelClientNotificationEndpoint;
         private @Nullable String backchannelLogoutUri;
+        private @Nullable String backchannelTokenDeliveryMode;
+        private @Nullable Boolean backchannelUserCodeParameter;
         private @Nullable Boolean browserSso;
         private @Nullable Boolean dpopBoundAccessTokens;
         private @Nullable Boolean dpopRequireNonce;
@@ -139,6 +151,28 @@ public record UpdateOAuth2ClientRequest(
         }
 
         /**
+         * Sets backchannel_authentication_request_signing_alg.
+         *
+         * @param backchannelAuthenticationRequestSigningAlg the value to send
+         * @return this builder
+         */
+        public Builder backchannelAuthenticationRequestSigningAlg(String backchannelAuthenticationRequestSigningAlg) {
+            this.backchannelAuthenticationRequestSigningAlg = backchannelAuthenticationRequestSigningAlg;
+            return this;
+        }
+
+        /**
+         * Sets backchannel_client_notification_endpoint.
+         *
+         * @param backchannelClientNotificationEndpoint the value to send
+         * @return this builder
+         */
+        public Builder backchannelClientNotificationEndpoint(String backchannelClientNotificationEndpoint) {
+            this.backchannelClientNotificationEndpoint = backchannelClientNotificationEndpoint;
+            return this;
+        }
+
+        /**
          * Sets backchannel_logout_uri.
          *
          * @param backchannelLogoutUri the value to send
@@ -146,6 +180,28 @@ public record UpdateOAuth2ClientRequest(
          */
         public Builder backchannelLogoutUri(String backchannelLogoutUri) {
             this.backchannelLogoutUri = backchannelLogoutUri;
+            return this;
+        }
+
+        /**
+         * Sets backchannel_token_delivery_mode.
+         *
+         * @param backchannelTokenDeliveryMode the value to send
+         * @return this builder
+         */
+        public Builder backchannelTokenDeliveryMode(String backchannelTokenDeliveryMode) {
+            this.backchannelTokenDeliveryMode = backchannelTokenDeliveryMode;
+            return this;
+        }
+
+        /**
+         * Sets backchannel_user_code_parameter.
+         *
+         * @param backchannelUserCodeParameter the value to send
+         * @return this builder
+         */
+        public Builder backchannelUserCodeParameter(Boolean backchannelUserCodeParameter) {
+            this.backchannelUserCodeParameter = backchannelUserCodeParameter;
             return this;
         }
 
@@ -353,7 +409,7 @@ public record UpdateOAuth2ClientRequest(
          * @return a UpdateOAuth2ClientRequest carrying exactly the fields that were set
          */
         public UpdateOAuth2ClientRequest build() {
-            return new UpdateOAuth2ClientRequest(allowedResources, authnRequestParams, backchannelLogoutUri, browserSso, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
+            return new UpdateOAuth2ClientRequest(allowedResources, authnRequestParams, backchannelAuthenticationRequestSigningAlg, backchannelClientNotificationEndpoint, backchannelLogoutUri, backchannelTokenDeliveryMode, backchannelUserCodeParameter, browserSso, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
         }
     }
 }

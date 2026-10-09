@@ -51,10 +51,14 @@ import java.util.List;
  * @param requireLowercase the server's require_lowercase field
  * @param requireSymbols the server's require_symbols field
  * @param requireUppercase the server's require_uppercase field
+ * @param samlIdpEnabled G-2 / D-20 — disable-only, like {@code sensitive_scopes_enabled}; see
+ *     [{@code OidcPolicy::saml_idp_enabled}].
  * @param sensitiveScopesEnabled the server's sensitive_scopes_enabled field
  * @param serverCertAllowedNames S-7 — tighten-only: every entry must be covered by an organization
  *     entry. An empty list means this tenant issues no {@code Server} certificate at all, which is
  *     different from an absent field (inherit the organization's list).
+ * @param ssfEnabled G-5 / D-45 — disable-only, like {@code saml_idp_enabled}; see [{@code
+ *     OidcPolicy::ssf_enabled}].
  * @param webauthnUserVerification the server's webauthn_user_verification field
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -92,8 +96,10 @@ public record TenantSettingsOverride(
         @JsonProperty("require_lowercase") @Nullable Boolean requireLowercase,
         @JsonProperty("require_symbols") @Nullable Boolean requireSymbols,
         @JsonProperty("require_uppercase") @Nullable Boolean requireUppercase,
+        @JsonProperty("saml_idp_enabled") @Nullable Boolean samlIdpEnabled,
         @JsonProperty("sensitive_scopes_enabled") @Nullable Boolean sensitiveScopesEnabled,
         @JsonProperty("server_cert_allowed_names") @Nullable List<String> serverCertAllowedNames,
+        @JsonProperty("ssf_enabled") @Nullable Boolean ssfEnabled,
         @JsonProperty("webauthn_user_verification") @Nullable String webauthnUserVerification
 ) {
 
@@ -152,8 +158,10 @@ public record TenantSettingsOverride(
         private @Nullable Boolean requireLowercase;
         private @Nullable Boolean requireSymbols;
         private @Nullable Boolean requireUppercase;
+        private @Nullable Boolean samlIdpEnabled;
         private @Nullable Boolean sensitiveScopesEnabled;
         private @Nullable List<String> serverCertAllowedNames;
+        private @Nullable Boolean ssfEnabled;
         private @Nullable String webauthnUserVerification;
 
         /**
@@ -509,6 +517,17 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets saml_idp_enabled.
+         *
+         * @param samlIdpEnabled the value to send
+         * @return this builder
+         */
+        public Builder samlIdpEnabled(Boolean samlIdpEnabled) {
+            this.samlIdpEnabled = samlIdpEnabled;
+            return this;
+        }
+
+        /**
          * Sets sensitive_scopes_enabled.
          *
          * @param sensitiveScopesEnabled the value to send
@@ -531,6 +550,17 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets ssf_enabled.
+         *
+         * @param ssfEnabled the value to send
+         * @return this builder
+         */
+        public Builder ssfEnabled(Boolean ssfEnabled) {
+            this.ssfEnabled = ssfEnabled;
+            return this;
+        }
+
+        /**
          * Sets webauthn_user_verification.
          *
          * @param webauthnUserVerification the value to send
@@ -547,7 +577,7 @@ public record TenantSettingsOverride(
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, sensitiveScopesEnabled, serverCertAllowedNames, webauthnUserVerification);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, samlIdpEnabled, sensitiveScopesEnabled, serverCertAllowedNames, ssfEnabled, webauthnUserVerification);
         }
     }
 }

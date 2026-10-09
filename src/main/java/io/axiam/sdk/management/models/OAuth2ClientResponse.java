@@ -20,6 +20,10 @@ import java.util.UUID;
  *     rather than the ones they typed.
  * @param authnRequestParams X7.1 — echoed so an operator can audit which clients act on the OIDC
  *     authentication-request parameters, from this endpoint rather than from the database.
+ * @param backchannelAuthenticationRequestSigningAlg the server's
+ *     backchannel_authentication_request_signing_alg field
+ * @param backchannelClientNotificationEndpoint G-7 — the ping-mode notification endpoint.
+ * @param backchannelTokenDeliveryMode the server's backchannel_token_delivery_mode field
  * @param browserSso X7.3 — echoed for the same reason.
  * @param clientId the server's client_id field
  * @param createdAt the server's created_at field
@@ -66,6 +70,9 @@ import java.util.UUID;
 public record OAuth2ClientResponse(
         @JsonProperty("allowed_resources") List<String> allowedResources,
         @JsonProperty("authn_request_params") AuthnRequestParamsMode authnRequestParams,
+        @JsonProperty("backchannel_authentication_request_signing_alg") @Nullable CibaRequestSigningAlg backchannelAuthenticationRequestSigningAlg,
+        @JsonProperty("backchannel_client_notification_endpoint") @Nullable String backchannelClientNotificationEndpoint,
+        @JsonProperty("backchannel_token_delivery_mode") @Nullable CibaDeliveryMode backchannelTokenDeliveryMode,
         @JsonProperty("browser_sso") Boolean browserSso,
         @JsonProperty("client_id") String clientId,
         @JsonProperty("created_at") OffsetDateTime createdAt,
