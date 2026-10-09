@@ -337,6 +337,53 @@ class CibaTest {
         }
     }
 
+    /**
+     * &sect;34.2 P11 / &sect;33.4: the &sect;9 exemption covers the OAuth2 endpoints in both
+     * issuer forms. A {@code 401} on a tenant-path {@code bc-authorize} (or token endpoint)
+     * from a client that also holds a session is the client's credential: it never enters
+     * the refresh guard, and the initiate is never sent twice.
+     */
+    @Test
+    void t04ATenantPath401NeverRefreshesOrReSendsTheInitiate() throws Exception {
+        String tenantPath = "/t/" + TENANT;
+        ObjectNode doc = discovery(server.base() + tenantPath + "/oauth2/bc-authorize");
+        doc.put("token_endpoint", server.base() + tenantPath + "/oauth2/token");
+        server.on("GET", "/.well-known/openid-configuration", json(200, doc.toString()));
+        server.mountLogin(TENANT);
+        RouteServer.Route refresh = server.onEach("POST", "/api/v1/auth/refresh", i -> new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Set-Cookie", "axiam_access=" + random() + "; Path=/")
+                .addHeader("Set-Cookie", "axiam_refresh=r" + random() + "; Path=/")
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"session_id\":\"" + UUID.randomUUID() + "\",\"expires_in\":900}"));
+        RouteServer.Route bc = server.on("POST", tenantPath + "/oauth2/bc-authorize",
+                oauthError(401, "invalid_client"));
+        RouteServer.Route token = server.on("POST", tenantPath + "/oauth2/token", oauthError(401, "invalid_client"));
+
+        AxiamClient client = client(random());
+        client.login("admin@example.test", random());
+        OidcConfiguration config = client.oidcDiscover();
+
+        OAuthProtocolError e = assertThrows(OAuthProtocolError.class,
+                () -> client.cibaInitiate(request(config).build()));
+        assertEquals("invalid_client", e.error());
+        assertEquals(1, bc.calls(), "the initiate is sent once, never re-sent after a refresh");
+
+        OAuthProtocolError p = assertThrows(OAuthProtocolError.class,
+                () -> client.cibaPoll(Sensitive.of(random()), null, config));
+        assertEquals("invalid_client", p.error());
+        assertEquals(1, token.calls(), "the poll is sent once");
+        assertEquals(0, refresh.calls(), "a 401 at an OAuth2 endpoint never enters the §9 refresh guard");
+
+        // Nor by a redirect: a 307 would re-send the initiate's POST to wherever it points.
+        RouteServer.Route moved = server.on("POST", tenantPath + "/oauth2/bc-authorize",
+                new MockResponse().setResponseCode(307).setHeader("Location", server.base() + "/elsewhere"));
+        RouteServer.Route elsewhere = server.on("POST", "/elsewhere", initiated(random(), null));
+        assertThrows(RuntimeException.class, () -> client.cibaInitiate(request(config).build()));
+        assertEquals(1, moved.calls());
+        assertEquals(0, elsewhere.calls(), "the initiate does not follow a redirect");
+    }
+
     // ── 5. Poll outcomes ─────────────────────────────────────────────────
 
     @Test

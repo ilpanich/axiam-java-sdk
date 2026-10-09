@@ -259,9 +259,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private final OkHttpClient sessionlessHttpClient;
 
     /**
-     * {@link #httpClient} with OkHttp's silent connection-failure retry off:
-     * every session decoration is kept, but a request is put on the wire at
-     * most once (CONTRACT.md &sect;33.7 rule 1, {@code cibaInitiate}).
+     * {@link #httpClient} with every second route to the server off: OkHttp's
+     * silent connection-failure retry, the {@code 401} authenticator and redirect
+     * following. Every request decoration is kept, but a request is put on the
+     * wire at most once (CONTRACT.md &sect;33.7 rule 1, {@code cibaInitiate};
+     * &sect;34.2 P11 &mdash; a {@code 307} would re-send the POST elsewhere).
      */
     private final OkHttpClient sendOnceHttpClient;
 
@@ -719,7 +721,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.httpClient = clientBuilder.build();
         this.session.attachHttpClient(this.httpClient);
         this.sessionlessHttpClient = io.axiam.sdk.internal.Sessionless.of(this.httpClient);
-        this.sendOnceHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false).build();
+        this.sendOnceHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false)
+                .authenticator(okhttp3.Authenticator.NONE).followRedirects(false).followSslRedirects(false)
+                .build();
     }
 
     /**
