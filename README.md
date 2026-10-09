@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.58**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.59**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32 and §33, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
@@ -47,7 +47,12 @@ the §33 CIBA client helpers (`cibaInitiate`, `cibaPoll`, `cibaAwait`,
 `cibaHandlePing`) including the §33.2 signed request form for all three algorithms
 (PS256, ES256, EdDSA). The §21.3.1 vector A amendment (the seventh
 `mtls_endpoint_aliases` member, `backchannel_authentication_endpoint`) is pinned.
-Nothing of §28.12–§33 is carved out.
+Nothing of §28.12–§33 is carved out, and those sections are met as the contract 1.59
+clarifications of §34.2 read them (P1 – P12; the Java follow-up F-59-04 is closed):
+`poll` never records a `jti` it does not return, a `5xx` on `cibaPoll` is transient
+whatever its body, no write goes out twice — not by OkHttp's connection-failure
+re-send, not by a refresh after a tenant-path `401`, not by a redirect — and an
+unknown value is refused locally rather than sent.
 
 §12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29,
 §30, §31, §32, §32.7, §33 and §33.2 signed are named

@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Contract 1.59 (F-59-04)
+
+Re-vendored `CONTRACT.md` at contract 1.59 (axiam `fe369eb`; `openapi.json`,
+`management-registry.json` and `proto/` unchanged). The README's Conformance Statement now
+reads "contract 1.59: … §27, §28, §28.12, §29, §30, §31, §32 and §33, with §32.7 and §33.2
+signed" — the same sections, now met as §34.2's clarifications read them. The fixes of the
+§34.3 rows that name F-59-04:
+
+#### Fixed
+
+- **R-17 (§29.7, §30.7, §31.7, §32 writes; §34.2 P11).** Every management write rode
+  OkHttp's `retryOnConnectionFailure`, which re-sent a `PUT` after a pooled connection
+  dropped once the server had read it. Writes now go out on a client with it off.
+- **R-16 (§33.4, §33.7 rule 1, §12.3 rule 3; P11).** The §9 exemption matched exact paths,
+  so a `401` on `/t/{tenant_id}/oauth2/bc-authorize` refreshed the session and re-sent the
+  initiate. The OAuth2 endpoints are now recognised in both issuer forms, and the
+  initiate's client follows no redirect and has no authenticator.
+- **R-1 (§32.7 step 9, `poll`; P1).** A JWKS fetch or replay store failing on a later SET
+  left the earlier SETs recorded and unreturned. **P1 form taken: the first** — steps 1–8
+  run over the whole batch before any `jti` is recorded, so the poll raises having recorded
+  nothing. A replay store that fails *part-way through recording* (after the first `jti`)
+  leaves only the second form open: the SETs recorded are returned and the rest are listed
+  in the new `SsfPollResult.unjudged()`, unrecorded (a three-list constructor is kept).
+- **R-11 (§33.4, §33.7 rule 5; P8).** A `5xx` carrying an `error` member — AXIAM's own
+  `500 {"error":"server_error"}` — ended `cibaAwait`. On `cibaPoll` a `5xx` is now retried
+  under §16 and maps by status (`NetworkError`), whatever its body.
+- **R-12 (§33.7 rules 5, 7; P9).** `cibaAwait` kept polling after a bodiless `4xx` and after a
+  failure following the `200` (an unreadable body, the ID token's key fetch). Only a
+  transport failure, `408`, `429` and `5xx` are transient now.
+- **R-19 (§33.5, §7 rule 2).** `CibaInitiateRequest.members()` returned the
+  `client_notification_token` as a plain string; it is `Sensitive` in the map now.
+- **R-22 (§29.2, §31.2, §32.2; P12.2).** An unknown enum value carried back into a write was
+  sent as `""`; it is refused locally with a `ValidationError` naming the member.
+- **R-23 (§28.12.2 rule 4; P12.4).** `updateClientRegistration` sent `[]` for a list the read
+  lacked and dropped list items of an unexpected type; the replacement now carries what the
+  read carried, as it was read.
+- **R-27 (§29.8 t1, §30.8 t4, §31.8 t3, §32.8 t1).** The replacement inputs
+  (`SamlServiceProviderInput`, `SetDirectoryConfig`, `ScimTargetInput`, `SsfStreamInput`,
+  and `SetMtlsTrustAnchor`, `SetOrgEmailConfig`, `SetOrgSettings`) refuse a `null` required
+  member at construction (`NullPointerException` naming it).
+- **R-28 (§27.4 rule 5), R-29 (§31.3 rule 2).** Generated documentation no longer says
+  "Every field of the body is required" of bodies with optional members, no longer calls
+  `ParseSamlSpMetadata` a sparse update body, and `scimTargets().create` documents the
+  credential's binding to its URL.
+- **R-41.** `SsfReceiver`'s poll retries reach the client's §19 hook (new
+  `AxiamClient.telemetryHook()`); an initiate response without a positive `expires_in` is
+  refused instead of read as `0`; a non-string `registration_access_token`/`client_secret`
+  is dropped instead of kept in `extra()`.
+- §32.8 helper test 8 (the two-SET batch) and §33.8 test 8 (the `500` with
+  `{"error":"server_error"}`) are brought to the amended text.
+
+#### Changed
+
+- **SSF event types are strings (§32.2, R-22).** `SsfStream.eventsAllowed()`,
+  `eventsRequested()`, `eventsDelivered()` and `SsfStreamInput`'s two lists are
+  `List<String>`; the `SsfEventType` enum is removed — use the constants in
+  `io.axiam.sdk.ssf.SsfEventTypes`. An event-type URI this SDK has not seen keeps its value.
+- `ClientRegistration`'s list members are taken only as non-empty arrays of strings; any
+  other shape stays in `extra()` verbatim.
+- `SsfPollResult` gains `unjudged()`.
+
+**Choices where §34.2 offers one:** P1 — the first form (check the whole batch, record
+nothing on a non-verdict failure), with the second form for a store failing after the first
+record; P4 — not applicable (`ReplayStore` reports failure by throwing, which refuses the
+SET); P10 — the deadline anchor is the instant the initiate response was received
+(`CibaInitiateResponse.receivedAt`), unchanged.
+
 ### Added
 
 - **Contract 1.58.** Re-vendored `CONTRACT.md`, `openapi.json` and
