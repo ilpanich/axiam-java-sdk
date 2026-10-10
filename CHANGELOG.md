@@ -12,7 +12,7 @@ Java 21+ client for AXIAM over all three of its transports — REST (OkHttp), gR
 (`GrpcAuthzClient`, from the vendored `proto/`) and AMQP (signed messages, §8, and the §22
 reactor runtime) — and from this release it follows Semantic Versioning. It conforms to
 **contract 1.60** (`CONTRACT.md`, `openapi.json`, `management-registry.json` and `proto/`
-vendored byte for byte from axiam `3ed6547`): §1–§13 with §6.1 mTLS, §1.1 and §1.1.1, §12.7,
+vendored byte for byte from axiam `8df0e11`): §1–§13 with §6.1 mTLS, §1.1 and §1.1.1, §12.7,
 §14, §15, §17, §19, §20, §21 (FAPI 2.0, mTLS client credentials, §21.7 DPoP), §22, §23
 (OPAQUE), §24 (WebAuthn, without the §24.6b ceremony helper a JVM cannot honestly offer), §25,
 §26, §27 (the Management API: 190 operations across 28 namespaces, with the §27.6 declarative
