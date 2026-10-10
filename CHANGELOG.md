@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-10
+
 The first stable release. `io.github.ilpanich:axiam-sdk` 1.0.0 (with `axiam-bom` 1.0.0) is a
 Java 21+ client for AXIAM over all three of its transports — REST (OkHttp), gRPC
 (`GrpcAuthzClient`, from the vendored `proto/`) and AMQP (signed messages, §8, and the §22
@@ -106,6 +108,22 @@ Since `v1.0.0-beta17`. Each entry says what to change.
 - `AxiamClient.telemetryHook()` exposes the configured hook, so the SSF receiver's poll retries
   reach it (§16.5).
 
+- A failed key fetch counts toward the minute; ssf_unjudged telemetry (contract 1.60)
+
+- Contract 1.60 models, re-vendored from axiam 3ed6547
+
+- A decoded SAML SP metadata draft is not checked for required members (contract 1.60 B6)
+
+- A replay store that cannot answer gives no verdict, as a NetworkError (contract 1.60 B1)
+
+- CIBA initiation, polling and ping helpers, signed form (CONTRACT §33, §21.3.1)
+
+- SSF stream management tests and the receiver helper (CONTRACT §32, §32.7)
+
+- Directory namespace semantics and generator infrastructure (CONTRACT §30)
+
+- RFC 7592 client configuration operations (CONTRACT §28.12)
+
 ### Changed
 
 - **`ReplacementBodies.from(ScimTargetResponse)` carries the `updated_at` it read** as
@@ -141,6 +159,32 @@ Since `v1.0.0-beta17`. Each entry says what to change.
 - The README states conformance at contract 1.60 and the semantic-versioning policy, and says
   that a broker confirm is not evidence that AXIAM saw a message (§8).
 
+- re-vendor at axiam 8df0e11 (the R1W1 tls_client_auth note, the spec digest)
+
+- README at contract 1.60; the 1.0.0 changelog
+
+- Contract 1.60 phase 1 - re-vendor CONTRACT.md, B4 and §15.6 tests, §8 note, changelog
+
+- Contract 1.59 conformance statement and changelog (F-59-04)
+
+- Generated documentation says what the types do (R-28, F-J11; R-29, F-J12)
+
+- re-vendor CONTRACT.md at contract 1.59 (axiam fe369eb)
+
+- Contract 1.58 conformance statement, usage, changelog
+
+- scim_targets namespace required tests (CONTRACT §31)
+
+- Saml namespace required tests (CONTRACT §29)
+
+- re-vendor contract 1.58 artifacts and regenerate §27 surface
+
+- Bump com.rabbitmq:amqp-client
+
+- re-vendor openapi.json + management-registry.json after utoipa 6
+
+- Bump the minor-patch group with 3 updates
+
 ### Fixed
 
 - `SsfReceiver.poll` left earlier SETs recorded but unreturned when a later SET's key fetch or
@@ -160,6 +204,26 @@ Since `v1.0.0-beta17`. Each entry says what to change.
 - Generated documentation no longer calls bodies with optional members "every field
   required", no longer calls `ParseSamlSpMetadata` a sparse update body, and
   `scimTargets().create` documents the credential's binding to its URL.
+
+- An unknown value is refused locally, never sent as ""; SSF event types are strings (R-22, F-J6)
+
+- SamlServiceProviderInput refuses a null required member too (R-27, F-J10)
+
+- A replacement body cannot be built without its required members (R-27, F-J10)
+
+- Receiver telemetry, a missing expires_in, a mistyped registration secret (R-41, F-J9, F-J16, F-J14)
+
+- The RFC 7592 replacement carries only what the read carried (R-23, F-J15)
+
+- Poll never keeps a jti it does not return (R-1, F-J7; §32.8 helper test 8)
+
+- CibaInitiateRequest.members() keeps the notification token Sensitive (R-19, F-J4)
+
+- A 5xx on cibaPoll is transient whatever its body; decisive answers end cibaAwait (R-11, F-J2; R-12, F-J3)
+
+- A tenant-path 401 never refreshes or re-sends the CIBA initiate (R-16, F-J5)
+
+- Writes never ride OkHttp's connection-failure re-send (R-17, F-J1)
 
 ### Security
 
