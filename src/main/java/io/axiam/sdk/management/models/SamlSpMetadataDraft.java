@@ -27,7 +27,7 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SamlSpMetadataDraft(
         @JsonProperty("encryption_certificate_fingerprint") @Nullable String encryptionCertificateFingerprint,
-        @JsonProperty("service_provider") SamlServiceProviderInput serviceProvider,
+        @JsonProperty("service_provider") SamlServiceProviderDraft serviceProvider,
         @JsonProperty("signing_certificate_fingerprint") @Nullable String signingCertificateFingerprint,
         @JsonProperty("warnings") List<String> warnings
 ) {

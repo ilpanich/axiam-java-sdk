@@ -219,6 +219,21 @@ PRECHECKS: dict[str, str] = {
     "saml.parse_sp_metadata": "parseSpMetadataExactlyOne",
 }
 
+# Contract 1.60 B6 / §34.2 P12.9: "cannot be built without" binds the constructor
+# that makes an input for submission, not the decoding of one a response nests.
+# A record's canonical constructor cannot be skipped by Jackson, so the nested
+# body gets a lenient twin -- same components, none checked -- and the two
+# operations that submit it take the twin too, refusing locally with the
+# validation error and no request when a required member is missing.
+DRAFT_TWINS: dict[str, str] = {"SamlServiceProviderInput": "SamlServiceProviderDraft"}
+DRAFT_PROPERTIES: set[tuple[str, str]] = {("SamlSpMetadataDraft", "service_provider")}
+# operation -> the static method of ManagementChecks that completes the twin
+# into the strict input (or raises the local ValidationError)
+DRAFT_OVERLOADS: dict[str, str] = {
+    "saml.create_service_provider": "completeServiceProvider",
+    "saml.update_service_provider": "completeServiceProvider",
+}
+
 # The body the generated surface test sends to an operation with a PRECHECK —
 # the minimal body every other case uses would be refused locally.
 PRECHECK_TEST_BODIES: dict[str, str] = {
@@ -981,6 +996,8 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
     for wire in sorted(props):
         explicit_null = (schema_name, wire) in EXPLICIT_NULL_FIELDS
         base_type = "Sensitive" if wire in secrets else java_type(props[wire])
+        if (schema_name, wire) in DRAFT_PROPERTIES:
+            base_type = DRAFT_TWINS[base_type]
         fields.append({
             "wire": wire,
             "name": member(wire),
@@ -1099,14 +1116,31 @@ def emit_default_true_helpers(fields: list[dict]) -> list[str]:
     return out
 
 
-def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
-    """A Java record for an object schema, plus a builder when it is sparse."""
-    type_name = pascal(name)
+def emit_record(name: str, secrets: set[str], replacement: bool, draft: bool = False) -> str:
+    """A Java record for an object schema, plus a builder when it is sparse.
+
+    ``draft`` emits the lenient twin of a null-checked replacement body (see
+    DRAFT_TWINS): the same components, every one nullable, no constructor check.
+    """
+    type_name = DRAFT_TWINS[name] if draft else pascal(name)
     fields, required, description = field_list(name, secrets)
+    if draft:
+        for f in fields:
+            f["required"] = False
+        required = set()
     all_optional = bool(fields) and not required
 
     text = description or f"The {type_name} schema from the server's OpenAPI document."
-    if all_optional and name in sparse_update_schemas():
+    if draft:
+        text = (f"{pascal(name)} as a response nests it, decoded WITHOUT the required-member "
+                f"check (§34.2 P12.9, contract 1.60 B6).\n\nThe constructor that makes "
+                f"{pascal(name)} for submission refuses a missing required member; decoding a "
+                f"draft a server returned does not, because a draft is a document to review, "
+                f"not a body being built. Every component is therefore nullable here. Pass it "
+                f"to the operations that submit it: they refuse a draft that lacks a required "
+                f"member locally, with a ValidationError and no request.\n\n"
+                + (description or ""))
+    elif all_optional and name in sparse_update_schemas():
         text += ("\n\nEvery component is optional, so this is a SPARSE body: what you leave "
                  "null is left unchanged, and is omitted from the wire request entirely rather "
                  "than sent as null (§27.4 rule 5). Use the builder — a canonical constructor "
@@ -1152,12 +1186,13 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
                 f["type"] = f"@Nullable {f['type']}"
         body.extend(component_lines(fields))
         body.append(") {")
-        if name in null_checked_schemas():
+        if name in null_checked_schemas() and not draft:
             body.extend(emit_required_checks(type_name, fields))
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
-        body.extend(emit_factories(name, type_name))
-        if all_optional:
+        if not draft:
+            body.extend(emit_factories(name, type_name))
+        if all_optional and not draft:
             body.extend(emit_builder(type_name, fields))
         body.append("}")
 
@@ -1425,6 +1460,9 @@ def emit_models() -> dict[str, str]:
             continue
         files[f"{MODELS_DIR}/{pascal(name)}.java"] = emit_record(
             name, secrets.get(name, set()), name in replacements)
+        if name in DRAFT_TWINS:
+            files[f"{MODELS_DIR}/{DRAFT_TWINS[name]}.java"] = emit_record(
+                name, secrets.get(name, set()), name in replacements, draft=True)
     return files
 
 
@@ -1650,6 +1688,29 @@ def emit_operation(namespace: str, opname: str, op: dict[str, Any]) -> list[str]
         lines.append(f"        return {expr};")
     lines.append("    }")
     lines.append("")
+
+    if canonical in DRAFT_OVERLOADS:
+        twin = f"{MODELS_PACKAGE}.{DRAFT_TWINS[op['request_schema']]}"
+        d_params = [dict(p, type=twin) if p["name"] == "body" else p for p in params]
+        d_sig = ", ".join(f"{p['type']} {p['name']}" for p in d_params)
+        d_tags = [f"@param {p['name']} " + ("a draft, as {@code parse_sp_metadata} returned it"
+                                              if p["name"] == "body" else p["doc"])
+                  for p in d_params]
+        d_tags.append("@return the server's response")
+        d_tags.append("@throws io.axiam.sdk.errors.ValidationError locally, before any request, "
+                      "when the draft lacks a required member (§34.2 P12.9)")
+        lines.extend(javadoc(
+            f"{canonical} for a draft (contract 1.60 B6, §34.2 P12.9).\n\n"
+            f"A draft decodes without the required-member check, so it can lack one. This "
+            f"form refuses that locally with a ValidationError and sends nothing; "
+            f"otherwise it is the strict form above.", "    ", d_tags))
+        forward = ", ".join(
+            f"ManagementChecks.{DRAFT_OVERLOADS[canonical]}(\"{canonical}\", body)"
+            if p["name"] == "body" else p["name"] for p in d_params)
+        lines.append(f"    public {ret} {method_name}({d_sig}) {{")
+        lines.append(f"        return {method_name}({forward});")
+        lines.append("    }")
+        lines.append("")
 
     if op["paginated"]:
         inner = ret[len("Page<"):-1]
