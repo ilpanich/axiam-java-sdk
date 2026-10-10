@@ -24,6 +24,7 @@ import io.axiam.sdk.errors.ValidationError;
 import io.axiam.sdk.internal.Sessionless;
 import io.axiam.sdk.internal.StatusRetry;
 import io.axiam.sdk.internal.TelemetryDispatcher;
+import io.axiam.sdk.telemetry.TelemetryEvent;
 
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
@@ -67,10 +68,16 @@ import java.util.concurrent.TimeUnit;
  */
 public final class SsfReceiver {
 
-    /** The forced-refetch cooldown for an unknown {@code kid} (&sect;32.7 step 4). */
+    /**
+     * The once-a-minute limit (&sect;32.7 step 4, &sect;34.2 P6): it counts every
+     * unknown-{@code kid} refetch and every failed fetch, never a successful fill.
+     */
     private static final long FORCED_REFETCH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(60);
 
-    /** How long a fetched JWKS is used before an ordinary refresh. */
+    /**
+     * How long a fetched JWKS is used before an ordinary refresh &mdash; within the
+     * ten minutes &sect;34.2 P6 allows (contract 1.60).
+     */
     private static final long JWKS_TTL_NANOS = TimeUnit.SECONDS.toNanos(300);
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -87,8 +94,9 @@ public final class SsfReceiver {
     private @Nullable String jwksUri;
     private @Nullable Map<String, OctetKeyPair> keys;
     private long keysFetchedAt;
-    private long lastForcedRefetch;
-    private boolean forcedRefetchUsed;
+    /** When the last fetch the once-a-minute limit counts was made. */
+    private long lastCountedFetch;
+    private boolean countedFetchMade;
 
     /**
      * Builds a receiver over {@code client}'s transport.
@@ -296,21 +304,34 @@ public final class SsfReceiver {
     private @Nullable OctetKeyPair keyFor(String kid) {
         synchronized (keyLock) {
             long now = System.nanoTime();
-            boolean fetchedNow = false;
+            boolean limited = countedFetchMade && now - lastCountedFetch < FORCED_REFETCH_INTERVAL_NANOS;
             if (keys == null || now - keysFetchedAt > JWKS_TTL_NANOS) {
-                keys = fetchKeys();
+                // §34.2 P6 (contract 1.60): a fill, or a refresh of an expired cache, that
+                // succeeds is not counted; one that fails is, so a JWKS outage costs one
+                // fetch a minute rather than one per SET. Within the minute after it the SET
+                // gets no fetch and no verdict.
+                if (limited) {
+                    throw new NetworkError("the JWKS fetch failed less than a minute ago; not "
+                            + "fetching it again yet (CONTRACT.md §34.2 P6)");
+                }
+                try {
+                    keys = fetchKeys();
+                } catch (RuntimeException e) {
+                    countedFetchMade = true;
+                    lastCountedFetch = now;
+                    throw e;
+                }
                 keysFetchedAt = now;
-                fetchedNow = true;
+                return keys.get(kid);
             }
             OctetKeyPair key = keys.get(kid);
-            if (key != null || fetchedNow) {
+            if (key != null || limited) {
                 return key;
             }
-            if (forcedRefetchUsed && now - lastForcedRefetch < FORCED_REFETCH_INTERVAL_NANOS) {
-                return null;
-            }
-            forcedRefetchUsed = true;
-            lastForcedRefetch = now;
+            // The one refetch an unknown kid triggers counts whether or not it succeeds;
+            // when it fails the cached keys stay in use.
+            countedFetchMade = true;
+            lastCountedFetch = now;
             keys = fetchKeys();
             keysFetchedAt = now;
             return keys.get(kid);
@@ -517,6 +538,12 @@ public final class SsfReceiver {
                 }
                 unjudged.add(event.jti());
             }
+        }
+        if (!unjudged.isEmpty()) {
+            // §19.1 / P1 (contract 1.60): a poll that returns normally leaving SETs unjudged
+            // is otherwise silent about the store outage behind it.
+            telemetry.emit(new TelemetryEvent.SsfUnjudged("ssf.poll", unjudged.size(),
+                    TelemetryEvent.UnjudgedCause.REPLAY_STORE));
         }
         return new SsfPollResult(events, reply.path("moreAvailable").asBoolean(false), refused, unjudged);
     }

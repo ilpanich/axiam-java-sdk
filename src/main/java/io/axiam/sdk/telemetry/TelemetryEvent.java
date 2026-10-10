@@ -20,7 +20,8 @@ public sealed interface TelemetryEvent
                 TelemetryEvent.RequestEnd,
                 TelemetryEvent.Retry,
                 TelemetryEvent.Refresh,
-                TelemetryEvent.ConfigClamped {
+                TelemetryEvent.ConfigClamped,
+                TelemetryEvent.SsfUnjudged {
 
     /** Why a request finished. */
     enum Outcome {
@@ -28,6 +29,14 @@ public sealed interface TelemetryEvent
         SUCCESS,
         /** The call failed, at any layer. */
         FAILURE
+    }
+
+    /** The failure category that left SETs unjudged ({@link SsfUnjudged}). */
+    enum UnjudgedCause {
+        /** A JWKS or discovery fetch failed (&#167;34.2 P3, P6). */
+        KEY_FETCH,
+        /** The replay store could not answer (&#167;34.2 P4). */
+        REPLAY_STORE
     }
 
     /** Whether this caller performed a §9 refresh or waited on another's. */
@@ -118,5 +127,26 @@ public sealed interface TelemetryEvent
      */
     record ConfigClamped(String setting, String requested, String effective,
                          String contractReference) implements TelemetryEvent {
+    }
+
+    /**
+     * Emitted when {@code ssf.poll} returns normally leaving at least one SET
+     * unjudged (&#167;19.1, &#167;34.2 P1, contract 1.60).
+     *
+     * <p>An unjudged SET is in neither {@code events} nor {@code refused}: it was
+     * not recorded and must not be acknowledged, so the transmitter offers it
+     * again. Nothing raised, so without this event an outage of the replay store
+     * would be visible only to a caller that reads
+     * {@link io.axiam.sdk.ssf.SsfPollResult#unjudged()}. The payload names no
+     * {@code jti} and carries no SET.
+     *
+     * <p>This SDK's {@code poll} raises, having recorded nothing, when a key fetch
+     * fails, so it emits this event only with {@link UnjudgedCause#REPLAY_STORE}.
+     *
+     * @param operation canonical operation name, {@code ssf.poll}
+     * @param count     how many SETs were left unjudged
+     * @param cause     the failure category that left them unjudged
+     */
+    record SsfUnjudged(String operation, int count, UnjudgedCause cause) implements TelemetryEvent {
     }
 }

@@ -352,6 +352,69 @@ class SsfReceiverTest {
         assertEquals(2, hits.calls(), "no refetch within the minute");
     }
 
+    /**
+     * &sect;32.8 helper test 7 as amended by contract 1.60 (&sect;34.2 P6): a fill that
+     * <em>fails</em> counts toward the once-a-minute limit, so the next SET within the
+     * minute makes no fetch and gets no verdict ({@code NetworkError}, no reason code).
+     */
+    @Test
+    void test7AFailedFillCountsSoTheNextSetWithinTheMinuteMakesNoFetch() throws Exception {
+        OctetKeyPair key = key();
+        RouteServer.Route keys = server.on("GET", "/oauth2/jwks", json(500, "{}"),
+                json(200, new JWKSet(List.of(key.toPublicJWK())).toString()));
+        SsfReceiver r = receiver();
+        NetworkError first = assertThrows(NetworkError.class, () -> r.verifySet(signSet(key, claims())));
+        assertEquals(NetworkError.class, first.getClass(), "no verdict: not a SetVerificationError");
+        assertEquals(1, keys.calls());
+        NetworkError second = assertThrows(NetworkError.class, () -> r.verifySet(signSet(key, claims())));
+        assertEquals(NetworkError.class, second.getClass());
+        assertEquals(1, keys.calls(), "within the minute after a failed fill: no fetch");
+
+        // In poll the same SET is no verdict either: the poll raises, recording nothing.
+        String stream = UUID.randomUUID().toString();
+        ObjectNode c = claims();
+        ObjectNode reply = MAPPER.createObjectNode();
+        reply.putObject("sets").put(c.path("jti").asText(), signSet(key, c));
+        server.on("POST", "/ssf/v1/poll/" + stream, json(200, reply.toString()));
+        assertThrows(NetworkError.class, () -> r.poll(stream, SsfPollOptions.none()));
+        assertEquals(1, keys.calls());
+    }
+
+    /**
+     * &sect;34.2 P6 (contract 1.60): the key cache expires no later than ten minutes after
+     * the fetch that filled it, and the next SET fetches again; a failed refresh of the
+     * expired cache counts like a failed fill. The fill time is moved back rather than
+     * waited for.
+     */
+    @Test
+    void theKeyCacheExpiresWithinTenMinutesAndAFailedRefreshCounts() throws Exception {
+        OctetKeyPair key = key();
+        String good = new JWKSet(List.of(key.toPublicJWK())).toString();
+        RouteServer.Route keys = server.on("GET", "/oauth2/jwks", json(200, good), json(200, good),
+                json(503, "{}"));
+        SsfReceiver r = receiver();
+        r.verifySet(signSet(key, claims()));
+        r.verifySet(signSet(key, claims()));
+        assertEquals(1, keys.calls(), "cached");
+
+        ageKeyCache(r, Duration.ofMinutes(10));
+        r.verifySet(signSet(key, claims()));
+        assertEquals(2, keys.calls(), "ten minutes after the fill the cache has expired: one fetch");
+
+        ageKeyCache(r, Duration.ofMinutes(10));
+        assertThrows(NetworkError.class, () -> r.verifySet(signSet(key, claims())));
+        assertEquals(3, keys.calls(), "the expired cache's refresh fails");
+        NetworkError e = assertThrows(NetworkError.class, () -> r.verifySet(signSet(key, claims())));
+        assertEquals(NetworkError.class, e.getClass());
+        assertEquals(3, keys.calls(), "a failed refresh counts: no fetch within the minute");
+    }
+
+    private static void ageKeyCache(SsfReceiver r, Duration by) throws Exception {
+        java.lang.reflect.Field fetchedAt = SsfReceiver.class.getDeclaredField("keysFetchedAt");
+        fetchedAt.setAccessible(true);
+        fetchedAt.setLong(r, fetchedAt.getLong(r) - by.toNanos());
+    }
+
     // ── 8 ──
     @Test
     void pollPassesAckAndSetErrsThroughAndSortsTheAnswer() throws Exception {
@@ -481,6 +544,58 @@ class SsfReceiverTest {
         assertEquals(NetworkError.class, raised.getClass(), "a store failure is not a verdict");
         assertTrue(String.valueOf(raised.getCause().getMessage()).contains("IllegalStateException"),
                 "the store's failure is named as the cause");
+    }
+
+    /**
+     * &sect;19.1 / &sect;34.2 P1 (contract 1.60): a {@code poll} that returns normally
+     * leaving SETs unjudged emits {@code ssf_unjudged} &mdash; the count and the failure
+     * category, no {@code jti} &mdash; and one that leaves none emits nothing.
+     */
+    @Test
+    void aPollLeavingSetsUnjudgedEmitsSsfUnjudged() throws Exception {
+        OctetKeyPair key = key();
+        jwks(key);
+        String stream = UUID.randomUUID().toString();
+        ObjectNode reply = MAPPER.createObjectNode();
+        ObjectNode sets = reply.putObject("sets");
+        for (int i = 0; i < 3; i++) {
+            ObjectNode c = claims();
+            sets.put(c.path("jti").asText(), signSet(key, c));
+        }
+        server.on("POST", "/ssf/v1/poll/" + stream, json(200, reply.toString()));
+        List<io.axiam.sdk.telemetry.TelemetryEvent> seen =
+                java.util.Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger asked = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicBoolean down = new java.util.concurrent.atomic.AtomicBoolean(true);
+        try (AxiamClient hooked = AxiamClient.builder(server.base(), UUID.randomUUID().toString())
+                .telemetryHook(seen::add).build()) {
+            SsfReceiver r = new SsfReceiver(hooked, SsfReceiverConfig.builder(ISSUER, AUDIENCE,
+                            SsfKeySource.jwksUri(server.base() + "/oauth2/jwks"))
+                    .accessTokenProvider(() -> Sensitive.of("cc-" + UUID.randomUUID()))
+                    .replayStore((jti, window) -> {
+                        if (asked.incrementAndGet() > 1 && down.get()) {
+                            throw new IllegalStateException("store unavailable");
+                        }
+                        return true;
+                    }).build());
+            SsfPollResult result = r.poll(stream, SsfPollOptions.none());
+            assertEquals(2, result.unjudged().size());
+            assertEquals(2, asked.get(), "after the first store failure the store is asked nothing more");
+            List<io.axiam.sdk.telemetry.TelemetryEvent.SsfUnjudged> unjudged = seen.stream()
+                    .filter(io.axiam.sdk.telemetry.TelemetryEvent.SsfUnjudged.class::isInstance)
+                    .map(io.axiam.sdk.telemetry.TelemetryEvent.SsfUnjudged.class::cast).toList();
+            assertEquals(List.of(new io.axiam.sdk.telemetry.TelemetryEvent.SsfUnjudged("ssf.poll", 2,
+                    io.axiam.sdk.telemetry.TelemetryEvent.UnjudgedCause.REPLAY_STORE)), unjudged);
+            for (String jti : result.unjudged()) {
+                assertFalse(unjudged.get(0).toString().contains(jti), "the event names no jti");
+            }
+
+            seen.clear();
+            down.set(false);
+            assertEquals(List.of(), r.poll(stream, SsfPollOptions.none()).unjudged());
+            assertTrue(seen.stream().noneMatch(io.axiam.sdk.telemetry.TelemetryEvent.SsfUnjudged.class::isInstance),
+                    "nothing unjudged, nothing emitted");
+        }
     }
 
     @Test
