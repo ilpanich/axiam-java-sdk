@@ -133,6 +133,22 @@ public final class SamlApi {
     }
 
     /**
+     * saml.create_service_provider for a draft (contract 1.60 B6, §34.2 P12.9).
+     *
+     * <p>A draft decodes without the required-member check, so it can lack one. This form refuses
+     * that locally with a ValidationError and sends nothing; otherwise it is the strict form
+     * above.
+     *
+     * @param body a draft, as {@code parse_sp_metadata} returned it
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.ValidationError locally, before any request, when the draft
+     *     lacks a required member (§34.2 P12.9)
+     */
+    public io.axiam.sdk.management.models.SamlServiceProvider createServiceProvider(io.axiam.sdk.management.models.SamlServiceProviderDraft body) {
+        return createServiceProvider(ManagementChecks.completeServiceProvider("saml.create_service_provider", body));
+    }
+
+    /**
      * Issues GET /api/v1/tenants/{tenant_id}/saml/service-providers/{sp_id}.
      *
      * @param spId the sp_id path parameter
@@ -189,6 +205,23 @@ public final class SamlApi {
         JsonNode node = transport.send(operation, "PUT",
                 "/api/v1/tenants/{tenant_id}/saml/service-providers/{sp_id}", "/api/v1/tenants/" + tenantId + "/saml/service-providers/" + spId + "", query, body);
         return ManagementSupport.convert(node, io.axiam.sdk.management.models.SamlServiceProvider.class, operation);
+    }
+
+    /**
+     * saml.update_service_provider for a draft (contract 1.60 B6, §34.2 P12.9).
+     *
+     * <p>A draft decodes without the required-member check, so it can lack one. This form refuses
+     * that locally with a ValidationError and sends nothing; otherwise it is the strict form
+     * above.
+     *
+     * @param spId the sp_id path parameter
+     * @param body a draft, as {@code parse_sp_metadata} returned it
+     * @return the server's response
+     * @throws io.axiam.sdk.errors.ValidationError locally, before any request, when the draft
+     *     lacks a required member (§34.2 P12.9)
+     */
+    public io.axiam.sdk.management.models.SamlServiceProvider updateServiceProvider(java.util.UUID spId, io.axiam.sdk.management.models.SamlServiceProviderDraft body) {
+        return updateServiceProvider(spId, ManagementChecks.completeServiceProvider("saml.update_service_provider", body));
     }
 
     /**

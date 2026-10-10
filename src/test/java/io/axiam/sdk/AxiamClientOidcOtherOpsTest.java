@@ -219,6 +219,37 @@ class AxiamClientOidcOtherOpsTest {
         }
     }
 
+    /**
+     * &sect;12.1 (contract 1.60): the server narrows a grant's scopes to the client's
+     * registration at every refresh, so the {@code scope} of the {@code oidcRefresh}
+     * response is the token set's scope &mdash; never the scope requested or originally
+     * granted &mdash; and a response that no longer carries {@code openid} has no ID token.
+     */
+    @Test
+    void oidcRefreshTakesTheResponsesScopeNotTheGrantsOriginalOne() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            String access = "a-" + java.util.UUID.randomUUID();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"access_token\":\"" + access + "\",\"token_type\":\"Bearer\","
+                            + "\"expires_in\":900,\"scope\":\"profile\"}"));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(base, TENANT_ID)
+                    .oidcClientId("my-app")
+                    .build()) {
+                OidcTokenSet narrowed = client.oidcRefresh(
+                        Sensitive.of("r-" + java.util.UUID.randomUUID()), "openid profile email", null, null);
+                assertEquals("profile", narrowed.scope(), "the response's scope, as narrowed by the server");
+                assertNull(narrowed.idToken(), "openid is gone, and so is the ID token");
+                assertEquals(access, narrowed.accessToken().expose());
+            }
+        }
+    }
+
     @Test
     void oidcRefreshIsDistinctFromCookieSessionRefresh() throws Exception {
         try (MockWebServer server = new MockWebServer()) {

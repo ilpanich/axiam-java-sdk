@@ -2,7 +2,7 @@
 """Generate the CONTRACT §27 management surface for the Java SDK.
 
 Reads ``management-registry.json`` (190 operations across 28 namespaces as of
-contract 1.58, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
+contract 1.60, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
 schemas those operations carry, and writes:
 
 - ``src/main/java/io/axiam/sdk/management/models/*.java`` — one record per
@@ -81,9 +81,19 @@ STRING_ENUMS = {"SsfEventType"}
 # §29.8 test 8 asks the same of a *response*: `SamlIdpInfo`'s two credential
 # ids are null when the slot is empty, and that null must stay distinct from an
 # absent member, so a server that stopped sending the member is noticed.
+#
+# §27.15 note 8 (contract 1.60) names ten more: every nullable string member of
+# `UpdateFederationConfigRequest` is cleared by an explicit `null` and left
+# unchanged when omitted. The body's other members (the booleans, the lists,
+# `client_secret`, `attribute_map`, `token_exchange`) cannot be cleared -- the
+# server reads `null` there as absent -- so they stay plain optionals.
 EXPLICIT_NULL_FIELDS = {
     ("UpdateDirectoryConfig", "group_base_dn"),
     ("UpdateDirectoryConfig", "group_filter"),
+    *(("UpdateFederationConfigRequest", wire) for wire in (
+        "metadata_url", "idp_signing_cert_pem", "idp_metadata_signing_cert_pem",
+        "provider_slug", "authorization_endpoint", "token_endpoint",
+        "userinfo_endpoint", "apple_team_id", "apple_key_id", "button_icon")),
     ("SamlIdpInfo", "active_credential_id"),
     ("SamlIdpInfo", "next_credential_id"),
 }
@@ -189,6 +199,17 @@ CALL_SITE_NOTES: dict[str, str] = {
         "refused `400`. It is write-only: no response ever carries it, and the SDK "
         "keeps no copy to re-send."
     ),
+    "federation.update_config": (
+        "**An explicit `null` clears** (§27.15 note 8): a member left unset on the "
+        "builder is not sent and stays as stored; `metadataUrl(null)`, "
+        "`idpSigningCertPem(null)`, `idpMetadataSigningCertPem(null)`, "
+        "`providerSlug(null)`, the three endpoints, `appleTeamId(null)` / "
+        "`appleKeyId(null)` (only together) and `buttonIcon(null)` send `null` and "
+        "clear the value. An `OAuth2` configuration's three endpoints cannot be "
+        "cleared (`400`). The other members cannot be cleared at all: set them to "
+        "change them. `allow_sha1_signatures` and `idp_metadata_signing_cert_pem` "
+        "are SAML only (`400` on any other protocol)."
+    ),
     "scim_targets.update": (
         "**The credential is bound to its URL** (§31.3 rule 2): absent `credential` "
         "keeps the stored one — except that changing `base_url` of a bearer "
@@ -217,6 +238,21 @@ CALL_SITE_NOTES: dict[str, str] = {
 # the request body.
 PRECHECKS: dict[str, str] = {
     "saml.parse_sp_metadata": "parseSpMetadataExactlyOne",
+}
+
+# Contract 1.60 B6 / §34.2 P12.9: "cannot be built without" binds the constructor
+# that makes an input for submission, not the decoding of one a response nests.
+# A record's canonical constructor cannot be skipped by Jackson, so the nested
+# body gets a lenient twin -- same components, none checked -- and the two
+# operations that submit it take the twin too, refusing locally with the
+# validation error and no request when a required member is missing.
+DRAFT_TWINS: dict[str, str] = {"SamlServiceProviderInput": "SamlServiceProviderDraft"}
+DRAFT_PROPERTIES: set[tuple[str, str]] = {("SamlSpMetadataDraft", "service_provider")}
+# operation -> the static method of ManagementChecks that completes the twin
+# into the strict input (or raises the local ValidationError)
+DRAFT_OVERLOADS: dict[str, str] = {
+    "saml.create_service_provider": "completeServiceProvider",
+    "saml.update_service_provider": "completeServiceProvider",
 }
 
 # The body the generated surface test sends to an operation with a PRECHECK —
@@ -981,6 +1017,13 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
     for wire in sorted(props):
         explicit_null = (schema_name, wire) in EXPLICIT_NULL_FIELDS
         base_type = "Sensitive" if wire in secrets else java_type(props[wire])
+        default_false = (schema_name, wire) in DEFAULT_FALSE_WHEN_ABSENT
+        if default_false:
+            base_type = "boolean"
+        if (schema_name, wire) in DATE_TIME_AS_STRING:
+            base_type = "String"
+        if (schema_name, wire) in DRAFT_PROPERTIES:
+            base_type = DRAFT_TWINS[base_type]
         fields.append({
             "wire": wire,
             "name": member(wire),
@@ -997,7 +1040,9 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
             # below, is what actually applies the rule.
             "required": (wire in required and wire not in DEFAULT_TRUE_WHEN_ABSENT
                          and not explicit_null),
-            "doc": props[wire].get("description") or f"the server's {wire} field",
+            "doc": (props[wire].get("description") or f"the server's {wire} field") + (
+                " -- `false` when the server omitted it (a server older than 1.0.0; "
+                "CONTRACT.md §27.15 note 6)" if default_false else ""),
             "secret": wire in secrets,
         })
     return fields, required, description
@@ -1023,6 +1068,23 @@ OMIT_WHEN_EMPTY = {"tenantScope"}
 # way. A wire name here, not a schema name: the field means the same thing
 # wherever it appears.
 DEFAULT_TRUE_WHEN_ABSENT = {"inherit"}
+
+# CONTRACT.md §27.15 note 6 (contract 1.60): `FederationConfigResponse` always
+# carries `allow_sha1_signatures`, but a server older than 1.0.0 omits it and
+# absence means `false`. Generated as a primitive `boolean`, which is what
+# Jackson decodes an absent (or null) member to, so the accessor itself answers
+# `false` rather than a `null` every caller would have to read as `false`.
+# Keyed by schema: on the request bodies the member is an ordinary optional,
+# sent only when the caller sets it.
+DEFAULT_FALSE_WHEN_ABSENT = {("FederationConfigResponse", "allow_sha1_signatures")}
+
+# Timestamps an SDK passes through as the caller's string rather than as a
+# parsed OffsetDateTime. CONTRACT.md §31.8 test 3 (contract 1.60):
+# `expected_updated_at` "is sent on update exactly as given (the string, not
+# re-formatted)". An OffsetDateTime has no spelling of its own -- Jackson
+# re-renders it, normalised to UTC and with trailing fraction digits dropped --
+# so the only way to send what the caller holds is to hold a String.
+DATE_TIME_AS_STRING = {("ScimTargetInput", "expected_updated_at")}
 
 
 def emit_required_checks(type_name: str, fields: list[dict]) -> list[str]:
@@ -1099,14 +1161,31 @@ def emit_default_true_helpers(fields: list[dict]) -> list[str]:
     return out
 
 
-def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
-    """A Java record for an object schema, plus a builder when it is sparse."""
-    type_name = pascal(name)
+def emit_record(name: str, secrets: set[str], replacement: bool, draft: bool = False) -> str:
+    """A Java record for an object schema, plus a builder when it is sparse.
+
+    ``draft`` emits the lenient twin of a null-checked replacement body (see
+    DRAFT_TWINS): the same components, every one nullable, no constructor check.
+    """
+    type_name = DRAFT_TWINS[name] if draft else pascal(name)
     fields, required, description = field_list(name, secrets)
+    if draft:
+        for f in fields:
+            f["required"] = False
+        required = set()
     all_optional = bool(fields) and not required
 
     text = description or f"The {type_name} schema from the server's OpenAPI document."
-    if all_optional and name in sparse_update_schemas():
+    if draft:
+        text = (f"{pascal(name)} as a response nests it, decoded WITHOUT the required-member "
+                f"check (§34.2 P12.9, contract 1.60 B6).\n\nThe constructor that makes "
+                f"{pascal(name)} for submission refuses a missing required member; decoding a "
+                f"draft a server returned does not, because a draft is a document to review, "
+                f"not a body being built. Every component is therefore nullable here. Pass it "
+                f"to the operations that submit it: they refuse a draft that lacks a required "
+                f"member locally, with a ValidationError and no request.\n\n"
+                + (description or ""))
+    elif all_optional and name in sparse_update_schemas():
         text += ("\n\nEvery component is optional, so this is a SPARSE body: what you leave "
                  "null is left unchanged, and is omitted from the wire request entirely rather "
                  "than sent as null (§27.4 rule 5). Use the builder — a canonical constructor "
@@ -1152,12 +1231,13 @@ def emit_record(name: str, secrets: set[str], replacement: bool) -> str:
                 f["type"] = f"@Nullable {f['type']}"
         body.extend(component_lines(fields))
         body.append(") {")
-        if name in null_checked_schemas():
+        if name in null_checked_schemas() and not draft:
             body.extend(emit_required_checks(type_name, fields))
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
-        body.extend(emit_factories(name, type_name))
-        if all_optional:
+        if not draft:
+            body.extend(emit_factories(name, type_name))
+        if all_optional and not draft:
             body.extend(emit_builder(type_name, fields))
         body.append("}")
 
@@ -1425,6 +1505,9 @@ def emit_models() -> dict[str, str]:
             continue
         files[f"{MODELS_DIR}/{pascal(name)}.java"] = emit_record(
             name, secrets.get(name, set()), name in replacements)
+        if name in DRAFT_TWINS:
+            files[f"{MODELS_DIR}/{DRAFT_TWINS[name]}.java"] = emit_record(
+                name, secrets.get(name, set()), name in replacements, draft=True)
     return files
 
 
@@ -1650,6 +1733,29 @@ def emit_operation(namespace: str, opname: str, op: dict[str, Any]) -> list[str]
         lines.append(f"        return {expr};")
     lines.append("    }")
     lines.append("")
+
+    if canonical in DRAFT_OVERLOADS:
+        twin = f"{MODELS_PACKAGE}.{DRAFT_TWINS[op['request_schema']]}"
+        d_params = [dict(p, type=twin) if p["name"] == "body" else p for p in params]
+        d_sig = ", ".join(f"{p['type']} {p['name']}" for p in d_params)
+        d_tags = [f"@param {p['name']} " + ("a draft, as {@code parse_sp_metadata} returned it"
+                                              if p["name"] == "body" else p["doc"])
+                  for p in d_params]
+        d_tags.append("@return the server's response")
+        d_tags.append("@throws io.axiam.sdk.errors.ValidationError locally, before any request, "
+                      "when the draft lacks a required member (§34.2 P12.9)")
+        lines.extend(javadoc(
+            f"{canonical} for a draft (contract 1.60 B6, §34.2 P12.9).\n\n"
+            f"A draft decodes without the required-member check, so it can lack one. This "
+            f"form refuses that locally with a ValidationError and sends nothing; "
+            f"otherwise it is the strict form above.", "    ", d_tags))
+        forward = ", ".join(
+            f"ManagementChecks.{DRAFT_OVERLOADS[canonical]}(\"{canonical}\", body)"
+            if p["name"] == "body" else p["name"] for p in d_params)
+        lines.append(f"    public {ret} {method_name}({d_sig}) {{")
+        lines.append(f"        return {method_name}({forward});")
+        lines.append("    }")
+        lines.append("")
 
     if op["paginated"]:
         inner = ret[len("Page<"):-1]

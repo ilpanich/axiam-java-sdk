@@ -114,6 +114,15 @@ public final class FederationApi {
     /**
      * Issues PUT /api/v1/federation-configs/{id}.
      *
+     * <p><strong>An explicit {@code null} clears</strong> (§27.15 note 8): a member left unset on the builder is
+     * not sent and stays as stored; {@code metadataUrl(null)}, {@code idpSigningCertPem(null)},
+     * {@code idpMetadataSigningCertPem(null)}, {@code providerSlug(null)}, the three endpoints,
+     * {@code appleTeamId(null)} / {@code appleKeyId(null)} (only together) and {@code
+     * buttonIcon(null)} send {@code null} and clear the value. An {@code OAuth2} configuration's
+     * three endpoints cannot be cleared ({@code 400}). The other members cannot be cleared at all:
+     * set them to change them. {@code allow_sha1_signatures} and {@code
+     * idp_metadata_signing_cert_pem} are SAML only ({@code 400} on any other protocol).
+     *
      * <p>Not retried on failure (§27.4 rule 8): every write on this surface is issued exactly
      * once, including the ones that look idempotent.
      *

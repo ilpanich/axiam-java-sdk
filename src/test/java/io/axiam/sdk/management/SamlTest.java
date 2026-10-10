@@ -32,6 +32,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -200,6 +201,51 @@ class SamlTest extends ManagementTestBase {
 
         client.saml().createServiceProvider(fromUrl.serviceProvider());
         assertEquals(draft.path("service_provider"), create.last().json(), "the draft is sent unchanged");
+    }
+
+    /**
+     * P12.9 (contract 1.60, B6): the required-member rule binds the constructor that makes an
+     * input for submission, not the decoding of a draft a response nests. A draft lacking a
+     * required member decodes; submitting it is refused locally, with the validation error and
+     * no request, for each of the three members and for both writes that take a draft.
+     */
+    @Test
+    void p129ADraftLackingARequiredMemberDecodesAndIsRefusedLocallyOnSubmit() throws Exception {
+        UUID id = UUID.randomUUID();
+        Route create = mount("POST", SAML + "/service-providers", 201, spBody().toString());
+        Route update = mount("PUT", SAML + "/service-providers/" + id, 200, spBody().toString());
+        for (String missing : List.of("acs_urls", "display_name", "entity_id")) {
+            ObjectNode sp = JSON.createObjectNode();
+            sp.put("display_name", "Imported");
+            sp.put("entity_id", "https://imported.example/sp");
+            ObjectNode acs = sp.putArray("acs_urls").addObject();
+            acs.put("binding", "http_post");
+            acs.put("index", 0);
+            acs.put("is_default", true);
+            acs.put("url", "https://imported.example/acs");
+            sp.remove(missing);
+            ObjectNode body = JSON.createObjectNode();
+            body.set("service_provider", sp);
+            body.putArray("warnings");
+            mount("POST", SAML + "/parse-sp-metadata", 200, body.toString());
+
+            var draft = client.saml().parseSpMetadata(ParseSamlSpMetadata.fromUrl("https://imported.example/metadata"));
+            assertNotNull(draft.serviceProvider(), "the draft decodes without " + missing);
+
+            ValidationError onCreate = assertThrows(ValidationError.class,
+                    () -> client.saml().createServiceProvider(draft.serviceProvider()));
+            assertEquals("saml.create_service_provider", onCreate.operation());
+            assertEquals(400, onCreate.status());
+            assertEquals(missing, onCreate.fields().get(0).field());
+            ValidationError onUpdate = assertThrows(ValidationError.class,
+                    () -> client.saml().updateServiceProvider(id, draft.serviceProvider()));
+            assertEquals("saml.update_service_provider", onUpdate.operation());
+        }
+        assertEquals(0, create.calls(), "a draft that lacks a member sends no request");
+        assertEquals(0, update.calls(), "a draft that lacks a member sends no request");
+
+        // The strict input is still impossible to build without them (R-27, §29.8 t1).
+        assertCannotBeBuiltWithout(input(), "display_name", "entity_id", "acs_urls");
     }
 
     // ── 4. Credentials carry no key ──────────────────────────────────────

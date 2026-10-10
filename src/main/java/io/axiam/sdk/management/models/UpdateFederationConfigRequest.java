@@ -11,6 +11,7 @@ import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import io.axiam.sdk.Sensitive;
+import io.axiam.sdk.management.JsonNullable;
 
 /**
  * The UpdateFederationConfigRequest schema from the server's OpenAPI document.
@@ -19,55 +20,80 @@ import io.axiam.sdk.Sensitive;
  * and is omitted from the wire request entirely rather than sent as null (§27.4 rule 5). Use the
  * builder — a canonical constructor call full of nulls is not something a reader can check.
  *
+ * @param allowSha1Signatures SAML only: accept IdP responses signed with SHA-1. Refused on a
+ *     non-SAML config; turning it on is audited ({@code federation.sha1_signatures_allowed}).
  * @param allowTenantInheritance Whether tenants may inherit this organization-level provider.
  * @param allowedAlgorithms Accepted signature algorithms (CQ-B40/REQ-14 AC-5).
  * @param allowedIssuerTenants Accepted external IdP tenants for a templated issuer. Replaced
  *     wholesale.
- * @param appleKeyId Apple Key ID. {@code Some(None)} clears it.
- * @param appleTeamId Apple Team ID. {@code Some(None)} clears it.
+ * @param appleKeyId Apple Key ID. Explicit {@code null} clears it. -- null is NOT absent here
+ *     (§27.4 rule 5): a Java null means the member is absent, JsonNullable.ofNull() means it is JSON
+ *     null
+ * @param appleTeamId Apple Team ID. Explicit {@code null} clears it. -- null is NOT absent here
+ *     (§27.4 rule 5): a Java null means the member is absent, JsonNullable.ofNull() means it is JSON
+ *     null
  * @param attributeMap the server's attribute_map field
- * @param authorizationEndpoint OAuth2-variant authorization endpoint. {@code Some(None)} clears
- *     it.
- * @param buttonIcon Sign-in-button icon for a generic provider. {@code Some(None)} clears it.
+ * @param authorizationEndpoint OAuth2-variant authorization endpoint. Explicit {@code null} clears
+ *     it. -- null is NOT absent here (§27.4 rule 5): a Java null means the member is absent,
+ *     JsonNullable.ofNull() means it is JSON null
+ * @param buttonIcon Sign-in-button icon for a generic provider. Explicit {@code null} clears it.
+ *     -- null is NOT absent here (§27.4 rule 5): a Java null means the member is absent,
+ *     JsonNullable.ofNull() means it is JSON null
  * @param clientId the server's client_id field
  * @param clientSecret the server's client_secret field -- SECRET: redacted from toString and from
  *     every JSON rendering except the one request body it is sent in
  * @param enabled the server's enabled field
+ * @param idpMetadataSigningCertPem SAML only: the IdP metadata signing certificate (#530).
+ *     Explicit {@code null} clears it; omitted leaves it. Clearing it is audited ({@code
+ *     federation.metadata_signing_cert_cleared}), and so is replacing it with a different certificate
+ *     ({@code federation.metadata_signing_cert_changed}). -- null is NOT absent here (§27.4 rule 5): a
+ *     Java null means the member is absent, JsonNullable.ofNull() means it is JSON null
  * @param idpSigningCertPem PEM-encoded X.509 certificate for verifying SAML assertions
- *     (CQ-B40/REQ-14 AC-5). {@code Some(None)} clears the stored cert.
- * @param metadataUrl the server's metadata_url field
+ *     (CQ-B40/REQ-14 AC-5). Explicit {@code null} clears the stored cert; omitted leaves it. -- null
+ *     is NOT absent here (§27.4 rule 5): a Java null means the member is absent, JsonNullable.ofNull()
+ *     means it is JSON null
+ * @param metadataUrl OIDC discovery or SAML metadata URL. Explicit {@code null} clears it; omitted
+ *     leaves it. -- null is NOT absent here (§27.4 rule 5): a Java null means the member is absent,
+ *     JsonNullable.ofNull() means it is JSON null
  * @param provider the server's provider field
- * @param providerSlug Operator-chosen identifier for a {@code generic_*} kind. {@code Some(None)}
- *     clears it.
+ * @param providerSlug Operator-chosen identifier for a {@code generic_*} kind. Explicit {@code
+ *     null} clears it. -- null is NOT absent here (§27.4 rule 5): a Java null means the member is
+ *     absent, JsonNullable.ofNull() means it is JSON null
  * @param requirePkce Send PKCE on the authorization request.
  * @param scopes Scopes to request. Replaced wholesale; empty restores the per-kind default.
- * @param tokenEndpoint OAuth2-variant token endpoint. {@code Some(None)} clears it.
+ * @param tokenEndpoint OAuth2-variant token endpoint. Explicit {@code null} clears it. -- null is
+ *     NOT absent here (§27.4 rule 5): a Java null means the member is absent, JsonNullable.ofNull()
+ *     means it is JSON null
  * @param tokenExchange the server's token_exchange field
- * @param userinfoEndpoint OAuth2-variant userinfo endpoint. {@code Some(None)} clears it.
+ * @param userinfoEndpoint OAuth2-variant userinfo endpoint. Explicit {@code null} clears it. --
+ *     null is NOT absent here (§27.4 rule 5): a Java null means the member is absent,
+ *     JsonNullable.ofNull() means it is JSON null
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record UpdateFederationConfigRequest(
+        @JsonProperty("allow_sha1_signatures") @Nullable Boolean allowSha1Signatures,
         @JsonProperty("allow_tenant_inheritance") @Nullable Boolean allowTenantInheritance,
         @JsonProperty("allowed_algorithms") @Nullable List<String> allowedAlgorithms,
         @JsonProperty("allowed_issuer_tenants") @Nullable List<String> allowedIssuerTenants,
-        @JsonProperty("apple_key_id") @Nullable String appleKeyId,
-        @JsonProperty("apple_team_id") @Nullable String appleTeamId,
+        @JsonProperty("apple_key_id") @Nullable JsonNullable<String> appleKeyId,
+        @JsonProperty("apple_team_id") @Nullable JsonNullable<String> appleTeamId,
         @JsonProperty("attribute_map") @Nullable JsonNode attributeMap,
-        @JsonProperty("authorization_endpoint") @Nullable String authorizationEndpoint,
-        @JsonProperty("button_icon") @Nullable String buttonIcon,
+        @JsonProperty("authorization_endpoint") @Nullable JsonNullable<String> authorizationEndpoint,
+        @JsonProperty("button_icon") @Nullable JsonNullable<String> buttonIcon,
         @JsonProperty("client_id") @Nullable String clientId,
         @JsonProperty("client_secret") @Nullable Sensitive clientSecret,
         @JsonProperty("enabled") @Nullable Boolean enabled,
-        @JsonProperty("idp_signing_cert_pem") @Nullable String idpSigningCertPem,
-        @JsonProperty("metadata_url") @Nullable String metadataUrl,
+        @JsonProperty("idp_metadata_signing_cert_pem") @Nullable JsonNullable<String> idpMetadataSigningCertPem,
+        @JsonProperty("idp_signing_cert_pem") @Nullable JsonNullable<String> idpSigningCertPem,
+        @JsonProperty("metadata_url") @Nullable JsonNullable<String> metadataUrl,
         @JsonProperty("provider") @Nullable String provider,
-        @JsonProperty("provider_slug") @Nullable String providerSlug,
+        @JsonProperty("provider_slug") @Nullable JsonNullable<String> providerSlug,
         @JsonProperty("require_pkce") @Nullable Boolean requirePkce,
         @JsonProperty("scopes") @Nullable List<String> scopes,
-        @JsonProperty("token_endpoint") @Nullable String tokenEndpoint,
+        @JsonProperty("token_endpoint") @Nullable JsonNullable<String> tokenEndpoint,
         @JsonProperty("token_exchange") @Nullable TokenExchangeTrustRequest tokenExchange,
-        @JsonProperty("userinfo_endpoint") @Nullable String userinfoEndpoint
+        @JsonProperty("userinfo_endpoint") @Nullable JsonNullable<String> userinfoEndpoint
 ) {
 
     /**
@@ -93,26 +119,39 @@ public record UpdateFederationConfigRequest(
         private Builder() {
         }
 
+        private @Nullable Boolean allowSha1Signatures;
         private @Nullable Boolean allowTenantInheritance;
         private @Nullable List<String> allowedAlgorithms;
         private @Nullable List<String> allowedIssuerTenants;
-        private @Nullable String appleKeyId;
-        private @Nullable String appleTeamId;
+        private @Nullable JsonNullable<String> appleKeyId;
+        private @Nullable JsonNullable<String> appleTeamId;
         private @Nullable JsonNode attributeMap;
-        private @Nullable String authorizationEndpoint;
-        private @Nullable String buttonIcon;
+        private @Nullable JsonNullable<String> authorizationEndpoint;
+        private @Nullable JsonNullable<String> buttonIcon;
         private @Nullable String clientId;
         private @Nullable Sensitive clientSecret;
         private @Nullable Boolean enabled;
-        private @Nullable String idpSigningCertPem;
-        private @Nullable String metadataUrl;
+        private @Nullable JsonNullable<String> idpMetadataSigningCertPem;
+        private @Nullable JsonNullable<String> idpSigningCertPem;
+        private @Nullable JsonNullable<String> metadataUrl;
         private @Nullable String provider;
-        private @Nullable String providerSlug;
+        private @Nullable JsonNullable<String> providerSlug;
         private @Nullable Boolean requirePkce;
         private @Nullable List<String> scopes;
-        private @Nullable String tokenEndpoint;
+        private @Nullable JsonNullable<String> tokenEndpoint;
         private @Nullable TokenExchangeTrustRequest tokenExchange;
-        private @Nullable String userinfoEndpoint;
+        private @Nullable JsonNullable<String> userinfoEndpoint;
+
+        /**
+         * Sets allow_sha1_signatures.
+         *
+         * @param allowSha1Signatures the value to send
+         * @return this builder
+         */
+        public Builder allowSha1Signatures(Boolean allowSha1Signatures) {
+            this.allowSha1Signatures = allowSha1Signatures;
+            return this;
+        }
 
         /**
          * Sets allow_tenant_inheritance.
@@ -148,24 +187,28 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
-         * Sets apple_key_id.
+         * Sets apple_key_id, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param appleKeyId the value to send
+         * @param appleKeyId the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder appleKeyId(String appleKeyId) {
-            this.appleKeyId = appleKeyId;
+        public Builder appleKeyId(@Nullable String appleKeyId) {
+            this.appleKeyId = JsonNullable.of(appleKeyId);
             return this;
         }
 
         /**
-         * Sets apple_team_id.
+         * Sets apple_team_id, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param appleTeamId the value to send
+         * @param appleTeamId the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder appleTeamId(String appleTeamId) {
-            this.appleTeamId = appleTeamId;
+        public Builder appleTeamId(@Nullable String appleTeamId) {
+            this.appleTeamId = JsonNullable.of(appleTeamId);
             return this;
         }
 
@@ -181,24 +224,28 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
-         * Sets authorization_endpoint.
+         * Sets authorization_endpoint, where null is a value: {@code null} here sends JSON null,
+         * which clears the stored value (§27.4 rule 5). Not calling this leaves the member absent,
+         * which keeps it.
          *
-         * @param authorizationEndpoint the value to send
+         * @param authorizationEndpoint the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder authorizationEndpoint(String authorizationEndpoint) {
-            this.authorizationEndpoint = authorizationEndpoint;
+        public Builder authorizationEndpoint(@Nullable String authorizationEndpoint) {
+            this.authorizationEndpoint = JsonNullable.of(authorizationEndpoint);
             return this;
         }
 
         /**
-         * Sets button_icon.
+         * Sets button_icon, where null is a value: {@code null} here sends JSON null, which clears
+         * the stored value (§27.4 rule 5). Not calling this leaves the member absent, which keeps
+         * it.
          *
-         * @param buttonIcon the value to send
+         * @param buttonIcon the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder buttonIcon(String buttonIcon) {
-            this.buttonIcon = buttonIcon;
+        public Builder buttonIcon(@Nullable String buttonIcon) {
+            this.buttonIcon = JsonNullable.of(buttonIcon);
             return this;
         }
 
@@ -236,24 +283,41 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
-         * Sets idp_signing_cert_pem.
+         * Sets idp_metadata_signing_cert_pem, where null is a value: {@code null} here sends JSON
+         * null, which clears the stored value (§27.4 rule 5). Not calling this leaves the member
+         * absent, which keeps it.
          *
-         * @param idpSigningCertPem the value to send
+         * @param idpMetadataSigningCertPem the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder idpSigningCertPem(String idpSigningCertPem) {
-            this.idpSigningCertPem = idpSigningCertPem;
+        public Builder idpMetadataSigningCertPem(@Nullable String idpMetadataSigningCertPem) {
+            this.idpMetadataSigningCertPem = JsonNullable.of(idpMetadataSigningCertPem);
             return this;
         }
 
         /**
-         * Sets metadata_url.
+         * Sets idp_signing_cert_pem, where null is a value: {@code null} here sends JSON null,
+         * which clears the stored value (§27.4 rule 5). Not calling this leaves the member absent,
+         * which keeps it.
          *
-         * @param metadataUrl the value to send
+         * @param idpSigningCertPem the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder metadataUrl(String metadataUrl) {
-            this.metadataUrl = metadataUrl;
+        public Builder idpSigningCertPem(@Nullable String idpSigningCertPem) {
+            this.idpSigningCertPem = JsonNullable.of(idpSigningCertPem);
+            return this;
+        }
+
+        /**
+         * Sets metadata_url, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
+         *
+         * @param metadataUrl the value to send, or null to send JSON null
+         * @return this builder
+         */
+        public Builder metadataUrl(@Nullable String metadataUrl) {
+            this.metadataUrl = JsonNullable.of(metadataUrl);
             return this;
         }
 
@@ -269,13 +333,15 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
-         * Sets provider_slug.
+         * Sets provider_slug, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param providerSlug the value to send
+         * @param providerSlug the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder providerSlug(String providerSlug) {
-            this.providerSlug = providerSlug;
+        public Builder providerSlug(@Nullable String providerSlug) {
+            this.providerSlug = JsonNullable.of(providerSlug);
             return this;
         }
 
@@ -302,13 +368,15 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
-         * Sets token_endpoint.
+         * Sets token_endpoint, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param tokenEndpoint the value to send
+         * @param tokenEndpoint the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder tokenEndpoint(String tokenEndpoint) {
-            this.tokenEndpoint = tokenEndpoint;
+        public Builder tokenEndpoint(@Nullable String tokenEndpoint) {
+            this.tokenEndpoint = JsonNullable.of(tokenEndpoint);
             return this;
         }
 
@@ -324,13 +392,15 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
-         * Sets userinfo_endpoint.
+         * Sets userinfo_endpoint, where null is a value: {@code null} here sends JSON null, which
+         * clears the stored value (§27.4 rule 5). Not calling this leaves the member absent, which
+         * keeps it.
          *
-         * @param userinfoEndpoint the value to send
+         * @param userinfoEndpoint the value to send, or null to send JSON null
          * @return this builder
          */
-        public Builder userinfoEndpoint(String userinfoEndpoint) {
-            this.userinfoEndpoint = userinfoEndpoint;
+        public Builder userinfoEndpoint(@Nullable String userinfoEndpoint) {
+            this.userinfoEndpoint = JsonNullable.of(userinfoEndpoint);
             return this;
         }
 
@@ -340,7 +410,7 @@ public record UpdateFederationConfigRequest(
          * @return a UpdateFederationConfigRequest carrying exactly the fields that were set
          */
         public UpdateFederationConfigRequest build() {
-            return new UpdateFederationConfigRequest(allowTenantInheritance, allowedAlgorithms, allowedIssuerTenants, appleKeyId, appleTeamId, attributeMap, authorizationEndpoint, buttonIcon, clientId, clientSecret, enabled, idpSigningCertPem, metadataUrl, provider, providerSlug, requirePkce, scopes, tokenEndpoint, tokenExchange, userinfoEndpoint);
+            return new UpdateFederationConfigRequest(allowSha1Signatures, allowTenantInheritance, allowedAlgorithms, allowedIssuerTenants, appleKeyId, appleTeamId, attributeMap, authorizationEndpoint, buttonIcon, clientId, clientSecret, enabled, idpMetadataSigningCertPem, idpSigningCertPem, metadataUrl, provider, providerSlug, requirePkce, scopes, tokenEndpoint, tokenExchange, userinfoEndpoint);
         }
     }
 }

@@ -31,6 +31,12 @@ import io.axiam.sdk.Sensitive;
  *     from toString and from every JSON rendering except the one request body it is sent in
  * @param deprovision {@code deactivate} (default: {@code PATCH active=false}) or {@code delete}.
  * @param enabled {@code true} by default. A disabled target receives nothing.
+ * @param expectedUpdatedAt The {@code updated_at} of the target as the client read it (P23W5-09,
+ *     T-416). **Update only; create ignores it.** When present, the replacement lands only if the
+ *     target still has that version, else {@code 409} (reload and retry): two administrators who
+ *     opened the form at the same version cannot silently overwrite each other. When absent the
+ *     replacement is conditional on the version the server reads during the request — last-writer-wins
+ *     between administrators, as before.
  * @param name 1–128 bytes.
  * @param pushGroups Push groups too (every group for {@code all_users}, the listed ones for {@code
  *     groups}). {@code false} by default.
@@ -46,6 +52,7 @@ public record ScimTargetInput(
         @JsonProperty("credential") @Nullable Sensitive credential,
         @JsonProperty("deprovision") @Nullable DeprovisionPolicy deprovision,
         @JsonProperty("enabled") @Nullable Boolean enabled,
+        @JsonProperty("expected_updated_at") @Nullable String expectedUpdatedAt,
         @JsonProperty("name") String name,
         @JsonProperty("push_groups") @Nullable Boolean pushGroups,
         @JsonProperty("scope") ScimTargetScope scope,
@@ -62,6 +69,7 @@ public record ScimTargetInput(
      * @param credential see the record component
      * @param deprovision see the record component
      * @param enabled see the record component
+     * @param expectedUpdatedAt see the record component
      * @param name see the record component
      * @param pushGroups see the record component
      * @param scope see the record component

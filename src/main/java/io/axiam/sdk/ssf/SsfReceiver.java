@@ -24,6 +24,7 @@ import io.axiam.sdk.errors.ValidationError;
 import io.axiam.sdk.internal.Sessionless;
 import io.axiam.sdk.internal.StatusRetry;
 import io.axiam.sdk.internal.TelemetryDispatcher;
+import io.axiam.sdk.telemetry.TelemetryEvent;
 
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
@@ -67,10 +68,16 @@ import java.util.concurrent.TimeUnit;
  */
 public final class SsfReceiver {
 
-    /** The forced-refetch cooldown for an unknown {@code kid} (&sect;32.7 step 4). */
+    /**
+     * The once-a-minute limit (&sect;32.7 step 4, &sect;34.2 P6): it counts every
+     * unknown-{@code kid} refetch and every failed fetch, never a successful fill.
+     */
     private static final long FORCED_REFETCH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(60);
 
-    /** How long a fetched JWKS is used before an ordinary refresh. */
+    /**
+     * How long a fetched JWKS is used before an ordinary refresh &mdash; within the
+     * ten minutes &sect;34.2 P6 allows (contract 1.60).
+     */
     private static final long JWKS_TTL_NANOS = TimeUnit.SECONDS.toNanos(300);
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -87,8 +94,9 @@ public final class SsfReceiver {
     private @Nullable String jwksUri;
     private @Nullable Map<String, OctetKeyPair> keys;
     private long keysFetchedAt;
-    private long lastForcedRefetch;
-    private boolean forcedRefetchUsed;
+    /** When the last fetch the once-a-minute limit counts was made. */
+    private long lastCountedFetch;
+    private boolean countedFetchMade;
 
     /**
      * Builds a receiver over {@code client}'s transport.
@@ -142,8 +150,9 @@ public final class SsfReceiver {
      * @param set the compact SET
      * @return the verified event
      * @throws SetVerificationError when the SET is refused
-     * @throws NetworkError when the JWKS (or the configuration document) could not be fetched
-     *         &mdash; which is not a verdict on the SET
+     * @throws NetworkError when the JWKS (or the configuration document) could not be fetched, or
+     *         the {@link ReplayStore} could not answer &mdash; neither is a verdict on the SET, which
+     *         stays unrecorded (&sect;34.2 P3, P4)
      */
     public SecurityEvent verifySet(String set) {
         return record(verify(set, null));
@@ -256,11 +265,28 @@ public final class SsfReceiver {
 
     /**
      * Step 9: records {@code event}'s {@code jti}, or refuses it as {@code replayed}.
-     * A store that cannot answer throws its own exception &mdash; no verdict, and never
-     * an acceptance (&sect;34.2 P3, P4).
+     * A store that cannot answer is no verdict, and never an acceptance (&sect;34.2 P3, P4):
+     * what it throws reaches the caller as a {@link NetworkError} (a {@code NetworkError},
+     * {@code AuthError} or {@code AuthzError} it threw itself passes through), with no reason code.
      */
     private SecurityEvent record(SecurityEvent event) {
-        if (!config.replayStore().checkAndRecord(event.jti(), config.replayWindow())) {
+        boolean first;
+        try {
+            first = config.replayStore().checkAndRecord(event.jti(), config.replayWindow());
+        } catch (NetworkError | AuthzError e) {
+            throw e; // already a §2 type: not a verdict on the SET
+        } catch (SetVerificationError e) {
+            // A store has no business refusing a SET; whatever it threw, it did not answer.
+            throw new NetworkError("the replay store could not answer", e);
+        } catch (AuthError e) {
+            throw e;
+        } catch (RuntimeException e) {
+            // §34.2 P3/P4: a store that cannot answer is no verdict. It is never read as
+            // "replayed" (which a poll acknowledges) and never as "first seen" (accepted); the
+            // SET stays unjudged and unrecorded, and the failure is the §2 NetworkError.
+            throw new NetworkError("the replay store could not answer", e);
+        }
+        if (!first) {
             throw refuse(SetFailureReason.REPLAYED, "jti already seen");
         }
         return event;
@@ -278,21 +304,34 @@ public final class SsfReceiver {
     private @Nullable OctetKeyPair keyFor(String kid) {
         synchronized (keyLock) {
             long now = System.nanoTime();
-            boolean fetchedNow = false;
+            boolean limited = countedFetchMade && now - lastCountedFetch < FORCED_REFETCH_INTERVAL_NANOS;
             if (keys == null || now - keysFetchedAt > JWKS_TTL_NANOS) {
-                keys = fetchKeys();
+                // §34.2 P6 (contract 1.60): a fill, or a refresh of an expired cache, that
+                // succeeds is not counted; one that fails is, so a JWKS outage costs one
+                // fetch a minute rather than one per SET. Within the minute after it the SET
+                // gets no fetch and no verdict.
+                if (limited) {
+                    throw new NetworkError("the JWKS fetch failed less than a minute ago; not "
+                            + "fetching it again yet (CONTRACT.md §34.2 P6)");
+                }
+                try {
+                    keys = fetchKeys();
+                } catch (RuntimeException e) {
+                    countedFetchMade = true;
+                    lastCountedFetch = now;
+                    throw e;
+                }
                 keysFetchedAt = now;
-                fetchedNow = true;
+                return keys.get(kid);
             }
             OctetKeyPair key = keys.get(kid);
-            if (key != null || fetchedNow) {
+            if (key != null || limited) {
                 return key;
             }
-            if (forcedRefetchUsed && now - lastForcedRefetch < FORCED_REFETCH_INTERVAL_NANOS) {
-                return null;
-            }
-            forcedRefetchUsed = true;
-            lastForcedRefetch = now;
+            // The one refetch an unknown kid triggers counts whether or not it succeeds;
+            // when it fails the cached keys stay in use.
+            countedFetchMade = true;
+            lastCountedFetch = now;
             keys = fetchKeys();
             keysFetchedAt = now;
             return keys.get(kid);
@@ -382,7 +421,7 @@ public final class SsfReceiver {
      * (&sect;34.2 P1). Every SET of the batch is checked (steps 1&ndash;8) before any is
      * recorded, so a JWKS or discovery fetch that fails raises that
      * {@code NetworkError} having recorded nothing, and the transmitter offers the
-     * whole batch again. A replay store that cannot answer raises its own exception
+     * whole batch again. A replay store that cannot answer raises a {@link NetworkError}
      * when nothing was recorded yet; part-way through, the SETs already recorded
      * are returned and the rest are listed in {@link SsfPollResult#unjudged()},
      * unrecorded &mdash; neither acknowledge nor refuse those.
@@ -499,6 +538,12 @@ public final class SsfReceiver {
                 }
                 unjudged.add(event.jti());
             }
+        }
+        if (!unjudged.isEmpty()) {
+            // §19.1 / P1 (contract 1.60): a poll that returns normally leaving SETs unjudged
+            // is otherwise silent about the store outage behind it.
+            telemetry.emit(new TelemetryEvent.SsfUnjudged("ssf.poll", unjudged.size(),
+                    TelemetryEvent.UnjudgedCause.REPLAY_STORE));
         }
         return new SsfPollResult(events, reply.path("moreAvailable").asBoolean(false), refused, unjudged);
     }

@@ -23,6 +23,8 @@ import java.util.UUID;
  * @param recipientEmails the server's recipient_emails field
  * @param tenantId the server's tenant_id field
  * @param updatedAt the server's updated_at field
+ * @param windowMinutes Minutes in which one event type mails each recipient at most once; further
+ *     events are counted and reported by the next mail (#551).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -35,6 +37,7 @@ public record NotificationRuleResponse(
         @JsonProperty("name") String name,
         @JsonProperty("recipient_emails") List<String> recipientEmails,
         @JsonProperty("tenant_id") UUID tenantId,
-        @JsonProperty("updated_at") OffsetDateTime updatedAt
+        @JsonProperty("updated_at") OffsetDateTime updatedAt,
+        @JsonProperty("window_minutes") Integer windowMinutes
 ) {
 }

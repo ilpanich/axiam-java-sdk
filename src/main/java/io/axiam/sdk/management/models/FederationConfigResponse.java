@@ -16,6 +16,9 @@ import java.util.UUID;
 /**
  * Federation config response -- omits client_secret.
  *
+ * @param allowSha1Signatures SAML only: whether IdP responses signed with SHA-1 are accepted
+ *     (default {@code false}; #531). -- {@code false} when the server omitted it (a server older than
+ *     1.0.0; CONTRACT.md §27.15 note 6)
  * @param allowTenantInheritance Whether tenants of this organization may inherit this provider.
  * @param allowedAlgorithms Accepted signing algorithms. Returned for OIDC and SAML; meaningless,
  *     and therefore empty, for the OAuth2 variant.
@@ -34,6 +37,8 @@ import java.util.UUID;
  *     and {@code button_icon} is refused; when false the button reads "Sign in with &lt;provider&gt;"
  *     and may carry a custom icon.
  * @param id the server's id field
+ * @param idpMetadataSigningCertPem SAML only: the certificate the IdP's metadata must be signed
+ *     with (#530); {@code null} when the metadata is not signature-checked.
  * @param metadataUrl the server's metadata_url field
  * @param mintsClientSecret Whether AXIAM mints this provider's client secret itself, per exchange,
  *     rather than sending a stored one. True only for an Apple config with both identifiers set.
@@ -55,6 +60,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record FederationConfigResponse(
+        @JsonProperty("allow_sha1_signatures") boolean allowSha1Signatures,
         @JsonProperty("allow_tenant_inheritance") Boolean allowTenantInheritance,
         @JsonProperty("allowed_algorithms") List<String> allowedAlgorithms,
         @JsonProperty("allowed_issuer_tenants") List<String> allowedIssuerTenants,
@@ -69,6 +75,7 @@ public record FederationConfigResponse(
         @JsonProperty("enabled") Boolean enabled,
         @JsonProperty("has_bundled_mark") Boolean hasBundledMark,
         @JsonProperty("id") UUID id,
+        @JsonProperty("idp_metadata_signing_cert_pem") @Nullable String idpMetadataSigningCertPem,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
         @JsonProperty("mints_client_secret") Boolean mintsClientSecret,
         @JsonProperty("pkce_required") Boolean pkceRequired,

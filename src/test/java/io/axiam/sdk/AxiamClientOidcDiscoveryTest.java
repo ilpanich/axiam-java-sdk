@@ -218,6 +218,44 @@ class AxiamClientOidcDiscoveryTest {
         }
     }
 
+    /**
+     * &sect;21.5 / &sect;12.1 (contract 1.60): a 1.0.0 server's document carries the four
+     * revocation and introspection members; a server before 1.0.0 omits them. This model
+     * does not carry them (they MAY be modelled, and describe the deployment rather than
+     * changing how this SDK authenticates), so the check is that both documents decode
+     * and every modelled member reads the same.
+     */
+    @Test
+    void aDocumentWithTheFourContract160MembersAndOneWithoutThemBothDecode() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            String without = OidcTestSupport.discoveryResponseWithContract142Members(base).getBody().readUtf8();
+            String with = without.substring(0, without.length() - 1)
+                    + ",\"revocation_endpoint_auth_methods_supported\":[\"client_secret_post\",\"none\"],"
+                    + "\"introspection_endpoint_auth_methods_supported\":[\"client_secret_post\"],"
+                    + "\"revocation_endpoint_auth_signing_alg_values_supported\":[\"PS256\",\"ES256\",\"EdDSA\"],"
+                    + "\"introspection_endpoint_auth_signing_alg_values_supported\":[\"PS256\",\"ES256\",\"EdDSA\"]}";
+            for (String body : List.of(with, without)) {
+                server.enqueue(new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                        .setBody(body));
+            }
+            server.start();
+
+            OidcConfiguration current;
+            try (AxiamClient client = AxiamClient.builder(base, "33333333-3333-3333-3333-333333333333").build()) {
+                current = client.oidcDiscover();
+            }
+            OidcConfiguration older;
+            try (AxiamClient client = AxiamClient.builder(base, "33333333-3333-3333-3333-333333333333").build()) {
+                older = client.oidcDiscover();
+            }
+            assertEquals(2, server.getRequestCount());
+            assertEquals(older, current, "the four members change nothing this model carries");
+            assertEquals(stripSlash(base) + "/oauth2/revoke", current.revocation_endpoint());
+            assertEquals(List.of("PS256", "ES256", "EdDSA"), current.token_endpoint_auth_signing_alg_values_supported());
+        }
+    }
+
     private static String stripSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }

@@ -792,7 +792,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises federation.list_configs. */
     @Test
     void federationListConfigs() throws Exception {
-        mount("GET", "/api/v1/federation-configs", 200, "{\"items\": [{\"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        mount("GET", "/api/v1/federation-configs", 200, "{\"items\": [{\"allow_sha1_signatures\": true, \"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
         client.management().federation().listConfigs(PageRequest.of(50));
         client.management().federation().listConfigsAll(PageRequest.of(50));
     }
@@ -800,22 +800,22 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises federation.create_config. */
     @Test
     void federationCreateConfig() throws Exception {
-        mount("POST", "/api/v1/federation-configs", 201, "{\"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().federation().createConfig(new io.axiam.sdk.management.models.CreateFederationConfigRequest(null, null, null, null, null, null, null, null, "example", io.axiam.sdk.Sensitive.of("example"), null, null, "example", "example", null, null, null, null, null, null, null));
+        mount("POST", "/api/v1/federation-configs", 201, "{\"allow_sha1_signatures\": true, \"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        client.management().federation().createConfig(new io.axiam.sdk.management.models.CreateFederationConfigRequest(null, null, null, null, null, null, null, null, null, "example", io.axiam.sdk.Sensitive.of("example"), null, null, null, "example", "example", null, null, null, null, null, null, null));
     }
 
     /** Exercises federation.get_config. */
     @Test
     void federationGetConfig() throws Exception {
-        mount("GET", "/api/v1/federation-configs/" + EXAMPLE_ID + "", 200, "{\"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        mount("GET", "/api/v1/federation-configs/" + EXAMPLE_ID + "", 200, "{\"allow_sha1_signatures\": true, \"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
         client.management().federation().getConfig(EXAMPLE_ID);
     }
 
     /** Exercises federation.update_config. */
     @Test
     void federationUpdateConfig() throws Exception {
-        mount("PUT", "/api/v1/federation-configs/" + EXAMPLE_ID + "", 200, "{\"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().federation().updateConfig(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateFederationConfigRequest(null, null, null, null, null, null, null, null, null, io.axiam.sdk.Sensitive.of("example"), null, null, null, null, null, null, null, null, null, null));
+        mount("PUT", "/api/v1/federation-configs/" + EXAMPLE_ID + "", 200, "{\"allow_sha1_signatures\": true, \"allow_tenant_inheritance\": true, \"allowed_algorithms\": [], \"allowed_issuer_tenants\": [], \"attribute_map\": null, \"client_id\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"effective_scopes\": [], \"enabled\": true, \"has_bundled_mark\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"mints_client_secret\": true, \"pkce_required\": true, \"protocol\": \"example\", \"provider\": \"example\", \"provider_kind\": \"example\", \"scopes\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"token_exchange\": {\"accepted_audiences\": [], \"enabled\": true, \"max_token_age_secs\": 1, \"scope_map\": {}, \"subject_mapping\": \"example\"}, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        client.management().federation().updateConfig(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateFederationConfigRequest(null, null, null, null, null, null, null, null, null, null, io.axiam.sdk.Sensitive.of("example"), null, null, null, null, null, null, null, null, null, null, null));
     }
 
     /** Exercises federation.delete_config. */
@@ -856,7 +856,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises notification_rules.list. */
     @Test
     void notificationRulesList() throws Exception {
-        mount("GET", "/api/v1/notification-rules", 200, "{\"items\": [{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        mount("GET", "/api/v1/notification-rules", 200, "{\"items\": [{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"window_minutes\": 1}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
         client.management().notificationRules().list(PageRequest.of(50));
         client.management().notificationRules().listAll(PageRequest.of(50));
     }
@@ -864,22 +864,22 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     /** Exercises notification_rules.create. */
     @Test
     void notificationRulesCreate() throws Exception {
-        mount("POST", "/api/v1/notification-rules", 201, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().notificationRules().create(new io.axiam.sdk.management.models.CreateNotificationRuleRequest("example", java.util.List.of(), "example", java.util.List.of()));
+        mount("POST", "/api/v1/notification-rules", 201, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"window_minutes\": 1}");
+        client.management().notificationRules().create(new io.axiam.sdk.management.models.CreateNotificationRuleRequest("example", java.util.List.of(), "example", java.util.List.of(), null));
     }
 
     /** Exercises notification_rules.get. */
     @Test
     void notificationRulesGet() throws Exception {
-        mount("GET", "/api/v1/notification-rules/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
+        mount("GET", "/api/v1/notification-rules/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"window_minutes\": 1}");
         client.management().notificationRules().get(EXAMPLE_ID);
     }
 
     /** Exercises notification_rules.update. */
     @Test
     void notificationRulesUpdate() throws Exception {
-        mount("PUT", "/api/v1/notification-rules/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().notificationRules().update(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateNotificationRuleRequest(null, null, null, null, null));
+        mount("PUT", "/api/v1/notification-rules/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"description\": \"example\", \"enabled\": true, \"events\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"recipient_emails\": [], \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"window_minutes\": 1}");
+        client.management().notificationRules().update(EXAMPLE_ID, new io.axiam.sdk.management.models.UpdateNotificationRuleRequest(null, null, null, null, null, null));
     }
 
     /** Exercises notification_rules.delete. */
@@ -1113,7 +1113,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void scimTargetsCreate() throws Exception {
         mount("POST", "/api/v1/scim-targets", 201, "{\"auth\": {\"type\": \"bearer\"}, \"base_url\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"deprovision\": \"deactivate\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"push_groups\": true, \"scope\": {\"type\": \"all_users\"}, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"user_name_from\": \"username\"}");
-        client.management().scimTargets().create(new io.axiam.sdk.management.models.ScimTargetInput(new io.axiam.sdk.management.models.ScimTargetAuthBearer("bearer"), "example", io.axiam.sdk.Sensitive.of("example"), null, null, "example", null, new io.axiam.sdk.management.models.ScimTargetScopeAllUsers("all_users"), null));
+        client.management().scimTargets().create(new io.axiam.sdk.management.models.ScimTargetInput(new io.axiam.sdk.management.models.ScimTargetAuthBearer("bearer"), "example", io.axiam.sdk.Sensitive.of("example"), null, null, null, "example", null, new io.axiam.sdk.management.models.ScimTargetScopeAllUsers("all_users"), null));
     }
 
     /** Exercises scim_targets.get. */
@@ -1127,7 +1127,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void scimTargetsUpdate() throws Exception {
         mount("PUT", "/api/v1/scim-targets/" + EXAMPLE_ID + "", 200, "{\"auth\": {\"type\": \"bearer\"}, \"base_url\": \"example\", \"created_at\": \"2026-08-26T00:00:00Z\", \"deprovision\": \"deactivate\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"name\": \"example\", \"push_groups\": true, \"scope\": {\"type\": \"all_users\"}, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"user_name_from\": \"username\"}");
-        client.management().scimTargets().update(EXAMPLE_ID, new io.axiam.sdk.management.models.ScimTargetInput(new io.axiam.sdk.management.models.ScimTargetAuthBearer("bearer"), "example", io.axiam.sdk.Sensitive.of("example"), null, null, "example", null, new io.axiam.sdk.management.models.ScimTargetScopeAllUsers("all_users"), null));
+        client.management().scimTargets().update(EXAMPLE_ID, new io.axiam.sdk.management.models.ScimTargetInput(new io.axiam.sdk.management.models.ScimTargetAuthBearer("bearer"), "example", io.axiam.sdk.Sensitive.of("example"), null, null, null, "example", null, new io.axiam.sdk.management.models.ScimTargetScopeAllUsers("all_users"), null));
     }
 
     /** Exercises scim_targets.delete. */

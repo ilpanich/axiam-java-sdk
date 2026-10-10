@@ -15,6 +15,10 @@ import io.axiam.sdk.Sensitive;
 /**
  * The CreateFederationConfigRequest schema from the server's OpenAPI document.
  *
+ * @param allowSha1Signatures SAML only: accept IdP responses signed with SHA-1 ({@code rsa-sha1}).
+ *     Default {@code false} — since 1.0.0 the SP verifier accepts only SHA-2 signatures. The escape
+ *     hatch for an IdP that cannot sign with SHA-2 yet; refused on a non-SAML config, and audited
+ *     ({@code federation.sha1_signatures_allowed}) when set to {@code true}.
  * @param allowTenantInheritance Whether tenants of this organization may inherit this provider.
  *     Only meaningful on a config in the organization-scope tenant.
  * @param allowedAlgorithms Accepted JWT signing algorithms (OIDC) or signature algorithms (SAML).
@@ -35,6 +39,10 @@ import io.axiam.sdk.Sensitive;
  * @param clientId OAuth2 client ID registered with the external IdP.
  * @param clientSecret OAuth2 client secret registered with the external IdP. -- SECRET: redacted
  *     from toString and from every JSON rendering except the one request body it is sent in
+ * @param idpMetadataSigningCertPem SAML only: the PEM certificate the IdP signs its metadata
+ *     document with (#530). When set, the metadata must carry one SHA-2 signature on its {@code
+ *     EntityDescriptor} root that verifies against it, or no sign-in starts. Omitted: the metadata is
+ *     not signature-checked.
  * @param idpSigningCertPem PEM-encoded X.509 certificate for verifying SAML assertions or OIDC
  *     signatures (CQ-B40/REQ-14 AC-5). Required for SAML configs.
  * @param metadataUrl OIDC discovery URL or SAML metadata URL.
@@ -56,6 +64,7 @@ import io.axiam.sdk.Sensitive;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateFederationConfigRequest(
+        @JsonProperty("allow_sha1_signatures") @Nullable Boolean allowSha1Signatures,
         @JsonProperty("allow_tenant_inheritance") @Nullable Boolean allowTenantInheritance,
         @JsonProperty("allowed_algorithms") @Nullable List<String> allowedAlgorithms,
         @JsonProperty("allowed_issuer_tenants") @Nullable List<String> allowedIssuerTenants,
@@ -66,6 +75,7 @@ public record CreateFederationConfigRequest(
         @JsonProperty("button_icon") @Nullable String buttonIcon,
         @JsonProperty("client_id") String clientId,
         @JsonProperty("client_secret") Sensitive clientSecret,
+        @JsonProperty("idp_metadata_signing_cert_pem") @Nullable String idpMetadataSigningCertPem,
         @JsonProperty("idp_signing_cert_pem") @Nullable String idpSigningCertPem,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
         @JsonProperty("protocol") String protocol,

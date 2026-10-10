@@ -17,15 +17,15 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 - **Maven coordinates:** `io.github.ilpanich:axiam-sdk` (BOM: `io.github.ilpanich:axiam-bom`)
 - **GroupId:** `io.github.ilpanich`
 - **ArtifactId:** `axiam-sdk`
-- **Registry:** Maven Central _(reserved, not yet published)_
+- **Registry:** Maven Central
 - **API docs:** [javadoc.io](https://javadoc.io/doc/io.github.ilpanich/axiam-sdk) — served automatically from the `-javadoc.jar` on Maven Central
 - **License:** Apache-2.0
 - **Java:** 21 minimum (`SupportedVersions.MIN_JAVA_RELEASE`) — see [Supported Java versions](#supported-java-versions)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.59**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
-§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32 and §33, with
+This SDK conforms to **contract 1.60**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33 and §34, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
 gRPC-only `getUserInfo` operation and the §1.1.1 gRPC-only `validateToken`/
@@ -47,15 +47,31 @@ the §33 CIBA client helpers (`cibaInitiate`, `cibaPoll`, `cibaAwait`,
 `cibaHandlePing`) including the §33.2 signed request form for all three algorithms
 (PS256, ES256, EdDSA). The §21.3.1 vector A amendment (the seventh
 `mtls_endpoint_aliases` member, `backchannel_authentication_endpoint`) is pinned.
-Nothing of §28.12–§33 is carved out, and those sections are met as the contract 1.59
-clarifications of §34.2 read them (P1 – P12; the Java follow-up F-59-04 is closed):
-`poll` never records a `jti` it does not return, a `5xx` on `cibaPoll` is transient
-whatever its body, no write goes out twice — not by OkHttp's connection-failure
-re-send, not by a refresh after a tenant-path `401`, not by a redirect — and an
-unknown value is refused locally rather than sent.
+Nothing of §28.12–§33 is carved out, and those sections are met as the
+clarifications of §34.2 read them (P1 – P12, as contract 1.60 amends them; the Java
+follow-up F-59-04 is closed): `poll` never records a `jti` it does not return, a
+replay store that cannot answer is a `NetworkError` and no verdict, the SSF key cache
+expires within ten minutes and a failed key fetch counts toward the once-a-minute
+limit, a `5xx` on `cibaPoll` is transient whatever its body, no write goes out twice —
+not by OkHttp's connection-failure re-send, not by a refresh after a tenant-path
+`401`, not by a redirect — and an unknown value is refused locally rather than sent.
+Every §34.4 row contract 1.60 assigns to Java is done: the §27.15 members
+(`window_minutes`, `allow_sha1_signatures`, `idp_metadata_signing_cert_pem`) and note
+8's explicit-`null` clear on `federation.updateConfig`, §31's `expected_updated_at`
+(sent as the caller's string, and carried by `ReplacementBodies.from`), the §19.1
+`ssf_unjudged` event (`TelemetryEvent.SsfUnjudged`), and the §12.1 refresh `scope` and
+§21.5 discovery checks. §35 (certificate revocation lists) is informative and has no
+SDK surface.
+
+**Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
+Versioning](https://semver.org/): a breaking change to the public API ships only in a
+new major version. One caveat comes with Java records: the generated §27 models are
+records, so a member the server's schema adds later adds a component to the canonical
+constructor. Build request bodies with their builders or factories where they have
+one, and treat positional construction as tied to the contract version.
 
 §12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29,
-§30, §31, §32, §32.7, §33 and §33.2 signed are named
+§30, §31, §32, §32.7, §33, §33.2 signed and §34 are named
 rather than folded into the range because they landed after this SDK already
 claimed §1–§13: widening the range silently would turn a statement that was true
 when written into a different claim without anyone editing it.
@@ -817,6 +833,27 @@ ExchangedToken exchanged = client.tokenExchange(
         "orders-service", null, null, null);
 ```
 
+For a **delegation**, pass an `actorToken`. It must have been issued to *this same
+client* (§15.2 rule 9): the usual actor is the exchanging client's own
+`client_credentials` token, so obtain it with the same client's `client_credentials`
+grant and pass it yourself:
+
+```java
+// The actor is this client's own client_credentials token (§15.2 rule 9).
+Sensitive actor = client.loginClientCredentials().accessToken();
+ExchangedToken delegated = client.tokenExchange(
+        Sensitive.of(userToken),
+        OidcOperations.ACCESS_TOKEN_TYPE,
+        actor,                           // issued to the exchanging client, not to another
+        List.of("orders:read"), "orders-service", null, null, null);
+// delegated carries act.sub == this client's client_id
+```
+
+An actor token issued to another client, a console sign-in or a service account is
+answered `400 invalid_request` (`actor_token was not issued to the exchanging client`).
+That surfaces as an `OAuthProtocolError`, unchanged: it is not retried, not rewritten
+into an impersonation, and not repaired by substituting a token of the SDK's own.
+
 Most of what this method does is refuse to be helpful:
 
 - **No default `actorToken`.** Passing `null` asks for *impersonation*; the SDK
@@ -1033,6 +1070,22 @@ try {
 overload) and throws `WebhookVerificationException` — never a bare/generic
 exception — on any failure. A `Clock` overload is available for tests that
 need a fixed "now".
+
+## AMQP (§8) — a broker confirm is not evidence that AXIAM saw a message
+
+This SDK is an AMQP SDK: `io.axiam.sdk.amqp` verifies the HMAC of the AMQP messages it
+consumes (§8) and `io.axiam.sdk.reactor` serves hook events over the bus. Read
+this before you build on a publisher confirm.
+
+**A broker confirm is not evidence that AXIAM saw a message.** A publisher confirm (the
+broker's `basic.ack` of a publish) means only that the *broker* accepted the message; it
+never means AXIAM decided an authorization request or recorded an audit event. A server
+running the **minimal profile** (`AXIAM__AMQP__ENABLED=false`) reads no AMQP queue at all:
+it does not consume `axiam.authz.request` or `axiam.audit.events`, whatever a broker holds,
+and a message sent there is confirmed by the broker and never read. This SDK never treats a
+confirm as evidence that AXIAM saw a message. Against a minimal-profile server use REST or
+gRPC; `GET /health` reports `profile: minimal` and lists `amqp_authz` and
+`amqp_audit_ingestion` under `unavailable`.
 
 ## Reactors — AMQP extension actors (`io.axiam.sdk.reactor`, §22)
 
@@ -2099,6 +2152,21 @@ SetDirectoryConfig body = ReplacementBodies.from(client.directory().get());
 dropped. `linkAccount` signs the account's owner out everywhere; `delete` stops the
 directory and nothing else.
 
+**Federation configurations (§27.15 note 8).** `federation().updateConfig` follows
+the same rule for its ten nullable members — `metadata_url`, `idp_signing_cert_pem`,
+`idp_metadata_signing_cert_pem`, `provider_slug`, the three OAuth2 endpoints,
+`apple_team_id`/`apple_key_id` (cleared together) and `button_icon`: unset on the
+builder is not sent and keeps the stored value, `null` sends JSON `null` and clears
+it. `allow_sha1_signatures` and `idp_metadata_signing_cert_pem` (SAML only) are sent
+only when you set them; a response from a server older than 1.0.0 reads
+`allowSha1Signatures()` as `false`.
+
+```java
+client.federation().updateConfig(id, UpdateFederationConfigRequest.builder()
+        .idpMetadataSigningCertPem(null)            // {"idp_metadata_signing_cert_pem":null}
+        .build());
+```
+
 **SAML service providers (§29).** Import an SP's metadata into a draft, review it,
 create it — the draft is accepted unchanged:
 
@@ -2123,8 +2191,8 @@ moves its URL, which then needs it again:
 ScimTargetResponse target = client.scimTargets().get(id);
 ScimTargetInput t = ReplacementBodies.from(target);       // credential absent: kept
 client.scimTargets().update(id, new ScimTargetInput(t.auth(), t.baseUrl(), null,
-        DeprovisionPolicy.DELETE, t.enabled(), t.name(), t.pushGroups(), t.scope(),
-        t.userNameFrom()));
+        DeprovisionPolicy.DELETE, t.enabled(), t.expectedUpdatedAt(), t.name(),
+        t.pushGroups(), t.scope(), t.userNameFrom()));   // 409 if written since the read
 
 SsfStreamInput s = ReplacementBodies.from(client.ssf().getStream(streamId));  // header kept
 ```
@@ -2176,8 +2244,10 @@ while (true) {
 
 - The key comes only from the configured JWKS (`jwksUri`, or a `discoveryUrl` whose
   `issuer` must equal yours), fetched over this client's TLS policy without its
-  session; `jwk`/`x5c` headers are never honoured. An unknown `kid` costs one
-  refetch, at most once a minute. A JWKS fetch failure is a `NetworkError`, not a
+  session; `jwk`/`x5c` headers are never honoured. The key set is cached for five
+  minutes (§34.2 P6 caps it at ten). An unknown `kid` costs one refetch, at most once
+  a minute; a failed fetch counts too, so during a JWKS outage a SET within the minute
+  after the failure makes no fetch. A JWKS fetch failure is a `NetworkError`, not a
   verdict on the SET.
 - **A verified SET is recorded** in the replay store (default in-memory, pluggable
   via `ReplayStore`; window seven days, the floor — shorter is refused at
@@ -2185,7 +2255,10 @@ while (true) {
   what you processed — and acknowledge a SET refused as `replayed` too, since this
   receiver accepted it earlier (§34.2 P2). `poll` never acknowledges anything itself.
   The in-memory store is bounded by the window, not in count; a store that cannot
-  answer throws, which refuses the SET (fail closed) and is not a verdict.
+  answer throws, and that is no verdict: `verifySet` raises a `NetworkError`, and
+  `poll` leaves the SET unjudged (in `unjudged()`, never in `events` or `refused`, so
+  neither acknowledge nor refuse it) and emits the `TelemetryEvent.SsfUnjudged` event
+  when it returns normally with any (§19.1).
 - **`poll` never records a `jti` it does not return** (§34.2 P1). It checks the whole
   batch before recording any `jti`, so a JWKS or discovery failure raises having
   recorded nothing and the batch is offered again. A replay store that fails

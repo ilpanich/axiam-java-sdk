@@ -373,13 +373,25 @@ public interface OidcOperations {
      *       handed onward in one outbound call.</li>
      * </ul>
      *
+     * <p><strong>An {@code actorToken} must have been issued to the exchanging
+     * client</strong> (&sect;15.2 rule 9, contract 1.60). The usual actor is
+     * <em>this same client's own</em> {@code client_credentials} token: obtain it
+     * with {@code loginClientCredentials} (or any {@code client_credentials} grant for
+     * the same {@code client_id}) and pass it here yourself; its {@code sub} &mdash; and
+     * so the issued token's {@code act.sub} &mdash; is the client's {@code client_id}.
+     * A token issued to another client, a console sign-in or a service account is
+     * answered {@code 400 invalid_request} (<q>actor_token was not issued to the
+     * exchanging client</q>), which surfaces unchanged: not retried, not rewritten into an
+     * impersonation, and not repaired by substituting a token of the SDK's own.
+     *
      * <p>A cross-tenant subject token answers {@code invalid_grant},
      * identically to an expired one. The SDK does not try to tell them apart
      * (&sect;15.3): the server collapses them because distinguishing them is a
      * tenant-enumeration signal.
      *
      * @param subjectToken  the token being exchanged (&sect;15.5 secret)
-     * @param actorToken    the acting party for a <em>delegation</em>, or {@code null} for impersonation
+     * @param actorToken    the acting party for a <em>delegation</em>: the exchanging client's own
+     *                      {@code client_credentials} token (&sect;15.2 rule 9), or {@code null} for impersonation
      * @param scopes        scopes to request, or {@code null} to omit
      * @param audience      the service the issued token is for, or {@code null}
      * @param resource      the RFC 8707 synonym of {@code audience}, or {@code null}
@@ -428,7 +440,8 @@ public interface OidcOperations {
      *                         exchange, or {@link #JWT_TOKEN_TYPE} for a
      *                         partner IdP's JWT. {@code null} or blank is
      *                         refused client-side, with no wire call.
-     * @param actorToken       the acting party for a <em>delegation</em>, or {@code null} for impersonation
+     * @param actorToken       the acting party for a <em>delegation</em>: the exchanging client's own
+     *                         {@code client_credentials} token (&sect;15.2 rule 9), or {@code null} for impersonation
      * @param scopes           scopes to request, or {@code null} to omit
      * @param audience         the service the issued token is for, or {@code null}
      * @param resource         the RFC 8707 synonym of {@code audience}, or {@code null}

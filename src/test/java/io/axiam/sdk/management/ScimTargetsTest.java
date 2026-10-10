@@ -74,9 +74,13 @@ class ScimTargetsTest extends ManagementTestBase {
     }
 
     private static ScimTargetInput input(String credential) {
+        return input(credential, null);
+    }
+
+    private static ScimTargetInput input(String credential, String expectedUpdatedAt) {
         return new ScimTargetInput(new ScimTargetAuthBearer("bearer"), "https://idp.example/scim/v2",
-                credential == null ? null : Sensitive.of(credential), null, null, "Downstream", null,
-                new ScimTargetScopeAllUsers("all_users"), null);
+                credential == null ? null : Sensitive.of(credential), null, null, expectedUpdatedAt,
+                "Downstream", null, new ScimTargetScopeAllUsers("all_users"), null);
     }
 
     private static JsonNode wire(Object body) throws Exception {
@@ -127,7 +131,7 @@ class ScimTargetsTest extends ManagementTestBase {
         client.scimTargets().update(id, input(c));
         assertTrue(c.equals(put.last().json().path("credential").asText()), "the credential is sent");
         // name, base_url, auth and scope cannot be null: the constructor refuses them.
-        assertEquals(9, ScimTargetInput.class.getRecordComponents().length);
+        assertEquals(10, ScimTargetInput.class.getRecordComponents().length);
         assertCannotBeBuiltWithout(input(null), "name", "base_url", "auth", "scope");
 
         assertEquals(JSON.readTree("{\"type\":\"bearer\"}"), wire(new ScimTargetAuthBearer("bearer")));
@@ -139,6 +143,30 @@ class ScimTargetsTest extends ManagementTestBase {
         UUID group = UUID.randomUUID();
         assertEquals(JSON.readTree("{\"type\":\"groups\",\"group_ids\":[\"" + group + "\"]}"),
                 wire(new ScimTargetScopeGroups("groups", List.of(group))));
+    }
+
+    @Test
+    void expectedUpdatedAtIsSentExactlyAsGivenAndAbsentWhenUnset() throws Exception {
+        // §31.8 test 3 (contract 1.60): the caller's string, not re-formatted — a
+        // non-UTC offset and a trailing-zero fraction an OffsetDateTime would lose.
+        UUID id = UUID.randomUUID();
+        Route put = mount("PUT", TARGETS + "/" + id, 200, targetBody().toString());
+        String read = "2026-10-05T02:00:00.120000+02:00";
+        client.scimTargets().update(id, input(null, read));
+        assertEquals(read, put.last().json().path("expected_updated_at").asText());
+        assertTrue(put.last().json().path("expected_updated_at").isTextual());
+        client.scimTargets().update(id, input(null));
+        assertFalse(put.last().json().has("expected_updated_at"), "absent when unset");
+
+        // The server's answer for a target written since: 409, surfaced, never retried.
+        UUID stale = UUID.randomUUID();
+        Route conflict = mount("PUT", TARGETS + "/" + stale, 409,
+                "{\"error\":\"conflict\",\"message\":\"the SCIM target changed since it was read\"}");
+        ConflictError e = assertThrows(ConflictError.class,
+                () -> client.scimTargets().update(stale, input(null, read)));
+        assertTrue(e.getMessage().contains("changed since it was read"), e.getMessage());
+        assertEquals(1, conflict.calls(), "a 409 is the caller's to resolve: one request");
+        assertEquals(read, conflict.last().json().path("expected_updated_at").asText());
     }
 
     // ── 4. Open decoding and pagination ──────────────────────────────────
@@ -262,5 +290,7 @@ class ScimTargetsTest extends ManagementTestBase {
         assertEquals(t.baseUrl(), body.baseUrl());
         assertEquals(Boolean.TRUE, body.enabled());
         assertEquals(t.auth(), body.auth());
+        // §31.3 rule 4: the composed read-modify-write is conditional on the version read.
+        assertEquals(t.updatedAt(), java.time.OffsetDateTime.parse(body.expectedUpdatedAt()));
     }
 }

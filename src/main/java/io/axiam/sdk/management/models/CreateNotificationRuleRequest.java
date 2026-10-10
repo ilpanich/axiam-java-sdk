@@ -6,6 +6,7 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
@@ -16,6 +17,9 @@ import java.util.List;
  * @param events Event types that trigger this rule.
  * @param name Human-readable name for the rule.
  * @param recipientEmails Email addresses to notify.
+ * @param windowMinutes Minutes in which one event type mails each recipient at most once: the
+ *     first event of a window is mailed, the rest are counted and the next mail says how many were not
+ *     sent (#551). 1 … 1440; 15 when omitted.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -23,6 +27,7 @@ public record CreateNotificationRuleRequest(
         @JsonProperty("description") String description,
         @JsonProperty("events") List<NotificationEventType> events,
         @JsonProperty("name") String name,
-        @JsonProperty("recipient_emails") List<String> recipientEmails
+        @JsonProperty("recipient_emails") List<String> recipientEmails,
+        @JsonProperty("window_minutes") @Nullable Integer windowMinutes
 ) {
 }

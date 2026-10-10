@@ -155,6 +155,41 @@ class SsfManagementTest extends ManagementTestBase {
         assertNull(JSON.treeToValue(streamBody(), SsfStream.class).transmitterInactiveReason());
     }
 
+    /**
+     * &sect;34.4 B4 (contract 1.60): event types are strings. A URI this SDK has never seen,
+     * read from the server, keeps its value and goes back on {@code update_stream} unchanged:
+     * the server judges it, the SDK keeps no list of URIs that would go stale (&sect;32.2).
+     */
+    @Test
+    void b4AnUnseenEventTypeUriRoundTripsThroughUpdateStreamUnchanged() throws Exception {
+        String unseen = "https://example.test/event-type/never-seen-by-this-sdk";
+        ObjectNode read = streamBody();
+        read.putArray("events_allowed").add(REVOKED).add(unseen);
+        read.putArray("events_requested").add(unseen);
+        read.putArray("events_delivered").add(unseen);
+        SsfStream stream = JSON.treeToValue(read, SsfStream.class);
+        assertEquals(List.of(REVOKED, unseen), stream.eventsAllowed());
+        assertEquals(List.of(unseen), stream.eventsRequested());
+
+        UUID id = UUID.randomUUID();
+        Route put = mount("PUT", STREAMS + "/" + id, 200, read.toString());
+        SsfStream updated = client.ssf().updateStream(id, ReplacementBodies.from(stream));
+        JsonNode sent = put.last().json();
+        assertEquals(1, put.calls(), "the unseen URI is not refused locally");
+        assertEquals(List.of(REVOKED, unseen),
+                List.of(sent.path("events_allowed").get(0).asText(), sent.path("events_allowed").get(1).asText()));
+        assertEquals(2, sent.path("events_allowed").size());
+        assertEquals(unseen, sent.path("events_requested").get(0).asText());
+        assertEquals(1, sent.path("events_requested").size());
+        assertEquals(List.of(REVOKED, unseen), updated.eventsAllowed());
+
+        // A URI the caller types is a string too: it is sent as typed, and the server judges it.
+        SsfStreamInput typed = new SsfStreamInput("https://rp.example", null, null, SsfDeliveryMethod.PUSH,
+                null, "https://rp.example/ssf", List.of("urn:typed:by:the:caller"), null, "rp-1", null, null, null);
+        client.ssf().updateStream(id, typed);
+        assertEquals("urn:typed:by:the:caller", put.last().json().path("events_allowed").get(0).asText());
+    }
+
     // ── 4. Pagination ────────────────────────────────────────────────────
 
     @Test
