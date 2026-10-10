@@ -152,6 +152,67 @@ class AxiamClientTokenExchangeTest {
         }
     }
 
+    /**
+     * &sect;15.6, contract 1.60 (&sect;15.2 rule 9): an {@code actor_token} the mock answers with
+     * {@code 400 invalid_request} (<q>actor_token was not issued to the exchanging client</q>)
+     * surfaces that error unchanged, with exactly one request and no rewriting.
+     */
+    @Test
+    void s156ActorTokenNotIssuedToTheExchangingClientSurfacesUnchanged() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(oauthErrorWithDescription("invalid_request",
+                    "actor_token was not issued to the exchanging client"));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
+                        () -> client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE,
+                                Sensitive.of(ACTOR_TOKEN), List.of("orders:read"), null, null, null, null));
+
+                assertEquals("invalid_request", error.error());
+                assertEquals("actor_token was not issued to the exchanging client", error.errorDescription());
+                assertEquals(2, server.getRequestCount(), "discovery + exactly one exchange: no retry");
+                server.takeRequest();
+                String body = server.takeRequest().getBody().readUtf8();
+                assertTrue(body.contains("actor_token=" + ACTOR_TOKEN),
+                        "sent as written: not dropped into an impersonation, not replaced by a token of the SDK's own");
+                assertTrue(body.contains("scope=orders%3Aread"), "the scope is not rewritten either");
+            }
+        }
+    }
+
+    /**
+     * &sect;15.2 rule 9, the documented usage: the actor is the same client's own
+     * {@code client_credentials} token, which the caller obtains and passes (the SDK supplies no
+     * default). The README example is this sequence.
+     */
+    @Test
+    void theActorIsTheSameClientsClientCredentialsTokenPassedByTheCaller() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.tokenResponse("cc-token-of-this-client", null, null));
+            server.enqueue(exchangeResponse("orders:read", false));
+            server.start();
+
+            try (AxiamClient client = confidential(base).build()) {
+                Sensitive actor = client.loginClientCredentials().accessToken();
+                client.tokenExchange(Sensitive.of(SUBJECT_TOKEN), OidcOperations.ACCESS_TOKEN_TYPE,
+                        actor, List.of("orders:read"), "orders-service", null, null, null);
+
+                server.takeRequest();
+                String cc = server.takeRequest().getBody().readUtf8();
+                assertTrue(cc.contains("grant_type=client_credentials"));
+                assertTrue(cc.contains("client_id=api-gateway"));
+                String exchange = server.takeRequest().getBody().readUtf8();
+                assertTrue(exchange.contains("actor_token=cc-token-of-this-client"));
+                assertTrue(exchange.contains("client_id=api-gateway"), "the exchange authenticates as the same client");
+            }
+        }
+    }
+
     @Test
     void theSixErrorCodesReachTheCallerUnchanged() throws Exception {
         // Including cross-tenant, which the server deliberately collapses into

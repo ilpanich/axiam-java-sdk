@@ -817,6 +817,27 @@ ExchangedToken exchanged = client.tokenExchange(
         "orders-service", null, null, null);
 ```
 
+For a **delegation**, pass an `actorToken`. It must have been issued to *this same
+client* (§15.2 rule 9): the usual actor is the exchanging client's own
+`client_credentials` token, so obtain it with the same client's `client_credentials`
+grant and pass it yourself:
+
+```java
+// The actor is this client's own client_credentials token (§15.2 rule 9).
+Sensitive actor = client.loginClientCredentials().accessToken();
+ExchangedToken delegated = client.tokenExchange(
+        Sensitive.of(userToken),
+        OidcOperations.ACCESS_TOKEN_TYPE,
+        actor,                           // issued to the exchanging client, not to another
+        List.of("orders:read"), "orders-service", null, null, null);
+// delegated carries act.sub == this client's client_id
+```
+
+An actor token issued to another client, a console sign-in or a service account is
+answered `400 invalid_request` (`actor_token was not issued to the exchanging client`).
+That surfaces as an `OAuthProtocolError`, unchanged: it is not retried, not rewritten
+into an impersonation, and not repaired by substituting a token of the SDK's own.
+
 Most of what this method does is refuse to be helpful:
 
 - **No default `actorToken`.** Passing `null` asks for *impersonation*; the SDK
@@ -1033,6 +1054,22 @@ try {
 overload) and throws `WebhookVerificationException` — never a bare/generic
 exception — on any failure. A `Clock` overload is available for tests that
 need a fixed "now".
+
+## AMQP (§8) — a broker confirm is not evidence that AXIAM saw a message
+
+This SDK is an AMQP SDK: `io.axiam.sdk.amqp` verifies the HMAC of the AMQP messages it
+consumes (§8) and `io.axiam.sdk.reactor` serves hook events over the bus. Read
+this before you build on a publisher confirm.
+
+**A broker confirm is not evidence that AXIAM saw a message.** A publisher confirm (the
+broker's `basic.ack` of a publish) means only that the *broker* accepted the message; it
+never means AXIAM decided an authorization request or recorded an audit event. A server
+running the **minimal profile** (`AXIAM__AMQP__ENABLED=false`) reads no AMQP queue at all:
+it does not consume `axiam.authz.request` or `axiam.audit.events`, whatever a broker holds,
+and a message sent there is confirmed by the broker and never read. This SDK never treats a
+confirm as evidence that AXIAM saw a message. Against a minimal-profile server use REST or
+gRPC; `GET /health` reports `profile: minimal` and lists `amqp_authz` and
+`amqp_audit_ingestion` under `unavailable`.
 
 ## Reactors — AMQP extension actors (`io.axiam.sdk.reactor`, §22)
 

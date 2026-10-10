@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Contract 1.60 (W3, phase 1)
+
+Re-vendored `CONTRACT.md` at contract 1.60 (`openapi.json`, `management-registry.json` and
+`proto/` are re-vendored by the second phase of the port). The rows of §34.4 that name Java:
+
+#### Changed (behaviour; **breaking** where stated)
+
+- **B1 (§32.7 step 9, §32.8 test 6; §34.2 P3, P4).** A replay store that cannot answer gives
+  no verdict. `ReplayStore.checkAndRecord` already answered by throwing; what it threw was
+  re-raised as the store's own exception, which is not a §2 type. **Breaking:** whatever a
+  store throws (any `RuntimeException`, including a `SetVerificationError` a store has no
+  business throwing) now reaches the caller of `SsfReceiver.verifySet` and `poll` as a
+  `NetworkError` (cause chained by class name only, no reason code); a `NetworkError`,
+  `AuthError` or `AuthzError` the store throws itself passes through. A caller that caught the
+  store's own exception type around `verifySet`/`poll` must catch `NetworkError`. The SET is
+  neither refused nor acknowledged: it is not recorded, and it is never read as `replayed`
+  (which `poll` tells the caller to acknowledge). `ReplayStore`'s javadoc states the third
+  answer. The default `MemoryReplayStore` cannot fail and is unchanged.
+- **B6 (§27 `saml`; §34.2 P12.9) - source-incompatible for code that names the type.**
+  `SamlSpMetadataDraft.serviceProvider()` is now a new generated `SamlServiceProviderDraft`
+  (same components, none required), so a draft that lacks `acs_urls`, `display_name` or
+  `entity_id` decodes instead of failing inside Jackson. `createServiceProvider` and
+  `updateServiceProvider` gain an overload taking it, which refuses a draft missing a
+  required member locally with `ValidationError` and sends no request; a call that passes
+  `draft.serviceProvider()` straight through compiles unchanged. `SamlServiceProviderInput`
+  still cannot be built without its three required members. Code that assigned the
+  draft's service provider to a `SamlServiceProviderInput` variable no longer compiles.
+
+#### Verified, with the test the contract names
+
+- **B4 (§32.2; §34.2 P12.2).** Event types are strings. An unseen event-type URI read from the
+  server keeps its value and is sent back unchanged by `ssf().updateStream` via
+  `ReplacementBodies.from`; no client-side list of URIs exists to go stale. Test
+  `b4AnUnseenEventTypeUriRoundTripsThroughUpdateStreamUnchanged`.
+- **§15.2 rule 9 / §15.6.** The `actorToken` javadoc and the README example now obtain the
+  actor token from the same client's `client_credentials` grant, and the added §15.6 test
+  pins that a `400 invalid_request` (`actor_token was not issued to the exchanging client`)
+  surfaces unchanged with exactly one exchange request and no rewriting.
+
+#### Documentation
+
+- **§8 minimal profile.** The README says a broker confirm is not evidence that AXIAM saw a
+  message, and that a minimal-profile server reads no AMQP queue.
+
 ### Contract 1.59 (F-59-04)
 
 Re-vendored `CONTRACT.md` at contract 1.59 (axiam `fe369eb`; `openapi.json`,
