@@ -27,7 +27,7 @@ jobs:
       # `test` phase in pom.xml) writes target/site/jacoco/jacoco.xml. GPG
       # signing stays off — this job publishes nothing.
       - name: mvn verify (runs tests under the JaCoCo agent)
-        run: mvn -B verify
+        run: ./mvnw -B verify
 
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329  # v2
