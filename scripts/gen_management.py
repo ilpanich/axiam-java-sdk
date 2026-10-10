@@ -2,7 +2,7 @@
 """Generate the CONTRACT §27 management surface for the Java SDK.
 
 Reads ``management-registry.json`` (190 operations across 28 namespaces as of
-contract 1.58, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
+contract 1.60, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
 schemas those operations carry, and writes:
 
 - ``src/main/java/io/axiam/sdk/management/models/*.java`` — one record per
@@ -81,9 +81,19 @@ STRING_ENUMS = {"SsfEventType"}
 # §29.8 test 8 asks the same of a *response*: `SamlIdpInfo`'s two credential
 # ids are null when the slot is empty, and that null must stay distinct from an
 # absent member, so a server that stopped sending the member is noticed.
+#
+# §27.15 note 8 (contract 1.60) names ten more: every nullable string member of
+# `UpdateFederationConfigRequest` is cleared by an explicit `null` and left
+# unchanged when omitted. The body's other members (the booleans, the lists,
+# `client_secret`, `attribute_map`, `token_exchange`) cannot be cleared -- the
+# server reads `null` there as absent -- so they stay plain optionals.
 EXPLICIT_NULL_FIELDS = {
     ("UpdateDirectoryConfig", "group_base_dn"),
     ("UpdateDirectoryConfig", "group_filter"),
+    *(("UpdateFederationConfigRequest", wire) for wire in (
+        "metadata_url", "idp_signing_cert_pem", "idp_metadata_signing_cert_pem",
+        "provider_slug", "authorization_endpoint", "token_endpoint",
+        "userinfo_endpoint", "apple_team_id", "apple_key_id", "button_icon")),
     ("SamlIdpInfo", "active_credential_id"),
     ("SamlIdpInfo", "next_credential_id"),
 }
@@ -188,6 +198,17 @@ CALL_SITE_NOTES: dict[str, str] = {
         "changes either, or `auth.type`, must carry the credential again or is "
         "refused `400`. It is write-only: no response ever carries it, and the SDK "
         "keeps no copy to re-send."
+    ),
+    "federation.update_config": (
+        "**An explicit `null` clears** (§27.15 note 8): a member left unset on the "
+        "builder is not sent and stays as stored; `metadataUrl(null)`, "
+        "`idpSigningCertPem(null)`, `idpMetadataSigningCertPem(null)`, "
+        "`providerSlug(null)`, the three endpoints, `appleTeamId(null)` / "
+        "`appleKeyId(null)` (only together) and `buttonIcon(null)` send `null` and "
+        "clear the value. An `OAuth2` configuration's three endpoints cannot be "
+        "cleared (`400`). The other members cannot be cleared at all: set them to "
+        "change them. `allow_sha1_signatures` and `idp_metadata_signing_cert_pem` "
+        "are SAML only (`400` on any other protocol)."
     ),
     "scim_targets.update": (
         "**The credential is bound to its URL** (§31.3 rule 2): absent `credential` "
@@ -996,6 +1017,11 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
     for wire in sorted(props):
         explicit_null = (schema_name, wire) in EXPLICIT_NULL_FIELDS
         base_type = "Sensitive" if wire in secrets else java_type(props[wire])
+        default_false = (schema_name, wire) in DEFAULT_FALSE_WHEN_ABSENT
+        if default_false:
+            base_type = "boolean"
+        if (schema_name, wire) in DATE_TIME_AS_STRING:
+            base_type = "String"
         if (schema_name, wire) in DRAFT_PROPERTIES:
             base_type = DRAFT_TWINS[base_type]
         fields.append({
@@ -1014,7 +1040,9 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
             # below, is what actually applies the rule.
             "required": (wire in required and wire not in DEFAULT_TRUE_WHEN_ABSENT
                          and not explicit_null),
-            "doc": props[wire].get("description") or f"the server's {wire} field",
+            "doc": (props[wire].get("description") or f"the server's {wire} field") + (
+                " -- `false` when the server omitted it (a server older than 1.0.0; "
+                "CONTRACT.md §27.15 note 6)" if default_false else ""),
             "secret": wire in secrets,
         })
     return fields, required, description
@@ -1040,6 +1068,23 @@ OMIT_WHEN_EMPTY = {"tenantScope"}
 # way. A wire name here, not a schema name: the field means the same thing
 # wherever it appears.
 DEFAULT_TRUE_WHEN_ABSENT = {"inherit"}
+
+# CONTRACT.md §27.15 note 6 (contract 1.60): `FederationConfigResponse` always
+# carries `allow_sha1_signatures`, but a server older than 1.0.0 omits it and
+# absence means `false`. Generated as a primitive `boolean`, which is what
+# Jackson decodes an absent (or null) member to, so the accessor itself answers
+# `false` rather than a `null` every caller would have to read as `false`.
+# Keyed by schema: on the request bodies the member is an ordinary optional,
+# sent only when the caller sets it.
+DEFAULT_FALSE_WHEN_ABSENT = {("FederationConfigResponse", "allow_sha1_signatures")}
+
+# Timestamps an SDK passes through as the caller's string rather than as a
+# parsed OffsetDateTime. CONTRACT.md §31.8 test 3 (contract 1.60):
+# `expected_updated_at` "is sent on update exactly as given (the string, not
+# re-formatted)". An OffsetDateTime has no spelling of its own -- Jackson
+# re-renders it, normalised to UTC and with trailing fraction digits dropped --
+# so the only way to send what the caller holds is to hold a String.
+DATE_TIME_AS_STRING = {("ScimTargetInput", "expected_updated_at")}
 
 
 def emit_required_checks(type_name: str, fields: list[dict]) -> list[str]:

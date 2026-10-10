@@ -22,6 +22,7 @@ import java.util.List;
  * @param events the server's events field
  * @param name the server's name field
  * @param recipientEmails the server's recipient_emails field
+ * @param windowMinutes The rule's notification window in minutes, 1 … 1440 (#551).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -30,7 +31,8 @@ public record UpdateNotificationRuleRequest(
         @JsonProperty("enabled") @Nullable Boolean enabled,
         @JsonProperty("events") @Nullable List<NotificationEventType> events,
         @JsonProperty("name") @Nullable String name,
-        @JsonProperty("recipient_emails") @Nullable List<String> recipientEmails
+        @JsonProperty("recipient_emails") @Nullable List<String> recipientEmails,
+        @JsonProperty("window_minutes") @Nullable Integer windowMinutes
 ) {
 
     /**
@@ -61,6 +63,7 @@ public record UpdateNotificationRuleRequest(
         private @Nullable List<NotificationEventType> events;
         private @Nullable String name;
         private @Nullable List<String> recipientEmails;
+        private @Nullable Integer windowMinutes;
 
         /**
          * Sets description.
@@ -118,12 +121,23 @@ public record UpdateNotificationRuleRequest(
         }
 
         /**
+         * Sets window_minutes.
+         *
+         * @param windowMinutes the value to send
+         * @return this builder
+         */
+        public Builder windowMinutes(Integer windowMinutes) {
+            this.windowMinutes = windowMinutes;
+            return this;
+        }
+
+        /**
          * Builds the body.
          *
          * @return a UpdateNotificationRuleRequest carrying exactly the fields that were set
          */
         public UpdateNotificationRuleRequest build() {
-            return new UpdateNotificationRuleRequest(description, enabled, events, name, recipientEmails);
+            return new UpdateNotificationRuleRequest(description, enabled, events, name, recipientEmails, windowMinutes);
         }
     }
 }

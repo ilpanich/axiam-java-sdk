@@ -9,6 +9,8 @@ import io.axiam.sdk.management.models.SetDirectoryConfig;
 import io.axiam.sdk.management.models.SsfStream;
 import io.axiam.sdk.management.models.SsfStreamInput;
 
+import java.time.format.DateTimeFormatter;
+
 /**
  * The read-modify-write form &sect;27.4 rule 5 recommends for a
  * {@code replace} update: a read result turned back into the replacement body,
@@ -80,7 +82,10 @@ public final class ReplacementBodies {
     /**
      * {@code scim_targets.update}'s body from a {@code get} result (&sect;31.2).
      * {@code credential} is left absent: absent keeps the stored one, unless the
-     * write moves its URL (&sect;31.3 rule 2).
+     * write moves its URL (&sect;31.3 rule 2). {@code expected_updated_at} carries
+     * the {@code updated_at} that was read (&sect;31.3 rule 4, contract 1.60), so the
+     * update is refused {@code 409} if another administrator wrote the target in
+     * between; pass {@code null} there to replace whatever is stored.
      *
      * @param target the target as read
      * @return the replacement body
@@ -92,6 +97,8 @@ public final class ReplacementBodies {
                 null,
                 target.deprovision(),
                 target.enabled(),
+                target.updatedAt() == null ? null
+                        : DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(target.updatedAt()),
                 target.name(),
                 target.pushGroups(),
                 target.scope(),

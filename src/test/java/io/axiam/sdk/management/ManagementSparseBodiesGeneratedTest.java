@@ -386,6 +386,8 @@ class ManagementSparseBodiesGeneratedTest {
     @Test
     void updateFederationConfigRequestSendsOnlyWhatWasSet() throws Exception {
         assertKeys(UpdateFederationConfigRequest.builder()
+                .allowSha1Signatures(true).build(), "allow_sha1_signatures");
+        assertKeys(UpdateFederationConfigRequest.builder()
                 .allowTenantInheritance(true).build(), "allow_tenant_inheritance");
         assertKeys(UpdateFederationConfigRequest.builder()
                 .allowedAlgorithms(java.util.List.of()).build(), "allowed_algorithms");
@@ -408,6 +410,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateFederationConfigRequest.builder()
                 .enabled(true).build(), "enabled");
         assertKeys(UpdateFederationConfigRequest.builder()
+                .idpMetadataSigningCertPem("example").build(), "idp_metadata_signing_cert_pem");
+        assertKeys(UpdateFederationConfigRequest.builder()
                 .idpSigningCertPem("example").build(), "idp_signing_cert_pem");
         assertKeys(UpdateFederationConfigRequest.builder()
                 .metadataUrl("example").build(), "metadata_url");
@@ -426,6 +430,7 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateFederationConfigRequest.builder()
                 .userinfoEndpoint("example").build(), "userinfo_endpoint");
         assertKeys(UpdateFederationConfigRequest.builder()
+                .allowSha1Signatures(true)
                 .allowTenantInheritance(true)
                 .allowedAlgorithms(java.util.List.of())
                 .allowedIssuerTenants(java.util.List.of())
@@ -437,6 +442,7 @@ class ManagementSparseBodiesGeneratedTest {
                 .clientId("example")
                 .clientSecret(Sensitive.of("example"))
                 .enabled(true)
+                .idpMetadataSigningCertPem("example")
                 .idpSigningCertPem("example")
                 .metadataUrl("example")
                 .provider("example")
@@ -447,12 +453,23 @@ class ManagementSparseBodiesGeneratedTest {
                 .tokenExchange(new TokenExchangeTrustRequest(null, null, null, null, null, null))
                 .userinfoEndpoint("example")
                 .build(),
-                "allow_tenant_inheritance", "allowed_algorithms", "allowed_issuer_tenants",
-                "apple_key_id", "apple_team_id", "attribute_map", "authorization_endpoint",
-                "button_icon", "client_id", "client_secret", "enabled", "idp_signing_cert_pem",
+                "allow_sha1_signatures", "allow_tenant_inheritance", "allowed_algorithms",
+                "allowed_issuer_tenants", "apple_key_id", "apple_team_id", "attribute_map",
+                "authorization_endpoint", "button_icon", "client_id", "client_secret",
+                "enabled", "idp_metadata_signing_cert_pem", "idp_signing_cert_pem",
                 "metadata_url", "provider", "provider_slug", "require_pkce", "scopes",
                 "token_endpoint", "token_exchange", "userinfo_endpoint");
         assertKeys(UpdateFederationConfigRequest.builder().build());
+        assertExplicitNull(UpdateFederationConfigRequest.builder().appleKeyId(null).build(), "apple_key_id");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().appleTeamId(null).build(), "apple_team_id");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().authorizationEndpoint(null).build(), "authorization_endpoint");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().buttonIcon(null).build(), "button_icon");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().idpMetadataSigningCertPem(null).build(), "idp_metadata_signing_cert_pem");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().idpSigningCertPem(null).build(), "idp_signing_cert_pem");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().metadataUrl(null).build(), "metadata_url");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().providerSlug(null).build(), "provider_slug");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().tokenEndpoint(null).build(), "token_endpoint");
+        assertExplicitNull(UpdateFederationConfigRequest.builder().userinfoEndpoint(null).build(), "userinfo_endpoint");
     }
 
     /** §27.4 rule 5 for UpdateGroup: each setter sets exactly its own key. */
@@ -487,13 +504,17 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateNotificationRuleRequest.builder()
                 .recipientEmails(java.util.List.of()).build(), "recipient_emails");
         assertKeys(UpdateNotificationRuleRequest.builder()
+                .windowMinutes(1).build(), "window_minutes");
+        assertKeys(UpdateNotificationRuleRequest.builder()
                 .description("example")
                 .enabled(true)
                 .events(java.util.List.of())
                 .name("example")
                 .recipientEmails(java.util.List.of())
+                .windowMinutes(1)
                 .build(),
-                "description", "enabled", "events", "name", "recipient_emails");
+                "description", "enabled", "events", "name", "recipient_emails",
+                "window_minutes");
         assertKeys(UpdateNotificationRuleRequest.builder().build());
     }
 
