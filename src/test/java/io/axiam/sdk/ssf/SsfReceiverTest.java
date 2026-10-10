@@ -278,6 +278,56 @@ class SsfReceiverTest {
         assertEquals(1, asked.get());
     }
 
+    /**
+     * &sect;32.8 test 6, contract 1.60 (&sect;34.2 P3, P4): a store that cannot answer gives no
+     * verdict. {@code verifySet} raises the &sect;2 type with no reason code, never
+     * {@code replayed}; the SET's {@code jti} is not recorded, so the same SET verifies once the
+     * store is back; and {@code poll} returns it in neither {@code events} nor {@code refused},
+     * records nothing, and sends no {@code ack}.
+     */
+    @Test
+    void test6StoreFailureAStoreThatCannotAnswerGivesNoVerdict() throws Exception {
+        OctetKeyPair key = key();
+        jwks(key);
+        ObjectNode c = claims();
+        String set = signSet(key, c);
+        MemoryReplayStore memory = new MemoryReplayStore();
+        AtomicInteger asked = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicBoolean down = new java.util.concurrent.atomic.AtomicBoolean(true);
+        ReplayStore flaky = (jti, window) -> {
+            asked.incrementAndGet();
+            if (down.get()) {
+                throw new IllegalStateException("store unavailable");
+            }
+            return memory.checkAndRecord(jti, window);
+        };
+        String token = "cc-" + UUID.randomUUID();
+        SsfReceiver r = new SsfReceiver(client, SsfReceiverConfig.builder(ISSUER, AUDIENCE,
+                        SsfKeySource.jwksUri(server.base() + "/oauth2/jwks"))
+                .accessTokenProvider(() -> Sensitive.of(token)).replayStore(flaky).build());
+
+        // verify_set: the §2 type, no reason code, not a refusal (and so never `replayed`).
+        NetworkError e = assertThrows(NetworkError.class, () -> r.verifySet(set));
+        assertEquals(NetworkError.class, e.getClass(), "the §2 type itself: no SetVerificationError, no reason code");
+        assertEquals(1, asked.get());
+
+        // poll: neither returned, refused nor acknowledged; nothing recorded.
+        String stream = UUID.randomUUID().toString();
+        ObjectNode reply = MAPPER.createObjectNode();
+        reply.putObject("sets").put(c.path("jti").asText(), set);
+        RouteServer.Route poll = server.on("POST", "/ssf/v1/poll/" + stream, json(200, reply.toString()));
+        assertThrows(NetworkError.class, () -> r.poll(stream, SsfPollOptions.none()));
+        assertEquals("{}", poll.last().body(), "no ack is sent on the caller's behalf");
+
+        // The store is back: the same SET was never recorded, so it verifies (not `replayed`).
+        down.set(false);
+        SsfPollResult again = r.poll(stream, SsfPollOptions.none());
+        assertEquals(List.of(c.path("jti").asText()), again.events().stream().map(SecurityEvent::jti).toList());
+        assertEquals(List.of(), again.refused());
+        assertEquals(List.of(), again.unjudged());
+        assertEquals(SetFailureReason.REPLAYED, reason(r, set), "recorded now, so a second look is a replay");
+    }
+
     @Test
     void theMemoryStoreForgetsAfterTheWindow() {
         MemoryReplayStore store = new MemoryReplayStore();
@@ -427,7 +477,10 @@ class SsfReceiverTest {
                 .replayStore((jti, window) -> {
                     throw new IllegalStateException("store unavailable");
                 }).build());
-        assertThrows(IllegalStateException.class, () -> down.poll(stream, SsfPollOptions.none()));
+        NetworkError raised = assertThrows(NetworkError.class, () -> down.poll(stream, SsfPollOptions.none()));
+        assertEquals(NetworkError.class, raised.getClass(), "a store failure is not a verdict");
+        assertTrue(String.valueOf(raised.getCause().getMessage()).contains("IllegalStateException"),
+                "the store's failure is named as the cause");
     }
 
     @Test

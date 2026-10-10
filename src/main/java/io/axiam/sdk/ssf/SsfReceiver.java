@@ -142,8 +142,9 @@ public final class SsfReceiver {
      * @param set the compact SET
      * @return the verified event
      * @throws SetVerificationError when the SET is refused
-     * @throws NetworkError when the JWKS (or the configuration document) could not be fetched
-     *         &mdash; which is not a verdict on the SET
+     * @throws NetworkError when the JWKS (or the configuration document) could not be fetched, or
+     *         the {@link ReplayStore} could not answer &mdash; neither is a verdict on the SET, which
+     *         stays unrecorded (&sect;34.2 P3, P4)
      */
     public SecurityEvent verifySet(String set) {
         return record(verify(set, null));
@@ -256,11 +257,28 @@ public final class SsfReceiver {
 
     /**
      * Step 9: records {@code event}'s {@code jti}, or refuses it as {@code replayed}.
-     * A store that cannot answer throws its own exception &mdash; no verdict, and never
-     * an acceptance (&sect;34.2 P3, P4).
+     * A store that cannot answer is no verdict, and never an acceptance (&sect;34.2 P3, P4):
+     * what it throws reaches the caller as a {@link NetworkError} (a {@code NetworkError},
+     * {@code AuthError} or {@code AuthzError} it threw itself passes through), with no reason code.
      */
     private SecurityEvent record(SecurityEvent event) {
-        if (!config.replayStore().checkAndRecord(event.jti(), config.replayWindow())) {
+        boolean first;
+        try {
+            first = config.replayStore().checkAndRecord(event.jti(), config.replayWindow());
+        } catch (NetworkError | AuthzError e) {
+            throw e; // already a §2 type: not a verdict on the SET
+        } catch (SetVerificationError e) {
+            // A store has no business refusing a SET; whatever it threw, it did not answer.
+            throw new NetworkError("the replay store could not answer", e);
+        } catch (AuthError e) {
+            throw e;
+        } catch (RuntimeException e) {
+            // §34.2 P3/P4: a store that cannot answer is no verdict. It is never read as
+            // "replayed" (which a poll acknowledges) and never as "first seen" (accepted); the
+            // SET stays unjudged and unrecorded, and the failure is the §2 NetworkError.
+            throw new NetworkError("the replay store could not answer", e);
+        }
+        if (!first) {
             throw refuse(SetFailureReason.REPLAYED, "jti already seen");
         }
         return event;
@@ -382,7 +400,7 @@ public final class SsfReceiver {
      * (&sect;34.2 P1). Every SET of the batch is checked (steps 1&ndash;8) before any is
      * recorded, so a JWKS or discovery fetch that fails raises that
      * {@code NetworkError} having recorded nothing, and the transmitter offers the
-     * whole batch again. A replay store that cannot answer raises its own exception
+     * whole batch again. A replay store that cannot answer raises a {@link NetworkError}
      * when nothing was recorded yet; part-way through, the SETs already recorded
      * are returned and the rest are listed in {@link SsfPollResult#unjudged()},
      * unrecorded &mdash; neither acknowledge nor refuse those.
