@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-11
+
 The first stable release. `io.github.ilpanich:axiam-sdk` 1.0.0 (with `axiam-bom` 1.0.0) is a
 Java 21+ client for AXIAM over all three of its transports — REST (OkHttp), gRPC
 (`GrpcAuthzClient`, from the vendored `proto/`) and AMQP (signed messages, §8, and the §22
@@ -183,6 +185,8 @@ Since `v1.0.0-beta17`. Each entry says what to change.
 
 - Bump the minor-patch group with 3 updates
 
+- Updated CHANGELOG.md
+
 ### Fixed
 
 - `SsfReceiver.poll` left earlier SETs recorded but unreturned when a later SET's key fetch or
@@ -222,6 +226,8 @@ Since `v1.0.0-beta17`. Each entry says what to change.
 - A tenant-path 401 never refreshes or re-sends the CIBA initiate (R-16, F-J5)
 
 - Writes never ride OkHttp's connection-failure re-send (R-17, F-J1)
+
+- Pin Maven 3.9.16 via the wrapper; Maven 3.10 breaks the Central bundle
 
 ### Security
 
