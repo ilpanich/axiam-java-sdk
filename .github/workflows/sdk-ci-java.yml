@@ -50,7 +50,7 @@ jobs:
           cache: 'maven'
 
       - name: mvn test (fast unit tier, no GPG signing)
-        run: mvn -B test
+        run: ./mvnw -B test
 
   javadoc-gate:
     name: Javadoc gate (D-22, javadoc.io)
@@ -75,7 +75,7 @@ jobs:
       # signatures, e.g. GrpcAuthzClient, reference those generated types even
       # though their own javadoc gaps are excluded from this gate).
       - name: mvn compile javadoc:javadoc (fails the build on any doclint warning)
-        run: mvn -B compile javadoc:javadoc
+        run: ./mvnw -B compile javadoc:javadoc
 
   tls-bypass-gate:
     name: TLS-bypass gate (SC#4)
@@ -116,20 +116,20 @@ jobs:
               --quick-generate-key "AXIAM CI (ephemeral, do not trust)" ed25519 sign 1d
 
       - name: mvn verify -Dgpg.skip=false (ephemeral key; javadoc/sources jars, SC#5)
-        run: mvn -B verify -Dgpg.skip=false -Dgpg.passphrase=""
+        run: ./mvnw -B verify -Dgpg.skip=false -Dgpg.passphrase=""
 
       # The BOM is an independent reactor (see bom/pom.xml) — sign it with the
       # same ephemeral key so the publish job's `deploy` cannot be the first
       # time a signed BOM POM is ever produced.
       - name: mvn verify -Dgpg.skip=false (axiam-bom)
-        run: mvn -B -f bom/pom.xml verify -Dgpg.skip=false -Dgpg.passphrase=""
+        run: ./mvnw -B -f bom/pom.xml verify -Dgpg.skip=false -Dgpg.passphrase=""
 
       # RESEARCH.md Assumptions A1/A6: a post-verify dependency-tree
       # re-verification sanity check — the resolved graph must remain
       # inspectable (no drifted/unresolved transitive versions) after the
       # full verify lifecycle (incl. codegen + signing) has run.
       - name: mvn dependency:tree re-verification
-        run: mvn -B dependency:tree
+        run: ./mvnw -B dependency:tree
 
   # H-1 (second half). The reason Sigstore bundles did NOT ship with the rest of
   # the H-1 pass was that both plugins configure on the *release* path, so a
@@ -182,10 +182,10 @@ jobs:
               --quick-generate-key "AXIAM CI (ephemeral, do not trust)" ed25519 sign 1d
 
       - name: mvn verify -Dsigstore.skip=false (real keyless signing, nothing published)
-        run: mvn -B verify -Dgpg.skip=false -Dgpg.passphrase="" -Dsigstore.skip=false
+        run: ./mvnw -B verify -Dgpg.skip=false -Dgpg.passphrase="" -Dsigstore.skip=false
 
       - name: mvn verify -Dsigstore.skip=false (axiam-bom)
-        run: mvn -B -f bom/pom.xml verify -Dgpg.skip=false -Dgpg.passphrase="" -Dsigstore.skip=false
+        run: ./mvnw -B -f bom/pom.xml verify -Dgpg.skip=false -Dgpg.passphrase="" -Dsigstore.skip=false
 
       # A green signing step is not the claim; the claim is that the deployment
       # will carry a bundle for every file. Assert the set explicitly rather
@@ -193,7 +193,7 @@ jobs:
       - name: Assert a .sigstore.json exists for every publishable file
         run: |
           set -euo pipefail
-          version="$(mvn -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          version="$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
           missing=0
           for f in \
             "target/axiam-sdk-${version}.jar" \
@@ -245,7 +245,7 @@ jobs:
       # against). This step proves codegen against the vendored
       # proto/axiam/v1/*.proto tree still builds cleanly.
       - name: mvn generate-sources (proves gRPC codegen builds cleanly)
-        run: mvn -B generate-sources compile
+        run: ./mvnw -B generate-sources compile
 
   # R-2 (T-235): runs on BOTH triggers. It was `pull_request`-only, so a stale
   # §27 surface reaching a tag by any route other than `scripts/mass-tag.sh`
@@ -284,7 +284,7 @@ jobs:
           cache: 'maven'
 
       - name: mvn validate (io.github.ilpanich:axiam-bom)
-        run: mvn -B -f bom/pom.xml validate
+        run: ./mvnw -B -f bom/pom.xml validate
 
   spring-boot-example:
     name: Spring Boot example app (SC#3)
@@ -303,10 +303,10 @@ jobs:
       # not-yet-published version — install it into the local Maven repository
       # first so the example resolves + builds against the just-built SDK.
       - name: mvn install (axiam-sdk into the local repo, tests already covered by the test job)
-        run: mvn -B install -DskipTests
+        run: ./mvnw -B install -DskipTests
 
       - name: mvn verify (spring-boot-app example — compiles + boots the complete app context, SC#3)
-        run: mvn -B -f examples/spring-boot-app/pom.xml verify
+        run: ./mvnw -B -f examples/spring-boot-app/pom.xml verify
 
   # Publishing to Maven Central is IRREVERSIBLE — it refuses to re-use a version
   # number. Git tags are NOT branch-scoped, so without this gate a release tag cut
@@ -337,8 +337,8 @@ jobs:
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          sdk_version="$(mvn -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
-          bom_version="$(mvn -B -q -f bom/pom.xml -DforceStdout help:evaluate -Dexpression=project.version)"
+          sdk_version="$(./mvnw -B -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          bom_version="$(./mvnw -B -q -f bom/pom.xml -DforceStdout help:evaluate -Dexpression=project.version)"
           if [ "${tag_version}" != "${sdk_version}" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} implies version ${tag_version}, but pom.xml declares ${sdk_version}."
             exit 1
@@ -398,7 +398,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
-        run: mvn -B deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dsigstore.skip=false
+        run: ./mvnw -B deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dsigstore.skip=false
 
       # The BOM is an independent reactor (bom/pom.xml is not a module of the
       # jar-packaged root POM), so it needs its own deploy invocation.
@@ -407,7 +407,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
-        run: mvn -B -f bom/pom.xml deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dsigstore.skip=false
+        run: ./mvnw -B -f bom/pom.xml deploy -Dgpg.skip=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dsigstore.skip=false
 
       # T-148 / H-1: build provenance over the jars this job just published, so
       # an integrator can tie a jar pulled from Central back to the workflow

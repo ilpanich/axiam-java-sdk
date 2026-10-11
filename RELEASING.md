@@ -39,6 +39,38 @@ repository's settings:
    the workflow, a run that is not a release tag cut from `main` cannot reach
    the credential at all.
 
+## The Maven version is pinned, and why
+
+Every workflow runs `./mvnw`, never the runner image's `mvn`. The wrapper pins
+Maven 3.9.16 in `.mvn/wrapper/maven-wrapper.properties`, together with the
+distribution's SHA-256, so a runner-image update cannot change the release
+toolchain under a tag.
+
+That is not hypothetical. The first `v1.0.0` publish ran on an image that had
+moved to Maven 3.10.0 (Resolver 2.x), and Central refused the deployment:
+
+```
+Bundle has content that does NOT have a .pom file: io/github/ilpanich/axiam-sdk
+```
+
+`central-publishing-maven-plugin` stages the artifacts by installing them into
+`target/central-staging`. Under Maven 3.9 that install writes
+`<groupId>/<artifactId>/maven-metadata-central-staging.xml`, and the plugin
+deletes that one file before zipping. Under Maven 3.10 the file is named
+`maven-metadata-local.xml`. Plugin 0.11.0 (the latest release) does not know
+that name, so the file is uploaded at the artifact level, where Central accepts
+nothing but version directories. The jar and the BOM fail the same way. Every
+PR job is green under either Maven: only `deploy` stages, and only a tag
+deploys.
+
+Before raising the pin to 3.10 or later, check the bundle the plugin builds.
+Point it at a closed port, so it builds the zip and fails at the upload:
+
+```sh
+./mvnw -B deploy -DskipTests -Dcentral.baseUrl=http://127.0.0.1:9   # needs a `central` server in settings.xml
+unzip -l target/central-publishing/central-bundle.zip               # every entry under .../<version>/
+```
+
 ## Rotation
 
 A credential that cannot be scoped or given an expiry is replaced on a clock

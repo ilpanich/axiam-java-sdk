@@ -2272,11 +2272,14 @@ while (true) {
 
 ## Building from source
 
-Requires JDK 21+ and Maven 3.9+.
+Requires JDK 21+. Maven itself comes from the wrapper, pinned in
+`.mvn/wrapper/maven-wrapper.properties` (with a SHA-256 of the distribution);
+CI and the release job use the same pin. A system Maven 3.9.x also builds the
+project, but 3.10 cannot publish it — see [`RELEASING.md`](RELEASING.md).
 
 ```bash
-mvn -B verify              # build, test, javadoc/sources jars (SDK)
-mvn -B -f bom/pom.xml verify   # the BOM is an independent reactor
+./mvnw -B verify                 # build, test, javadoc/sources jars (SDK)
+./mvnw -B -f bom/pom.xml verify  # the BOM is an independent reactor
 ```
 
 gRPC stubs are generated at build time by `protobuf-maven-plugin` from the
