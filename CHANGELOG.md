@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-10-10
-
 The first stable release. `io.github.ilpanich:axiam-sdk` 1.0.0 (with `axiam-bom` 1.0.0) is a
 Java 21+ client for AXIAM over all three of its transports — REST (OkHttp), gRPC
 (`GrpcAuthzClient`, from the vendored `proto/`) and AMQP (signed messages, §8, and the §22
