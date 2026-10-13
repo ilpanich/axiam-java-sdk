@@ -28,6 +28,7 @@ import java.util.UUID;
  *     and never in the CSR, which is still refused if it requests a {@code subjectAltName}. Under a CA
  *     whose key is held by {@code vault_pki} a {@code Server} request on this path is refused; use
  *     {@code POST /api/v1/certificates}.
+ * @param userId See [{@code CreateCertificateRequest::user_id}].
  * @param validityDays Validity duration in days.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -38,6 +39,7 @@ public record SignCertificateCsrRequest(
         @JsonProperty("issuer_ca_id") UUID issuerCaId,
         @JsonProperty("metadata") @Nullable JsonNode metadata,
         @JsonProperty("subject_alt_names") @Nullable List<SubjectAltName> subjectAltNames,
+        @JsonProperty("user_id") @Nullable UUID userId,
         @JsonProperty("validity_days") Integer validityDays
 ) {
 }

@@ -74,7 +74,7 @@ class SsfManagementTest extends ManagementTestBase {
     private static SsfStreamInput input(String header) {
         return new SsfStreamInput("https://rp.example", header == null ? null : Sensitive.of(header), null,
                 SsfDeliveryMethod.PUSH, "the RP", "https://rp.example/ssf", List.of(REVOKED),
-                null, "rp-1", null, null, null);
+                null, null, "rp-1", null, null, null);
     }
 
     // ── 1. Replacement ───────────────────────────────────────────────────
@@ -85,20 +85,20 @@ class SsfManagementTest extends ManagementTestBase {
         Route put = mount("PUT", STREAMS + "/" + id, 200, streamBody().toString());
         SsfStreamInput body = new SsfStreamInput("https://rp.example", null, false, SsfDeliveryMethod.PUSH,
                 "the RP", "https://rp.example/ssf", List.of(REVOKED),
-                List.of(REVOKED), "rp-1", SsfStreamStatus.ENABLED, "ok",
+                List.of(REVOKED), "2026-10-04T00:00:00Z", "rp-1", SsfStreamStatus.ENABLED, "ok",
                 SsfSubjectFormat.ISS_SUB);
         SsfStream stream = client.ssf().updateStream(id, body);
         assertTrue(stream.transmitterActive());
         JsonNode sent = put.last().json();
         for (String member : List.of("receiver_client_id", "audience", "delivery_method", "events_allowed",
-                "description", "endpoint_url", "events_requested", "subject_format", "status", "status_reason",
+                "description", "endpoint_url", "events_requested", "expected_updated_at", "subject_format", "status", "status_reason",
                 "clear_authorization_header")) {
             assertTrue(sent.has(member), "a modelled member was not sent");
         }
         assertEquals(REVOKED, sent.path("events_allowed").get(0).asText());
         assertFalse(sent.has("authorization_header"), "absent keeps the stored header");
         // The four required members cannot be null: the constructor refuses them.
-        assertEquals(12, SsfStreamInput.class.getRecordComponents().length);
+        assertEquals(13, SsfStreamInput.class.getRecordComponents().length);
         assertCannotBeBuiltWithout(input(null), "receiver_client_id", "audience", "delivery_method",
                 "events_allowed");
     }
@@ -185,7 +185,7 @@ class SsfManagementTest extends ManagementTestBase {
 
         // A URI the caller types is a string too: it is sent as typed, and the server judges it.
         SsfStreamInput typed = new SsfStreamInput("https://rp.example", null, null, SsfDeliveryMethod.PUSH,
-                null, "https://rp.example/ssf", List.of("urn:typed:by:the:caller"), null, "rp-1", null, null, null);
+                null, "https://rp.example/ssf", List.of("urn:typed:by:the:caller"), null, null, "rp-1", null, null, null);
         client.ssf().updateStream(id, typed);
         assertEquals("urn:typed:by:the:caller", put.last().json().path("events_allowed").get(0).asText());
     }

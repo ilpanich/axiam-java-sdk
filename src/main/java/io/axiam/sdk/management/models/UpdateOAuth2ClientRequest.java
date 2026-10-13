@@ -23,7 +23,8 @@ import java.util.List;
  * @param backchannelAuthenticationRequestSigningAlg G-7 — see the create DTO. {@code ""} clears.
  * @param backchannelClientNotificationEndpoint G-7 — see the create DTO. {@code ""} clears.
  * @param backchannelLogoutUri Pass an empty string to clear a previously registered URI — the one
- *     edit an operator makes when an RP is decommissioned.
+ *     edit an operator makes when an RP is decommissioned. Any other value is held to the same rule as
+ *     on create.
  * @param backchannelTokenDeliveryMode G-7 — see the create DTO. {@code ""} clears.
  * @param backchannelUserCodeParameter G-7 — {@code true} refused, as on create.
  * @param browserSso X7.3 — see [{@code CreateOAuth2ClientRequest::browser_sso}].
