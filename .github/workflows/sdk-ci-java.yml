@@ -226,6 +226,40 @@ jobs:
           [ "${missing}" -eq 0 ] || exit 1
           echo "OK: every publishable file has both a .asc and a .sigstore.json."
 
+  # Every other PR job stops at `verify`, but Central judges the bundle that
+  # `deploy` builds — so a toolchain change that only alters the bundle is green
+  # here and red at the next tag. That is how v1.0.0 first failed (Maven 3.10
+  # left a `maven-metadata-local.xml` outside the version directory; see
+  # RELEASING.md). This job builds both real bundles and checks their layout.
+  # The upload cannot happen: the plugin is pointed at a closed port and runs
+  # with throwaway credentials, and this job holds no secrets. It therefore
+  # runs on fork pull requests too.
+  central-bundle-gate:
+    name: Central bundle layout gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Set up JDK 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      # Signed, so the bundle carries the `.asc` files a release bundle does.
+      # The key is ephemeral and CI-only (Pitfall 4).
+      - name: Generate an ephemeral GPG signing key
+        run: |
+          gpg --batch --pinentry-mode loopback --passphrase "" \
+              --quick-generate-key "AXIAM CI (ephemeral, do not trust)" ed25519 sign 1d
+
+      - name: Bundle layout (io.github.ilpanich:axiam-sdk)
+        run: scripts/central-bundle-gate.sh pom.xml -Dgpg.skip=false -Dgpg.passphrase=""
+
+      - name: Bundle layout (io.github.ilpanich:axiam-bom)
+        run: scripts/central-bundle-gate.sh bom/pom.xml -Dgpg.skip=false -Dgpg.passphrase=""
+
   grpc-codegen-check:
     name: gRPC codegen check (D-21)
     if: github.event_name == 'pull_request'
