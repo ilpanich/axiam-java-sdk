@@ -142,6 +142,8 @@ public final class DeviceMtlsProvisioningExample {
                             KeyAlgorithm.ED25519,
                             null,
                             "CN=" + device + ",OU=devices,O=" + TENANT,
+                            null,   // subjectAltNames: only a Server certificate takes any
+                            null,   // userId: the account a User certificate is issued for
                             825));
 
             // 4. Write it down before doing anything else that could fail. The

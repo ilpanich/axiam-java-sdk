@@ -64,7 +64,10 @@ public final class ReplacementBodies {
      * {@code expected_updated_at} that were read. An {@code events_requested} of
      * {@code []} stays {@code []} (the receiver's "none"; omitting it would
      * <em>widen</em> the stream to every allowed event), and the
-     * {@code updated_at} is sent as the string the response carried, so the
+     * {@code updated_at} is sent back as the same instant, in ISO-8601 with its
+     * offset (an {@link java.time.OffsetDateTime} does not keep the response's own
+     * spelling, so a trailing-zero fraction or a {@code +00:00} reads back as
+     * {@code Z}; the comparison is of the instant), so the
      * update is refused {@code 409} if the stream was written (by the receiver as
      * well as by an administrator) in between. When you lower
      * {@code events_allowed} on the returned body, cut {@code events_requested} to
