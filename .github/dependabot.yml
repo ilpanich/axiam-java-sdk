@@ -10,6 +10,14 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # The Maven Wrapper pin. Maven 3.10 (Resolver 2.x) stages a
+      # `maven-metadata-local.xml` that central-publishing-maven-plugin 0.11.0
+      # leaves in the bundle, and Central rejects the deployment (RELEASING.md).
+      # 3.9.x patches still come through; raise this only once
+      # scripts/central-bundle-gate.sh passes on the newer Maven.
+      - dependency-name: "org.apache.maven:apache-maven"
+        versions: [">= 3.10.0"]
     groups:
       minor-patch:
         update-types:

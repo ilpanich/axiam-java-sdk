@@ -60,16 +60,36 @@ deletes that one file before zipping. Under Maven 3.10 the file is named
 `maven-metadata-local.xml`. Plugin 0.11.0 (the latest release) does not know
 that name, so the file is uploaded at the artifact level, where Central accepts
 nothing but version directories. The jar and the BOM fail the same way. Every
-PR job is green under either Maven: only `deploy` stages, and only a tag
-deploys.
+`verify` job is green under either Maven: only `deploy` stages a bundle, and
+only a tag deploys.
 
-Before raising the pin to 3.10 or later, check the bundle the plugin builds.
-Point it at a closed port, so it builds the zip and fails at the upload:
+### The bundle layout gate
+
+The `central-bundle-gate` PR job closes that gap. It runs
+`scripts/central-bundle-gate.sh`, which builds the real bundle with `deploy`
+and asserts that every entry sits under `<groupId>/<artifactId>/<version>/` and
+that the `.pom` is there. It does this for the jar and for the BOM. The upload
+cannot happen, for two independent reasons: the plugin is pointed at a closed
+local port (`-DcentralBaseUrl`), and Maven runs with a throwaway `settings.xml`
+whose `central` credentials are not a token. The script fails unless the build
+got as far as the upload and the override took effect.
+
+Run the same check locally before raising the Maven pin, or before bumping
+`central-publishing-maven-plugin`:
 
 ```sh
-./mvnw -B deploy -DskipTests -Dcentral.baseUrl=http://127.0.0.1:9   # needs a `central` server in settings.xml
-unzip -l target/central-publishing/central-bundle.zip               # every entry under .../<version>/
+scripts/central-bundle-gate.sh pom.xml
+scripts/central-bundle-gate.sh bom/pom.xml
 ```
+
+The property is `centralBaseUrl`. The plugin ignores `central.baseUrl`, and
+then uploads to the real Portal with whatever `central` credentials it finds.
+The POM sets `autoPublish`, so with real credentials that is a release. Use the
+script rather than a hand-typed `deploy`.
+
+`.github/dependabot.yml` ignores `org.apache.maven:apache-maven` from 3.10.0
+on, so Dependabot proposes only 3.9.x patch releases of the pin. Lift that
+ignore in the same pull request that raises the pin, once the gate passes.
 
 ## Rotation
 
