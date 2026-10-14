@@ -134,7 +134,13 @@ public final class SsfApi {
      * endpoint_url} to another scheme, host or port while a header is stored: then it must carry
      * {@code authorization_header} again or {@code clear_authorization_header: true}, else {@code
      * 400} (§32.3 rule 5). An update overtaken by the receiver's own write is {@code 409}: read
-     * the stream again. {@code ReplacementBodies.from(SsfStream)} turns a read into the body.
+     * the stream again (never retried, §32.8 test 5). <strong>Contract 1.61:</strong> {@code expected_updated_at}
+     * (the {@code updated_at} string you read, sent as given) makes the update conditional on that
+     * version, {@code 409} if the stream was written since; and {@code events_requested} has three
+     * meanings on an update (§32.2): absent *resets* the stream to every event of {@code
+     * events_allowed}, {@code []} is stored as the receiver's "none", a list is stored as given.
+     * An edit therefore sends back the {@code events_requested} and {@code expected_updated_at} it
+     * read. {@code ReplacementBodies.from(SsfStream)} turns a read into the body, carrying both.
      *
      * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). The body's required members must be
      * set; an optional member left null is omitted and takes its default -- not the value stored.

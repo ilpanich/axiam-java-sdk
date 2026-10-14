@@ -564,14 +564,14 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void certificatesGenerate() throws Exception {
         mount("POST", "/api/v1/certificates", 201, "{\"cert_type\": \"User\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"key_algorithm\": \"Rsa4096\", \"metadata\": {}, \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"public_cert_pem\": \"example\", \"status\": \"Active\", \"subject\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"private_key_pem\": \"example\"}");
-        client.management().certificates().generate(new io.axiam.sdk.management.models.CreateCertificateRequest(io.axiam.sdk.management.models.CertificateType.USER, EXAMPLE_ID, io.axiam.sdk.management.models.KeyAlgorithm.RSA4096, null, "example", null, 1));
+        client.management().certificates().generate(new io.axiam.sdk.management.models.CreateCertificateRequest(io.axiam.sdk.management.models.CertificateType.USER, EXAMPLE_ID, io.axiam.sdk.management.models.KeyAlgorithm.RSA4096, null, "example", null, null, 1));
     }
 
     /** Exercises certificates.sign_csr. */
     @Test
     void certificatesSignCsr() throws Exception {
         mount("POST", "/api/v1/certificates/sign-csr", 201, "{\"cert_type\": \"User\", \"created_at\": \"2026-08-26T00:00:00Z\", \"fingerprint\": \"example\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"issuer_ca_id\": \"11111111-1111-4111-8111-111111111111\", \"key_algorithm\": \"Rsa4096\", \"metadata\": {}, \"not_after\": \"2026-08-26T00:00:00Z\", \"not_before\": \"2026-08-26T00:00:00Z\", \"public_cert_pem\": \"example\", \"status\": \"Active\", \"subject\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\"}");
-        client.management().certificates().signCsr(new io.axiam.sdk.management.models.SignCertificateCsrRequest(io.axiam.sdk.management.models.CertificateType.USER, "example", EXAMPLE_ID, null, null, 1));
+        client.management().certificates().signCsr(new io.axiam.sdk.management.models.SignCertificateCsrRequest(io.axiam.sdk.management.models.CertificateType.USER, "example", EXAMPLE_ID, null, null, null, 1));
     }
 
     /** Exercises certificates.get. */
@@ -1077,7 +1077,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void ssfCreateStream() throws Exception {
         mount("POST", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams", 201, "{\"audience\": \"example\", \"authorization_header_set\": true, \"created_at\": \"2026-08-26T00:00:00Z\", \"delivery_method\": \"push\", \"events_allowed\": [], \"events_delivered\": [], \"events_requested\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"receiver_client_id\": \"example\", \"status\": \"enabled\", \"status_actor\": \"admin\", \"subject_format\": \"iss_sub\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"transmitter_active\": true, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().ssf().createStream(new io.axiam.sdk.management.models.SsfStreamInput("example", io.axiam.sdk.Sensitive.of("example"), null, io.axiam.sdk.management.models.SsfDeliveryMethod.PUSH, null, null, java.util.List.of(), null, "example", null, null, null));
+        client.management().ssf().createStream(new io.axiam.sdk.management.models.SsfStreamInput("example", io.axiam.sdk.Sensitive.of("example"), null, io.axiam.sdk.management.models.SsfDeliveryMethod.PUSH, null, null, java.util.List.of(), null, null, "example", null, null, null));
     }
 
     /** Exercises ssf.get_stream. */
@@ -1091,7 +1091,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
     @Test
     void ssfUpdateStream() throws Exception {
         mount("PUT", "/api/v1/tenants/" + TENANT_ID + "/ssf/streams/" + EXAMPLE_ID + "", 200, "{\"audience\": \"example\", \"authorization_header_set\": true, \"created_at\": \"2026-08-26T00:00:00Z\", \"delivery_method\": \"push\", \"events_allowed\": [], \"events_delivered\": [], \"events_requested\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"receiver_client_id\": \"example\", \"status\": \"enabled\", \"status_actor\": \"admin\", \"subject_format\": \"iss_sub\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"transmitter_active\": true, \"updated_at\": \"2026-08-26T00:00:00Z\"}");
-        client.management().ssf().updateStream(EXAMPLE_ID, new io.axiam.sdk.management.models.SsfStreamInput("example", io.axiam.sdk.Sensitive.of("example"), null, io.axiam.sdk.management.models.SsfDeliveryMethod.PUSH, null, null, java.util.List.of(), null, "example", null, null, null));
+        client.management().ssf().updateStream(EXAMPLE_ID, new io.axiam.sdk.management.models.SsfStreamInput("example", io.axiam.sdk.Sensitive.of("example"), null, io.axiam.sdk.management.models.SsfDeliveryMethod.PUSH, null, null, java.util.List.of(), null, null, "example", null, null, null));
     }
 
     /** Exercises ssf.delete_stream. */

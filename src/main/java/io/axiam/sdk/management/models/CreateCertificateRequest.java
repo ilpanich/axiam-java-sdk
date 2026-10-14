@@ -25,6 +25,11 @@ import java.util.UUID;
  *     refused for every other type. Each name, and the common name, must be admitted by the tenant's
  *     effective {@code server_cert_allowed_names}, which is empty — refusing every {@code Server}
  *     request — until an organization administrator lists names.
+ * @param userId The user account a {@code User} certificate is issued for (#533), returned as the
+ *     certificate's {@code user_id}. Optional; accepted only for {@code cert_type: User}, and it must
+ *     name a user of this tenant that has not been deleted or erased. A {@code metadata.user_id} in
+ *     the same request must agree with it. Revoking the account's certificates — directory linking,
+ *     deletion, erasure — matches on it.
  * @param validityDays Validity duration in days.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -36,6 +41,7 @@ public record CreateCertificateRequest(
         @JsonProperty("metadata") @Nullable JsonNode metadata,
         @JsonProperty("subject") String subject,
         @JsonProperty("subject_alt_names") @Nullable List<SubjectAltName> subjectAltNames,
+        @JsonProperty("user_id") @Nullable UUID userId,
         @JsonProperty("validity_days") Integer validityDays
 ) {
 }

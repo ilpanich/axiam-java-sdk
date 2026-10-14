@@ -29,7 +29,10 @@ import io.axiam.sdk.Sensitive;
  * @param id the server's id field
  * @param issuerCaId The CA certificate that signed this certificate.
  * @param keyAlgorithm the server's key_algorithm field
- * @param metadata Arbitrary key-value metadata (e.g., device serial, user ID binding).
+ * @param metadata Arbitrary key-value metadata (e.g., a device serial). Free-form and never
+ *     authoritative: the account a {@code User} certificate was issued for is {@code user_id}. A
+ *     {@code metadata.user_id} is still read, by the revocation of a user's certificates, for a row
+ *     issued before the binding existed (schema v98, #533).
  * @param notAfter Validity end.
  * @param notBefore Validity start.
  * @param privateKeyPem PEM-encoded private key — returned only on generation. -- SECRET: redacted
@@ -40,6 +43,14 @@ import io.axiam.sdk.Sensitive;
  *     {@code CN=} prefix in the request is understood and stripped, so this always says what the
  *     certificate's subject DN says (DF-023).
  * @param tenantId The tenant this certificate belongs to.
+ * @param userId The user account a {@code User} certificate was issued for, in this tenant (#533);
+ *     {@code null} for every other type, for a {@code User} certificate issued without one, and for
+ *     every certificate issued before schema v98. What revoking a user's certificates matches on —
+ *     directory linking, administrator deletion and Art. 17 erasure. A row with {@code None} is
+ *     matched by the older convention instead ({@code metadata.user_id}, or a subject common name
+ *     equal to the account's username or email); a row naming another account never is. It does not
+ *     make the certificate authenticate as the user: a certificate authenticates only as the service
+ *     account it is bound to.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -58,6 +69,7 @@ public record GeneratedCertificate(
         @JsonProperty("public_cert_pem") String publicCertPem,
         @JsonProperty("status") CertificateStatus status,
         @JsonProperty("subject") String subject,
-        @JsonProperty("tenant_id") UUID tenantId
+        @JsonProperty("tenant_id") UUID tenantId,
+        @JsonProperty("user_id") @Nullable UUID userId
 ) {
 }

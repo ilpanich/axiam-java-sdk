@@ -2,7 +2,7 @@
 """Generate the CONTRACT §27 management surface for the Java SDK.
 
 Reads ``management-registry.json`` (190 operations across 28 namespaces as of
-contract 1.60, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
+contract 1.61, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
 schemas those operations carry, and writes:
 
 - ``src/main/java/io/axiam/sdk/management/models/*.java`` — one record per
@@ -188,8 +188,16 @@ CALL_SITE_NOTES: dict[str, str] = {
         "update moves `endpoint_url` to another scheme, host or port while a header "
         "is stored: then it must carry `authorization_header` again or "
         "`clear_authorization_header: true`, else `400` (§32.3 rule 5). An update "
-        "overtaken by the receiver's own write is `409`: read the stream again. "
-        "`ReplacementBodies.from(SsfStream)` turns a read into the body."
+        "overtaken by the receiver's own write is `409`: read the stream again "
+        "(never retried, §32.8 test 5). **Contract 1.61:** `expected_updated_at` "
+        "(the `updated_at` string you read, sent as given) makes the update "
+        "conditional on that version, `409` if the stream was written since; and "
+        "`events_requested` has three meanings on an update (§32.2): absent "
+        "*resets* the stream to every event of `events_allowed`, `[]` is stored as "
+        "the receiver's \"none\", a list is stored as given. An edit therefore "
+        "sends back the `events_requested` and `expected_updated_at` it read. "
+        "`ReplacementBodies.from(SsfStream)` turns a read into the body, "
+        "carrying both."
     ),
     "scim_targets.create": (
         "**The credential is bound to its URL** (§31.3 rule 2): `credential` is "
@@ -1084,7 +1092,13 @@ DEFAULT_FALSE_WHEN_ABSENT = {("FederationConfigResponse", "allow_sha1_signatures
 # re-formatted)". An OffsetDateTime has no spelling of its own -- Jackson
 # re-renders it, normalised to UTC and with trailing fraction digits dropped --
 # so the only way to send what the caller holds is to hold a String.
-DATE_TIME_AS_STRING = {("ScimTargetInput", "expected_updated_at")}
+# Contract 1.61 (§32.2, §32.8 test 1) states the same member for SSF streams:
+# `SsfStreamInput.expected_updated_at` is "sent exactly as given (the string,
+# not re-formatted)".
+DATE_TIME_AS_STRING = {
+    ("ScimTargetInput", "expected_updated_at"),
+    ("SsfStreamInput", "expected_updated_at"),
+}
 
 
 def emit_required_checks(type_name: str, fields: list[dict]) -> list[str]:

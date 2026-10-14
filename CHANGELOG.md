@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-13
+
+Contract 1.61 (accompanying the AXIAM 1.0.1 release): `CONTRACT.md`, `openapi.json` and
+`management-registry.json` re-vendored byte for byte from `ilpanich/axiam` commit `058d8e0`
+(branch `claude/release-1.0.1`; `proto/` is unchanged), and the §27 surface regenerated (still 190
+operations across 28 namespaces). The contract is additive and clarifying; this SDK adds three
+fields and changes no behaviour of an existing one.
+
+### Added
+
+- **`Certificate.user_id` (§27.11 rule 5).** `Certificate` and `GeneratedCertificate` carry
+  `userId` (`@Nullable UUID`): `null` and an absent member both decode as "no account named" (a
+  server before 1.0.1 omits it), and it is never made required, coalesced to a nil UUID or
+  synthesised from `metadata` or the subject. `CreateCertificateRequest.userId` and
+  `SignCertificateCsrRequest.userId` are optional and sent exactly as given; the key is omitted
+  (never `null`) when the caller names no account, and the SDK does not judge the value (the
+  server's `400` is surfaced verbatim).
+- **`SsfStreamInput.expected_updated_at` (§32.2, §32.3 rule 4).** `expectedUpdatedAt` is the
+  caller's RFC 3339 string, sent exactly as given (a `String`, like `ScimTargetInput`'s, because an
+  `OffsetDateTime` is re-rendered) and omitted when unset; a `409` on `updateStream` is surfaced
+  as `ConflictError` and never retried. `ReplacementBodies.from(SsfStream)` now sends the
+  `events_requested` **and** the `updated_at` it read, an `events_requested` of `[]` stays `[]`
+  (omitting it would widen a stream the receiver narrowed to "none"), and the `updateStream`
+  call-site note states the three meanings of `events_requested` on an update. This answers
+  ilpanich/axiam#631.
+- `CibaPendingList.total_pending` and `truncated` (§33.3 rule 16): not modelled. No registry
+  operation returns the type and this SDK generates models only for the types its operations
+  carry; the route is the console's approval surface, which the SDK never drives (§33.9, the
+  `ciba` tag the generator excludes).
+
+### Changed
+
+- Canonical constructors gain a component, as the README's versioning note warns generated records
+  may: `Certificate`, `GeneratedCertificate`, `CreateCertificateRequest`,
+  `SignCertificateCsrRequest` (`userId`) and `SsfStreamInput` (`expectedUpdatedAt`, between
+  `eventsRequested` and `receiverClientId`). Pass `null` for "not set"; builders and
+  `ReplacementBodies.from(...)` are unaffected.
+- Javadoc of the regenerated models follows the 1.61 `openapi.json` descriptions (the
+  `backchannel_logout_uri` address rule, the `metadata` and `events_requested` texts).
+- The README states conformance at contract 1.61.
+
+### Tests
+
+- `Contract161ModelsTest`: §27.11 rule 5's required test (`generate` and `signCsr` send `user_id`
+  as given and no key without it; a body with a UUID, one with `null` and one lacking the member
+  all decode, the last two as "no account named"); §32.8 test 1's additions (`expected_updated_at`
+  sent as the caller's string and absent when unset, `[]` sent as `[]` and unset absent, the
+  helper sends back what it read, a `409` surfaced once).
+
 ## [1.0.0] - 2026-10-11
 
 The first stable release. `io.github.ilpanich:axiam-sdk` 1.0.0 (with `axiam-bom` 1.0.0) is a

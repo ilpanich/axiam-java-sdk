@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.60**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.61**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33 and §34, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
@@ -61,7 +61,11 @@ Every §34.4 row contract 1.60 assigns to Java is done: the §27.15 members
 (sent as the caller's string, and carried by `ReplacementBodies.from`), the §19.1
 `ssf_unjudged` event (`TelemetryEvent.SsfUnjudged`), and the §12.1 refresh `scope` and
 §21.5 discovery checks. §35 (certificate revocation lists) is informative and has no
-SDK surface.
+SDK surface. Contract 1.61 (additive) is met too: `Certificate.user_id` and its two request
+members (§27.11 rule 5), `SsfStreamInput.expected_updated_at` with the three meanings of
+`events_requested` on an update, which `ReplacementBodies.from(SsfStream)` honours (§32.2, §32.3
+rule 4), and the rest of §34.5 is informative. `CibaPendingList` (§33.3 rule 16) is a console
+surface no registry operation returns, so this SDK has no model for it.
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a

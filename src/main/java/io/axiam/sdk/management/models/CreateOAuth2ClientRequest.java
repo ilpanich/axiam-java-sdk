@@ -38,7 +38,11 @@ import java.util.List;
  *     notified. Required in ping mode and refused in poll mode; an absolute {@code https} URL held to
  *     the webhook address policy (no credentials, no fragment, no private, loopback or internal host).
  * @param backchannelLogoutUri B5 — where OIDC back-channel logout tokens are delivered. Omit for a
- *     client that does not participate.
+ *     client that does not participate. Must be an absolute {@code https} URL with no credentials and
+ *     no fragment, naming a public host: an IP literal that is loopback, private, link-local or the
+ *     cloud metadata address, and the names {@code localhost}, {@code *.localhost}, {@code *.local}
+ *     and {@code *.internal}, are refused with {@code 400}. Delivery is one request that does not
+ *     follow redirects, and a name that resolves to a non-public address is refused when it is sent.
  * @param backchannelTokenDeliveryMode G-7 — CIBA Core §4 {@code backchannel_token_delivery_mode}:
  *     {@code poll} or {@code ping}. Required when {@code grant_types} holds {@code
  *     urn:openid:params:grant-type:ciba}, refused otherwise; {@code push} is not offered. A CIBA

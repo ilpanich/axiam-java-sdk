@@ -33,7 +33,16 @@ import io.axiam.sdk.Sensitive;
  *     policy), refused for {@code poll}.
  * @param eventsAllowed 1–6 event types.
  * @param eventsRequested A subset of {@code events_allowed}; absent means all of them. The
- *     receiver may narrow it later, never widen it.
+ *     receiver may narrow it later, never widen it. On update, absent therefore *resets* a narrowing
+ *     the receiver made to every allowed event, and {@code []} keeps a receiver's "none": a client
+ *     that edits a stream sends the value it read (cut to the new {@code events_allowed}), never an
+ *     absent field.
+ * @param expectedUpdatedAt The {@code updated_at} of the stream as the client read it (R1W2-03,
+ *     T-406). **Update only; create ignores it.** When present, the replacement lands only if the
+ *     stream still has that version, else {@code 409} (reload and retry): a pause or a narrowing the
+ *     receiver made after the form was read is not silently reverted. When absent the replacement is
+ *     conditional on the version the server reads during the request — an old client keeps that
+ *     behaviour, and the console always sends it.
  * @param receiverClientId An OAuth2 client of the tenant with the {@code client_credentials} grant
  *     and the {@code ssf.manage} scope.
  * @param status {@code enabled} by default.
@@ -51,6 +60,7 @@ public record SsfStreamInput(
         @JsonProperty("endpoint_url") @Nullable String endpointUrl,
         @JsonProperty("events_allowed") List<String> eventsAllowed,
         @JsonProperty("events_requested") @Nullable List<String> eventsRequested,
+        @JsonProperty("expected_updated_at") @Nullable String expectedUpdatedAt,
         @JsonProperty("receiver_client_id") String receiverClientId,
         @JsonProperty("status") @Nullable SsfStreamStatus status,
         @JsonProperty("status_reason") @Nullable String statusReason,
@@ -70,6 +80,7 @@ public record SsfStreamInput(
      * @param endpointUrl see the record component
      * @param eventsAllowed see the record component
      * @param eventsRequested see the record component
+     * @param expectedUpdatedAt see the record component
      * @param receiverClientId see the record component
      * @param status see the record component
      * @param statusReason see the record component
