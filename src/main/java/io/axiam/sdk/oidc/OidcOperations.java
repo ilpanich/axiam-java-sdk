@@ -267,9 +267,16 @@ public interface OidcOperations {
      * {@code POST /oauth2/device_authorization} (CONTRACT.md &sect;14.1) —
      * starts the device grant and obtains the code pair.
      *
-     * <p><strong>Unauthenticated by design.</strong> A device that cannot show
-     * a browser also cannot hold a client secret, so this never sends
-     * {@code client_secret} and never refuses a client built without one.
+     * <p><strong>Client authentication (contract 1.62, &sect;14.1).</strong> A
+     * <em>public</em> client &mdash; the usual device, which cannot hold a secret &mdash;
+     * sends {@code client_id} and no credential, and a client built without a secret is
+     * never refused. A client <em>configured with a credential</em> sends it here and at
+     * every poll, by the rules of its other token requests: its secret as
+     * {@code client_secret} in the form body (never {@code Authorization: Basic}, whichever
+     * of {@code client_secret_post} and {@code client_secret_basic} it is registered for),
+     * or its &sect;6.1 certificate on the connection. The SDK sends a credential only when
+     * the caller configured one. A {@code 401} {@code invalid_client} is an
+     * {@code OAuthProtocolError}, makes one request and is not retried.
      *
      * @param scope         requested scope, space-separated; omitted when {@code null}
      * @param tenantId      tenant UUID for the mandatory {@code tenant_id} query parameter
@@ -289,6 +296,13 @@ public interface OidcOperations {
      * surface as {@code OAuthProtocolError} — {@code authorization_pending}
      * and {@code slow_down} included — so a hand-rolled loop sees exactly what
      * {@link #deviceLogin} sees. Most callers want {@code deviceLogin}.
+     *
+     * <p>Every poll names its client ({@code client_id}) and sends the client's credential
+     * as {@link #deviceAuthorize} does (contract 1.62, &sect;14.1 rules 2 and 3). A poll
+     * answered {@code 401} {@code invalid_client} (&sect;14.2 rule 5) raises an
+     * {@code OAuthProtocolError} with that {@code error}, is never retried and never enters
+     * the &sect;9 refresh guard. This SDK generates no DPoP proof, so a client registered
+     * for DPoP is refused that way (&sect;14.2 rule 8, &sect;21.7.3).
      *
      * @param deviceCode    the {@code deviceCode} from {@link DeviceAuthorization}
      * @param tenantId      tenant UUID for the {@code tenant_id} query parameter

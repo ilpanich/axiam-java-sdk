@@ -501,6 +501,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
          * and {@code loginClientCredentials} REQUIRE it and raise {@code AuthError}
          * client-side, without a wire call, when it is absent.
          *
+         * <p>Contract 1.62 (&sect;14.1): the device grant sends it too &mdash; at
+         * {@code deviceAuthorize} and at every {@code devicePoll} &mdash; as
+         * {@code client_secret} in the form body and never as
+         * {@code Authorization: Basic}, even for a client registered
+         * {@code client_secret_basic}. A public client configures none and sends none.
+         *
          * @param clientSecret the confidential client's {@code client_secret}
          * @return this builder, for chaining
          */
@@ -3252,9 +3258,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                     + "(CONTRACT.md §14.1)");
         }
 
-        // No client_secret, ever: §14.1 makes this operation unauthenticated
-        // because a device that cannot show a browser cannot keep a secret.
+        // Contract 1.62, §14.1 rule 2: a client CONFIGURED with a credential sends it here as
+        // at its other token requests -- the secret as `client_secret` in the form body (never
+        // `Authorization: Basic`, §12.1 rule 3, whichever of client_secret_post and
+        // client_secret_basic the client is registered for), or the §6.1 certificate on the
+        // connection. A public client (no secret configured) sends none and is not refused:
+        // appendOidcClientSecret adds nothing for it. The SDK never borrows a secret from
+        // another configuration and never invents one.
         FormBody.Builder form = new FormBody.Builder().add("client_id", requireOidcClientId());
+        appendOidcClientSecret(form);
         if (scope != null) {
             form.add("scope", scope);
         }
@@ -3397,12 +3409,22 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public OidcTokenSet devicePoll(Sensitive deviceCode, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration) {
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
-        FormBody form = new FormBody.Builder()
+        // §14.1 rule 3: the poll names its client on EVERY poll (the server reads the client
+        // before it looks at the device code), and rule 2: it sends the client's credential by
+        // the rules of its other token requests -- `client_secret` in the body for a client
+        // configured with a secret, the certificate on the connection for an mTLS client,
+        // nothing for a public client. Never `Authorization: Basic`.
+        FormBody.Builder builder = new FormBody.Builder()
                 .add("grant_type", DEVICE_CODE_GRANT_TYPE)
                 .add("device_code", deviceCode.expose())
-                .add("client_id", requireOidcClientId())
-                .build();
-        JsonNode wire = postToken(config, form, tenantId);
+                .add("client_id", requireOidcClientId());
+        appendOidcClientSecret(builder);
+        // A 401 {"error":"invalid_client"} (§14.2 rule 5) is an OAuthProtocolError from
+        // ErrorMapper.fromOAuth2Response: it never enters the §9 refresh guard (this path does
+        // not touch the session) and is not retried -- deviceLogin treats it as terminal.
+        // This SDK implements the §21.7 verifier half only and generates no DPoP proof, so a
+        // client registered for DPoP cannot be driven from here and meets that 401 (§21.7.3).
+        JsonNode wire = postToken(config, builder.build(), tenantId);
         // No nonce: the device grant has no authorization request to carry one.
         return buildTokenSet(wire, config, null);
     }
