@@ -299,6 +299,24 @@ public final class SessionState {
         return encodedPath.startsWith("/oauth2/");
     }
 
+    private static final java.util.regex.Pattern OAUTH2_ENDPOINT =
+            java.util.regex.Pattern.compile("(?:/t/[^/]+)?/oauth2/.*");
+
+    /**
+     * Checks whether {@code encodedPath} is an {@code /oauth2/*} endpoint in either issuer form
+     * &mdash; {@code /oauth2/&hellip;} or {@code /t/{tenant_id}/oauth2/&hellip;} &mdash; the
+     * requests to which no session or adopted credential is ever attached (CONTRACT.md
+     * &sect;12.1 rule 3 last paragraph, &sect;6.1 rule 11, &sect;14.6; contract 1.62, C162-05).
+     * Unlike {@link #isOauth2Path(String)} it is anchored, so the federation endpoints
+     * ({@code /api/v1/auth/federation/oauth2/*}) are not matched.
+     *
+     * @param encodedPath a request URL's encoded path
+     * @return {@code true} if {@code encodedPath} is under {@code /oauth2/} or {@code /t/{id}/oauth2/}
+     */
+    public static boolean isOauth2Endpoint(String encodedPath) {
+        return OAUTH2_ENDPOINT.matcher(encodedPath).matches();
+    }
+
     /** Returns the last captured CSRF token, if any.
      *
      * @return the last captured CSRF token, or {@code null} if none has been observed yet */

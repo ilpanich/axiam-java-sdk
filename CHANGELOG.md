@@ -7,17 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-10-13
+## [1.1.0] - 2026-10-16
 
-Contract 1.61 (accompanying the AXIAM 1.0.1 release): `CONTRACT.md`, `openapi.json` and
-`management-registry.json` re-vendored byte for byte from `ilpanich/axiam` commit `058d8e0`
-(branch `claude/release-1.0.1`; `proto/` is unchanged), and the §27 surface regenerated (still 190
-operations across 28 namespaces). The contract is additive and clarifying; this SDK adds three
-fields and changes no behaviour of an existing one.
+Contract 1.62 (accompanying the AXIAM 1.1.0 release), which carries contract 1.61 with it: release
+1.0.1 was never tagged, so what its section recorded ships here, in one release. `CONTRACT.md`,
+`openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`
+commit `d25413506` (the `claude/release-1.1.0` plan branch; `proto/` is unchanged), and the §27
+surface is regenerated: **202 operations across 29 namespaces** (was 190 across 28), the new one
+being `network`. The contract is additive and clarifying on the wire; the source-breaking changes
+are named below. The artifact version is **1.1.0** (`axiam-sdk` and `axiam-bom`).
+
+### Source-breaking changes
+
+Wire-additive; source-breaking in the places below. Each entry says what to change.
+
+- **The request `user_id` is a `String` (§27.11 rule 5, contract 1.62).**
+  `CreateCertificateRequest.userId` and `SignCertificateCsrRequest.userId` were `UUID` (1.61, never
+  tagged) and are `@Nullable String`, so a value that is not a UUID can be sent and the server's
+  `400` is surfaced instead of being made unrepresentable. The canonical constructors change type
+  in that component; *migration:* pass `uuid.toString()` (or the text you hold). The **response**
+  `Certificate.userId` and `GeneratedCertificate.userId` stay `UUID`.
+- **`SsfStream` keeps the server's own `updated_at` string (§32.2, contract 1.62).** The record
+  component that held the `OffsetDateTime` is now `String updatedAtRaw`, bound to the wire name
+  `updated_at`, and `updatedAt()` is a derived accessor returning the parsed `OffsetDateTime`, so
+  every caller of `stream.updatedAt()` compiles unchanged. *Migration:* only code that calls
+  `SsfStream`'s canonical constructor changes (pass the string).
+- **`ManagementPlan.Target` gains `NETWORK_POLICY`, `NETWORK_SEGMENT` and `NETWORK_PROFILE`.** A
+  `switch` over the enum with no `default` must handle them.
+- **`ManagementManifest` and `ApplyReport.StepOutcome` gain a component** (`network`, and
+  `reasonCode`). Both keep their previous constructors (the six-argument manifest, the two- and
+  four-argument outcome), so construction compiles unchanged; a record pattern that deconstructs
+  either needs the new component.
+- Canonical constructors that 1.61 changed (kept from the never-tagged 1.0.1): `Certificate`,
+  `GeneratedCertificate`, `CreateCertificateRequest`, `SignCertificateCsrRequest` (`userId`) and
+  `SsfStreamInput` (`expectedUpdatedAt`, between `eventsRequested` and `receiverClientId`). Pass
+  `null` for "not set"; builders and `ReplacementBodies.from(...)` are unaffected.
 
 ### Added
 
-- **`Certificate.user_id` (§27.11 rule 5).** `Certificate` and `GeneratedCertificate` carry
+- **The `network` namespace (§36, contract 1.62).** `client.management().network()` with the
+  twelve operations: `listSegments`, `createSegment`, `getSegment`, `replaceSegment`,
+  `deleteSegment`, `listProfiles`, `createProfile`, `getProfile`, `replaceProfile`,
+  `deleteProfile`, `getPolicy` and `replacePolicy` (and `listSegmentsAll` / `listProfilesAll`).
+  Every write is conditional on the version the caller read; `deleteSegment` and `deleteProfile`
+  take it as a primitive `long`, so a delete cannot be called without one. `POST
+  /api/v1/network/decide` is FreeRADIUS's, not SDK work, and has no method. The `NetworkSegmentKind`,
+  `RadiusTerminationAction` and `RadiusServiceType` enumerations decode a value they do not know
+  and never send it.
+- **`ConflictError.reasonCode()` (§36.3 rule 2, §36.4).** The `409` body's `reason_code`
+  (`stale_version`, `strands_profile`, `has_children`, `site_gone`, `duplicate_name`,
+  `duplicate_vlan`, `duplicate_rank`, `profile_exists`, `other`), verbatim, `null` when the server
+  names none. Branch on it, never on the message.
+- **`network` in the declarative layer (§27.6.2, contract 1.62).**
+  `ManagementManifest.Builder.networkPolicy`, `networkSegment` and `networkProfile`
+  (`ManagementManifest.NetworkSpec`, `PolicySpec`, `SegmentSpec`, `ProfileSpec`). A segment is keyed
+  by site + kind (`access` or `quarantine`, the wire spelling) + name, a profile by its segment,
+  the policy is a singleton; they are written in that order, after everything else. `plan` reads
+  with `GET`s only and judges every stated member on the value as read (a profile's effective,
+  clamped one); `filter_ids` compares as a set and is sent in the manifest's order; a stated
+  `null` on `idle_timeout_secs`, `filter_id` or `service_type` is "none". A duplicate natural key,
+  a repeated Filter-Id, two policies or a profile naming no segment is refused with zero wire
+  calls. A `409` stops the `apply` after one request and its `reason_code` is on
+  `ApplyReport.StepOutcome.reasonCode()`; a stated timeout above the tenant's cap is an `Update`
+  whose `403` the server issues, reported as given. A profile's `segment_version` is the version of
+  the segment write in the same `apply`. This SDK's manifest has no pruning for any namespace, so
+  §27.6.2 item 6 does not apply.
+- **The change-taking stream form (§32.2, contract 1.62).**
+  `ReplacementBodies.ssfStream(stream, SsfStreamChanges)` (and `ssfStream(stream)`) applies the
+  changes over a read, sends `events_requested` and `expected_updated_at` as read, and cuts
+  `events_requested` to a lowered `events_allowed`. The plain converter
+  `ReplacementBodies.from(SsfStream)` remains, and its Javadoc names the caller's duty.
+- **`SsfStream.updatedAtRaw()` (§32.2, contract 1.62).** The server's own `updated_at` string, next
+  to the parsed `updatedAt()`. `ReplacementBodies` sends the raw string, so a `+00:00` offset and
+  nine fraction digits come back byte for byte.
+- **The `updateStream` call-site documentation (§32.2, contract 1.62)** states the three meanings
+  of `events_requested`, the defaults of the omitted members, and names the change-taking form.
+- **The device grant authenticates its client (§14.1, §14.2, contract 1.62).** A client built with
+  `oidcClientSecret(...)` sends it as `client_secret` in the form body at `deviceAuthorize` **and**
+  at every `devicePoll` (never `Authorization: Basic`, for a `client_secret_basic` registration
+  too); a client built with `clientCertificate(...)` presents it; a public client sends no
+  credential and is not refused. The poll sends `client_id` on every poll. A `401`
+  `invalid_client` is an `OAuthProtocolError`, never retried. 1.60's "must not send
+  `client_secret`" is gone. This SDK has no `private_key_jwt` assertion and generates no DPoP
+  proof, so those rows of §14.6 do not apply.
+- **`Certificate.user_id` (§27.11 rule 5; contract 1.61).** `Certificate` and `GeneratedCertificate` carry
   `userId` (`@Nullable UUID`): `null` and an absent member both decode as "no account named" (a
   server before 1.0.1 omits it), and it is never made required, coalesced to a nil UUID or
   synthesised from `metadata` or the subject. `CreateCertificateRequest.userId` and
@@ -39,17 +112,40 @@ fields and changes no behaviour of an existing one.
 
 ### Changed
 
-- Canonical constructors gain a component, as the README's versioning note warns generated records
-  may: `Certificate`, `GeneratedCertificate`, `CreateCertificateRequest`,
-  `SignCertificateCsrRequest` (`userId`) and `SsfStreamInput` (`expectedUpdatedAt`, between
-  `eventsRequested` and `receiverClientId`). Pass `null` for "not set"; builders and
-  `ReplacementBodies.from(...)` are unaffected.
+- Re-vendored the 1.62 corrections (`CONTRACT.md`, `openapi.json` version 1.1.0 and its digest,
+  `management-registry.json`) from axiam `d25413506`; `gen_management.py --check` is clean. Contract
+  1.62 corrections (C162-05, §12.1 rule 3, §6.1 rule 11, §14.6): `AuthInterceptor` no longer attaches
+  the session's or an adopted device credential as `Authorization: Bearer` to any `/oauth2/*`
+  request (either issuer form), nor refreshes ahead of one, and `AuthAuthenticator` does not retry
+  one with a session bearer; a credential the caller sets on that one call (the RFC 7592
+  `registration_access_token`) is untouched. The README conformance statement names §36 and says
+  manifest pruning is not offered in any namespace (§27.10).
+- Javadoc of the regenerated models follows the 1.62 `openapi.json` descriptions (certificate
+  subjects and the Ed25519 PKCS#8 note, a client's `scopes` ceiling, and the other corrected
+  response texts).
+- `scripts/gen_management.py` types a required integer query parameter as a primitive `long`,
+  keeps the server's own string for `SsfStream.updated_at`, and types the two request `user_id`
+  members as `String`; `--check` passes.
 - Javadoc of the regenerated models follows the 1.61 `openapi.json` descriptions (the
   `backchannel_logout_uri` address rule, the `metadata` and `events_requested` texts).
-- The README states conformance at contract 1.61.
+- The README states conformance at contract 1.62, and its SemVer promise says that a contract
+  record may add a member or widen a type in a minor release while a removal waits for 2.0.0.
+- `ReplacementBodies.from(SsfStream)` sends `SsfStream.updatedAtRaw()` where 1.61 sent the parsed
+  instant re-rendered in ISO-8601.
 
 ### Tests
 
+- `OauthNoSessionCredentialTest`: with a device credential adopted, and in a second run with a
+  password session, `deviceAuthorize`, `devicePoll`, `oidcRefresh` and `loginClientCredentials`
+  carry no `Authorization` header while the next management call does; `readClientRegistration`
+  still carries its explicit token.
+- `NetworkManagementTest`: §36.8 tests 1 to 5 (the surface and the absent decision route, versions
+  and `reason_code`, closed bodies, open decoding and pagination, errors and the single request
+  of a `429` / `503`). `NetworkManifestTest`: the "Manifest, `network`" tests of §27.9.
+  `Contract162ModelsTest`: §32.8 test 7, the documentation checks, an assigned `null` and the
+  untyped `user_id`. `DeviceGrantClientAuthTest`: §14.6's 1.62 cases (secret in the body at both
+  endpoints and on every poll, no `Authorization` header, a public client, an mTLS client over a
+  real handshake, `401 invalid_client` at both endpoints).
 - `Contract161ModelsTest`: §27.11 rule 5's required test (`generate` and `signCsr` send `user_id`
   as given and no key without it; a body with a UUID, one with `null` and one lacking the member
   all decode, the last two as "no account named"); §32.8 test 1's additions (`expected_updated_at`

@@ -25,7 +25,10 @@ import org.jspecify.annotations.Nullable;
  * @param keyAlgorithm the server's key_algorithm field
  * @param subject The CA's common name, e.g. {@code ACME Corp Root CA}. A **common name**, not a
  *     distinguished name. A single {@code CN=} prefix is accepted and stripped; anything else
- *     containing {@code =} — {@code O=Acme, CN=ACME Corp Root CA} — is refused with {@code 400}.
+ *     containing {@code =} — {@code O=Acme, CN=ACME Corp Root CA} — is refused with {@code 400}, as is
+ *     a name of more than 64 characters (RFC 5280 {@code ub-common-name}) or one holding a control
+ *     character, a tab or line break, an invisible or bidirectional formatting character, or two
+ *     spaces in a row.
  * @param validityDays Validity duration in days.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)

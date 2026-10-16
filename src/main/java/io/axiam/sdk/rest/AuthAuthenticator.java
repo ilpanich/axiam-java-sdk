@@ -67,6 +67,10 @@ public final class AuthAuthenticator implements Authenticator {
         if (SessionState.isRefreshPath(encodedPath) || SessionState.isOauth2SkipRefreshPath(encodedPath)
                 || SessionState.isWebauthnSetupRegisterPath(encodedPath)
                 || SessionState.isDeviceAuthPath(encodedPath)
+                // C162-05 (CONTRACT.md §12.1 rule 3): no session credential on /oauth2/*,
+                // so a retry after a refresh must not attach one either (a 401 on a
+                // registration call that carried its own explicit token is that token's).
+                || SessionState.isOauth2Endpoint(encodedPath)
                 || responseCount(response) >= 2) {
             return null;
         }

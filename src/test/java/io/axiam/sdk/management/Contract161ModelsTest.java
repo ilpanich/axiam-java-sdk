@@ -67,11 +67,12 @@ class Contract161ModelsTest extends ManagementTestBase {
 
     private static CreateCertificateRequest generateRequest(UUID userId) {
         return new CreateCertificateRequest(CertificateType.USER, EXAMPLE_ID, KeyAlgorithm.RSA4096, null,
-                "example", null, userId, 365);
+                "example", null, userId == null ? null : userId.toString(), 365);
     }
 
     private static SignCertificateCsrRequest csrRequest(UUID userId) {
-        return new SignCertificateCsrRequest(CertificateType.USER, "example", EXAMPLE_ID, null, null, userId, 365);
+        return new SignCertificateCsrRequest(CertificateType.USER, "example", EXAMPLE_ID, null, null,
+                userId == null ? null : userId.toString(), 365);
     }
 
     // ── §27.11 rule 5: the required test ─────────────────────────────────
@@ -201,6 +202,8 @@ class Contract161ModelsTest extends ManagementTestBase {
         assertTrue(sent.path("events_requested").isArray() && sent.path("events_requested").isEmpty(),
                 "[] goes back as []");
         assertTrue(sent.has("expected_updated_at"), "the version it read goes back");
+        // Contract 1.62 (§32.2): the response's OWN string, not the instant re-rendered.
+        assertEquals("2026-10-05T02:00:00.5+02:00", sent.path("expected_updated_at").asText());
         assertEquals(none.updatedAt().toInstant(),
                 java.time.OffsetDateTime.parse(sent.path("expected_updated_at").asText()).toInstant(),
                 "the same instant as the updated_at it read");

@@ -24,8 +24,8 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.61**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
-§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33 and §34, with
+This SDK conforms to **contract 1.62**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33, §34 and §36, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
 gRPC-only `getUserInfo` operation and the §1.1.1 gRPC-only `validateToken`/
@@ -36,9 +36,9 @@ the §21 FAPI 2.0 profile and mTLS client credentials (including §21.7 DPoP pro
 verification), the §22 reactor runtime, the §23 OPAQUE (RFC 9807) login path, the
 §24 WebAuthn relying-party layer with its §24.6a JSON bridge, the §25
 account-lifecycle and MFA-enrolment operations, §26 Pushed Authorization Requests
-(RFC 9126), the §27 Management API — all 190 operations across 28 namespaces, with
-the §27.6 declarative layer, including the §27.6.1 manifest additions (contract
-1.51) — the §28 MCP resource-server helpers, the §28.12 RFC 7592 client
+(RFC 9126), the §27 Management API — all 202 operations across 29 namespaces (the
+§36 `network` namespace included), with the §27.6 declarative layer, including the
+§27.6.1 manifest additions (contract 1.51) and the §27.6.2 `network` manifest section — the §28 MCP resource-server helpers, the §28.12 RFC 7592 client
 configuration operations, the §29 SAML service-provider (`saml`), §30 directory
 (`directory`), §31 outbound SCIM target (`scimTargets`) and §32 SSF stream (`ssf`)
 management namespaces with their call-site documentation, explicit-null and
@@ -67,12 +67,36 @@ members (§27.11 rule 5), `SsfStreamInput.expected_updated_at` with the three me
 rule 4), and the rest of §34.5 is informative. `CibaPendingList` (§33.3 rule 16) is a console
 surface no registry operation returns, so this SDK has no model for it.
 
+Contract 1.62 (released as **1.1.0**, §34.6) is met too: the `network` namespace
+(`client.management().network()`, twelve operations; `POST /api/v1/network/decide` is not
+SDK work) and its place in the manifest (`ManagementManifest.Builder.networkPolicy`,
+`networkSegment`, `networkProfile`; §27.6.2); `ConflictError.reasonCode()` (§36.4);
+the change-taking stream form `ReplacementBodies.ssfStream(stream, changes)` (§32.2), with
+`SsfStream.updatedAtRaw()` keeping the server's own `updated_at` string and the three
+meanings of `events_requested` stated at `updateStream`; an assigned `null` is "none" and
+the request `user_id` of `certificates.generate` and `signCsr` is a `String` (§27.11 rule
+5); and the device grant authenticating its client (§14.1: a configured secret goes in the
+form body at `deviceAuthorize` and every `devicePoll`, a public client sends none). This
+SDK has no `private_key_jwt` assertion and generates no DPoP proof, so those two rows of
+§14.6 do not apply to it. No session or adopted credential is ever attached to a request to
+`/oauth2/*` (§12.1 rule 3, §6.1 rule 11, §14.6): only a credential the caller hands to one
+call, such as the RFC 7592 `registration_access_token`, goes there. Manifest pruning: not
+offered in any namespace (§27.10). The vendored `CONTRACT.md`, `openapi.json` and
+`management-registry.json` are `ilpanich/axiam` commit `d25413506`.
+
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a
-new major version. One caveat comes with Java records: the generated §27 models are
+new major version, with one reading of "breaking" that the contract makes explicit. **A
+contract record may add a member or widen a type in a minor release** (a response gains a
+field, a request gains an optional one, an enumeration gains a value), **and a removal
+waits for 2.0.0.** Java records make that visible: the generated §27 models are
 records, so a member the server's schema adds later adds a component to the canonical
-constructor. Build request bodies with their builders or factories where they have
-one, and treat positional construction as tied to the contract version.
+constructor, and a type a contract record widens changes the component's type. Build
+request bodies with their builders or factories where they have one, and treat
+positional construction as tied to the contract version. Source-breaking changes are named
+in the [CHANGELOG](CHANGELOG.md) when they ship; 1.1.0's are the `String` `userId` of
+`CreateCertificateRequest` and `SignCertificateCsrRequest`, and `SsfStream`'s
+`updatedAtRaw`.
 
 §12.7, §14, §15, §17, §19, §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29,
 §30, §31, §32, §32.7, §33, §33.2 signed and §34 are named
@@ -291,7 +315,7 @@ and the two `SupportedVersions` constants ever stop agreeing.
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -305,7 +329,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>1.0.0</version>
+      <version>1.1.0</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -317,7 +341,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:1.0.0")
+    implementation("io.github.ilpanich:axiam-sdk:1.1.0")
 }
 ```
 
@@ -325,7 +349,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:1.0.0"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.1.0"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```
@@ -817,8 +841,15 @@ own loop. The polling rules are where implementations go wrong:
 
 `deviceCode()` is `Sensitive`; `userCode()` deliberately is not — it exists to be
 read aloud, and wrapping it would defeat the one thing it is for.
-`deviceAuthorize` sends no `client_secret` and does not refuse a client built
-without one. An interrupt during the inter-poll sleep restores the thread's
+**The client authenticates (contract 1.62, §14.1).** A client built with
+`oidcClientSecret(...)` sends it as `client_secret` in the **form body** at
+`deviceAuthorize` **and** at every `devicePoll` — never as `Authorization: Basic`, even
+for a client registered `client_secret_basic` — and a client built with a
+`clientCertificate(...)` presents it on the connection. A public client (the usual
+device) configures neither, sends `client_id` and no credential, and is not refused. The
+poll names its `client_id` on every poll. A `401` `invalid_client` from either endpoint
+is an `OAuthProtocolError`, never retried; a client registered for DPoP, which this SDK
+cannot prove, meets it on the first poll. An interrupt during the inter-poll sleep restores the thread's
 interrupt flag rather than swallowing it, so a shutting-down device can observe it.
 
 Per §14.3 rule 4, `deviceLogin` **returns** the token set; this SDK does not adopt
@@ -1972,12 +2003,12 @@ have `*Async` companions; `cibaHandlePing` is synchronous.
 
 ## Management API (§27)
 
-The administrative surface: 190 operations across 28 namespaces — users, groups,
+The administrative surface: 202 operations across 29 namespaces — users, groups,
 roles, permissions, resources, scopes, service accounts, certificates, CA
 certificates, PGP keys, webhooks, OAuth2 clients, federation, notification rules,
 e-mail config, settings, SCIM tokens, reactors, WebAuthn policy, audit, privacy,
-organizations, tenants, platform, directory (§30), SAML (§29), SSF (§32) and SCIM
-targets (§31).
+organizations, tenants, platform, directory (§30), SAML (§29), SSF (§32), SCIM
+targets (§31) and network segments and RADIUS reply profiles (§36).
 
 The namespace handles sit **directly on the client** —
 `client.serviceAccounts().rotateSecret(id)`, the form §27.3's Java row shows — and
@@ -2122,6 +2153,16 @@ if (!plan.isConverged()) {
   writes issued at exactly the moment the tenant is in an unknown state.
 - **Applying twice is applying once.** A converged tenant plans nothing and
   takes no writes.
+- **`network` (§27.6.2, contract 1.62).** `networkPolicy(cap)`, `networkSegment(...)`
+  and `networkProfile(...)` describe the tenant's Session-Timeout cap, its segments (keyed by
+  site + kind + name, the wire `access` / `quarantine`) and each segment's reply profile.
+  They are written in that order; `filter_ids` compares as a set (a list that repeats a
+  name is refused before any request); a stated value is compared with the profile as read
+  (the effective, clamped one), so a timeout above the cap is an `Update` that the server
+  then refuses with a `403`, which `apply` reports and stops on. A `409` stops it the same
+  way, with the server's `reason_code` on `ApplyReport.StepOutcome.reasonCode()`; nothing is
+  retried. The namespace needs a human caller. This SDK's manifest has no pruning for any
+  namespace, so a segment the manifest does not state is left alone.
 
 Worked end to end in
 [`examples/management-manifest`](examples/management-manifest), and combined

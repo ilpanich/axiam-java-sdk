@@ -30,7 +30,7 @@ class ManagementClientAccessorsTest extends ManagementTestBase {
      * Every namespace the aggregate exposes is also directly on the client, and both
      * forms hand back the same kind of handle.
      *
-     * <p>Every one of the twenty-four is invoked, not a representative sample. A
+     * <p>Every one of them is invoked, not a representative sample. A
      * forwarding accessor is one line, and one line is exactly where a copy-paste sends
      * {@code pgpKeys()} to {@code pgpKeys()}'s neighbour — a mistake that compiles, that
      * a sample would miss, and that this catches by comparing the returned type.
@@ -63,9 +63,9 @@ class ManagementClientAccessorsTest extends ManagementTestBase {
                     "client." + name + "() and management()." + name
                             + "() must return the same kind of handle (§27.2 rule 4)");
         }
-        // 28 namespaces. Pinned so a partial regeneration that dropped one fails here
-        // rather than quietly shipping 27.
-        assertEquals(28, onAggregate.size());
+        // 29 namespaces (28 until contract 1.62 added `network`). Pinned so a partial
+        // regeneration that dropped one fails here rather than quietly shipping 28.
+        assertEquals(29, onAggregate.size());
     }
 
     /** Both forms reach the same route with the client's own scope. */

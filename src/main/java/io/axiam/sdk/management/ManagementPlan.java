@@ -8,7 +8,9 @@ import java.util.List;
  *
  * <p>Ordering is derived, not incidental: resources (parents before children),
  * then scopes, permissions, roles, role grants, groups, group bindings, users,
- * and finally the user bindings that need all of the above to exist. Two plans
+ * and finally the user bindings that need all of the above to exist; from contract 1.62
+ * the {@code network} namespace follows them &mdash; the policy, then the segments, then
+ * the profiles (&sect;27.6.2). Two plans
  * over unchanged state are equal, in the same order (&sect;27.6 rule 8) — a plan
  * that reorders between runs cannot be diffed, and diffing it is most of the
  * reason it exists.
@@ -82,7 +84,13 @@ public record ManagementPlan(List<PlannedAction> actions) {
         /** A service account (CONTRACT.md &sect;27.6.1 item 3, contract 1.51). */
         SERVICE_ACCOUNT,
         /** A role bound to a service account (contract 1.51). */
-        SERVICE_ACCOUNT_ROLE
+        SERVICE_ACCOUNT_ROLE,
+        /** The tenant's Session-Timeout cap (CONTRACT.md &sect;27.6.2, contract 1.62). */
+        NETWORK_POLICY,
+        /** A network segment (contract 1.62). */
+        NETWORK_SEGMENT,
+        /** A segment's reply profile (contract 1.62). */
+        NETWORK_PROFILE
     }
 
     /**

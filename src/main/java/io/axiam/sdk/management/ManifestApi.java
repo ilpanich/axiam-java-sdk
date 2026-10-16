@@ -3,6 +3,7 @@ package io.axiam.sdk.management;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.axiam.sdk.errors.ConflictError;
 import io.axiam.sdk.errors.NetworkError;
 import io.axiam.sdk.management.models.AddMemberRequest;
 import io.axiam.sdk.management.models.AssignRoleToGroupRequest;
@@ -17,6 +18,17 @@ import io.axiam.sdk.management.models.CreateServiceAccountRequest;
 import io.axiam.sdk.management.models.CreateUserRequest;
 import io.axiam.sdk.management.models.Group;
 import io.axiam.sdk.management.models.GrantPermissionRequest;
+import io.axiam.sdk.management.models.CreateNetworkReplyProfileRequest;
+import io.axiam.sdk.management.models.CreateNetworkSegmentRequest;
+import io.axiam.sdk.management.models.NetworkPolicyResponse;
+import io.axiam.sdk.management.models.NetworkReplyProfile;
+import io.axiam.sdk.management.models.NetworkReplyProfileInput;
+import io.axiam.sdk.management.models.NetworkSegmentResponse;
+import io.axiam.sdk.management.models.RadiusServiceType;
+import io.axiam.sdk.management.models.RadiusTerminationAction;
+import io.axiam.sdk.management.models.ReplaceNetworkPolicyRequest;
+import io.axiam.sdk.management.models.ReplaceNetworkReplyProfileRequest;
+import io.axiam.sdk.management.models.ReplaceNetworkSegmentRequest;
 import io.axiam.sdk.management.models.Permission;
 import io.axiam.sdk.management.models.PermissionEffect;
 import io.axiam.sdk.management.models.Resource;
@@ -38,6 +50,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -127,6 +140,11 @@ public final class ManifestApi {
         private final Map<UUID, List<RoleGroupAssignment>> roleGroups = new HashMap<>();
         private final Map<UUID, List<RoleServiceAccountAssignment>> roleServiceAccounts = new HashMap<>();
         private final Map<UUID, List<UUID>> groupMembers = new HashMap<>();
+        // §27.6.2: read only when the manifest has a `network` section; the policy always exists
+        // (the default, version 0, until the tenant first writes one).
+        private @Nullable NetworkPolicyResponse networkPolicy;
+        private List<NetworkSegmentResponse> networkSegments = List.of();
+        private final Map<UUID, NetworkReplyProfile> networkProfiles = new HashMap<>();
     }
 
     /** Manifest keys resolved to server identifiers. */
@@ -138,6 +156,10 @@ public final class ManifestApi {
         private final Map<String, UUID> groups = new HashMap<>();
         private final Map<String, UUID> users = new HashMap<>();
         private final Map<String, UUID> serviceAccounts = new HashMap<>();
+        // §27.6.2 item 4: a profile's segment_version is the version of the segment's most recent
+        // write in THIS apply, not the one plan read, so the map is moved by every segment write.
+        private final Map<String, UUID> networkSegments = new HashMap<>();
+        private final Map<String, Long> networkSegmentVersions = new HashMap<>();
     }
 
     /**
@@ -198,7 +220,28 @@ public final class ManifestApi {
                         .stream().map(UserResponse::id).toList());
             }
         }
+        readNetwork(manifest.network(), snapshot);
         return snapshot;
+    }
+
+    /**
+     * Reads the network state the manifest's {@code network} section is reconciled against
+     * (CONTRACT.md &sect;27.6.2 item 3): {@code get_policy}, {@code list_segments} and
+     * {@code list_profiles}, each walked to exhaustion, and only the ones the section needs
+     * &mdash; a manifest without one makes no network request. {@code GET}s only.
+     */
+    private void readNetwork(ManagementManifest.NetworkSpec network, Snapshot snapshot) {
+        if (!network.policies().isEmpty()) {
+            snapshot.networkPolicy = api.network().getPolicy();
+        }
+        if (!network.segments().isEmpty()) {
+            snapshot.networkSegments = api.network().listSegmentsAll(null, PLAN_PAGE);
+        }
+        if (!network.profiles().isEmpty()) {
+            for (NetworkReplyProfile profile : api.network().listProfilesAll(PLAN_PAGE)) {
+                snapshot.networkProfiles.put(profile.segmentId(), profile);
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -216,7 +259,23 @@ public final class ManifestApi {
         UPDATE_PERMISSION, CREATE_ROLE, UPDATE_ROLE, GRANT_PERMISSION, CREATE_GROUP,
         UPDATE_GROUP, ASSIGN_ROLE_TO_GROUP, REBIND_ROLE_ON_GROUP, CREATE_USER, UPDATE_USER,
         ASSIGN_ROLE_TO_USER, REBIND_ROLE_ON_USER, ADD_GROUP_MEMBER, CREATE_SERVICE_ACCOUNT,
-        UPDATE_SERVICE_ACCOUNT, ASSIGN_ROLE_TO_SERVICE_ACCOUNT, REBIND_ROLE_ON_SERVICE_ACCOUNT
+        UPDATE_SERVICE_ACCOUNT, ASSIGN_ROLE_TO_SERVICE_ACCOUNT, REBIND_ROLE_ON_SERVICE_ACCOUNT,
+        UPDATE_NETWORK_POLICY, CREATE_NETWORK_SEGMENT, UPDATE_NETWORK_SEGMENT,
+        CREATE_NETWORK_PROFILE, UPDATE_NETWORK_PROFILE
+    }
+
+    /** The policy replacement: the cap to send and the version plan read (§27.6.2 item 4). */
+    private record PolicyChange(int sessionTimeoutMaxSecs, long version) {
+    }
+
+    /** A segment write: the spec and, for an update, the segment as read. */
+    private record SegmentChange(ManagementManifest.SegmentSpec spec,
+                                 @Nullable NetworkSegmentResponse existing) {
+    }
+
+    /** A profile write: the spec and, for an update, the effective profile as read. */
+    private record ProfileChange(ManagementManifest.ProfileSpec spec,
+                                 @Nullable NetworkReplyProfile existing) {
     }
 
     /**
@@ -446,7 +505,94 @@ public final class ManifestApi {
                         Kind.ASSIGN_ROLE_TO_SERVICE_ACCOUNT, Kind.REBIND_ROLE_ON_SERVICE_ACCOUNT);
             }
         }
+        computeNetwork(m.network(), snap, res, out);
         return out;
+    }
+
+    /**
+     * The {@code network} namespace (CONTRACT.md &sect;27.6.2): the policy, then the segments,
+     * then the profiles, appended after everything &sect;27.6 rule 5 already orders so that a
+     * manifest without a {@code network} section plans exactly as it did before 1.62.
+     *
+     * <p>Drift is judged on the read: every stated member is compared with the value as the
+     * read returns it (a profile's, the effective one), {@code filter_ids} as a set, and no
+     * hidden or stored value is compared. A stated {@code session_timeout_secs} above the
+     * tenant's cap therefore differs from a read that was clamped to it and plans an
+     * {@code Update}, whose {@code apply} the server refuses with {@code 403}.
+     */
+    private static void computeNetwork(ManagementManifest.NetworkSpec network, Snapshot snap,
+                                       Resolved res, List<Step> out) {
+        if (!network.policies().isEmpty()) {
+            ManagementManifest.PolicySpec spec = network.policies().get(0);
+            NetworkPolicyResponse read = snap.networkPolicy;
+            String summary = "network policy (session_timeout_max_secs " + spec.sessionTimeoutMaxSecs() + ")";
+            // The tenant's policy always exists, so it is never a Create (§27.6.2 item 3).
+            boolean drifted = read == null || read.sessionTimeoutMaxSecs() != spec.sessionTimeoutMaxSecs();
+            out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
+                    ManagementPlan.Target.NETWORK_POLICY, "network.policy", summary,
+                    drifted ? Kind.UPDATE_NETWORK_POLICY : Kind.NOOP,
+                    new PolicyChange(spec.sessionTimeoutMaxSecs(), read == null ? 0L : read.version()),
+                    null));
+        }
+
+        Map<String, ManagementManifest.SegmentSpec> bySegmentKey = new HashMap<>();
+        for (ManagementManifest.SegmentSpec spec : network.segments()) {
+            bySegmentKey.put(spec.key(), spec);
+            String summary = "network segment '" + ManifestValidation.naturalKey(spec) + "'";
+            NetworkSegmentResponse found = snap.networkSegments.stream()
+                    .filter(r -> r.siteKey().equals(spec.site()) && r.kind() == spec.kind()
+                            && r.name().equals(spec.name()))
+                    .findFirst().orElse(null);
+            if (found == null) {
+                out.add(step(ManagementPlan.Change.CREATE, ManagementPlan.Target.NETWORK_SEGMENT,
+                        spec.key(), summary, Kind.CREATE_NETWORK_SEGMENT,
+                        new SegmentChange(spec, null), null));
+                continue;
+            }
+            res.networkSegments.put(spec.key(), found.id());
+            res.networkSegmentVersions.put(spec.key(), found.version());
+            boolean drifted = spec.vlanId() != found.vlanId()
+                    || (spec.rank() != null && !spec.rank().equals(found.rank()))
+                    || (spec.enabled() != null && !spec.enabled().equals(found.enabled()))
+                    || (spec.filterIds() != null
+                        && !new HashSet<>(spec.filterIds()).equals(new HashSet<>(found.filterIds())));
+            out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
+                    ManagementPlan.Target.NETWORK_SEGMENT, spec.key(), summary,
+                    drifted ? Kind.UPDATE_NETWORK_SEGMENT : Kind.NOOP,
+                    new SegmentChange(spec, found), null));
+        }
+
+        // A profile follows its segment: the profiles' order is the segments' (rule 8).
+        for (ManagementManifest.SegmentSpec segment : network.segments()) {
+            ManagementManifest.ProfileSpec spec = network.profiles().stream()
+                    .filter(p -> p.segment().equals(segment.key())).findFirst().orElse(null);
+            if (spec == null) {
+                continue;
+            }
+            String summary = "network reply profile of segment '"
+                    + ManifestValidation.naturalKey(segment) + "'";
+            UUID segmentId = res.networkSegments.get(segment.key());
+            NetworkReplyProfile found = segmentId == null ? null : snap.networkProfiles.get(segmentId);
+            if (found == null) {
+                out.add(step(ManagementPlan.Change.CREATE, ManagementPlan.Target.NETWORK_PROFILE,
+                        segment.key(), summary, Kind.CREATE_NETWORK_PROFILE,
+                        new ProfileChange(spec, null), segment.key()));
+                continue;
+            }
+            boolean drifted = spec.sessionTimeoutSecs() != found.sessionTimeoutSecs()
+                    || (spec.terminationAction() != null
+                        && spec.terminationAction() != found.terminationAction())
+                    || (spec.idleTimeoutSecs() != null
+                        && !Objects.equals(spec.idleTimeoutSecs().get(), found.idleTimeoutSecs()))
+                    || (spec.filterId() != null
+                        && !Objects.equals(spec.filterId().get(), found.filterId()))
+                    || (spec.serviceType() != null
+                        && spec.serviceType().get() != found.serviceType());
+            out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
+                    ManagementPlan.Target.NETWORK_PROFILE, segment.key(), summary,
+                    drifted ? Kind.UPDATE_NETWORK_PROFILE : Kind.NOOP,
+                    new ProfileChange(spec, found), segment.key()));
+        }
     }
 
     /** The server's existing binding of {@code roleId} to {@code groupId}, or {@code null}. */
@@ -597,8 +743,12 @@ public final class ManifestApi {
                 stopped = true;
                 continue;
             } catch (RuntimeException e) {
+                // §27.6.2 item 5: a 409 is that action's failure, and its reason_code is surfaced
+                // verbatim for the caller to branch on, never parsed out of the message.
+                String reasonCode = e instanceof ConflictError conflict ? conflict.reasonCode() : null;
                 applied.add(new ApplyReport.AppliedStep(s.action(),
-                        new ApplyReport.StepOutcome(ApplyReport.Status.FAILED, e.getMessage())));
+                        new ApplyReport.StepOutcome(ApplyReport.Status.FAILED, e.getMessage(),
+                                null, null, reasonCode)));
                 stopped = true;
                 continue;
             }
@@ -805,6 +955,69 @@ public final class ManifestApi {
                                         c.existing().inherits() ? null : false,
                                         c.existing().resourceId(), saId, c.existing().tenantScope())));
             }
+            case UPDATE_NETWORK_POLICY -> {
+                PolicyChange c = (PolicyChange) s.spec();
+                api.network().replacePolicy(
+                        new ReplaceNetworkPolicyRequest(c.sessionTimeoutMaxSecs(), c.version()));
+            }
+            case CREATE_NETWORK_SEGMENT -> {
+                ManagementManifest.SegmentSpec spec = ((SegmentChange) s.spec()).spec();
+                NetworkSegmentResponse created = api.network().createSegment(
+                        new CreateNetworkSegmentRequest(spec.enabled(), spec.filterIds(), spec.kind(),
+                                spec.name(), spec.rank(), spec.site(), spec.vlanId()));
+                res.networkSegments.put(s.key(), created.id());
+                res.networkSegmentVersions.put(s.key(), created.version());
+            }
+            case UPDATE_NETWORK_SEGMENT -> {
+                SegmentChange c = (SegmentChange) s.spec();
+                ManagementManifest.SegmentSpec spec = c.spec();
+                NetworkSegmentResponse read = c.existing();
+                // §27.6.2 item 4: every stated member replaces the read's, every unstated one is
+                // carried from the read, and the body has no kind, site_key or name. The
+                // filter_ids go in the order the manifest states (the read's when it states none).
+                NetworkSegmentResponse written = api.network().replaceSegment(read.id(),
+                        new ReplaceNetworkSegmentRequest(
+                                spec.enabled() != null ? spec.enabled() : read.enabled(),
+                                spec.filterIds() != null ? spec.filterIds() : read.filterIds(),
+                                spec.rank() != null ? spec.rank() : read.rank(),
+                                read.version(), spec.vlanId()));
+                res.networkSegmentVersions.put(s.key(), written.version());
+            }
+            case CREATE_NETWORK_PROFILE -> {
+                ManagementManifest.ProfileSpec spec = ((ProfileChange) s.spec()).spec();
+                api.network().createProfile(new CreateNetworkReplyProfileRequest(
+                        new NetworkReplyProfileInput(null,
+                                stated(spec.filterId()), stated(spec.idleTimeoutSecs()),
+                                stated(spec.serviceType()), spec.sessionTimeoutSecs(),
+                                spec.terminationAction()),
+                        res.networkSegments.get(s.related()),
+                        res.networkSegmentVersions.get(s.related())));
+            }
+            case UPDATE_NETWORK_PROFILE -> {
+                ProfileChange c = (ProfileChange) s.spec();
+                ManagementManifest.ProfileSpec spec = c.spec();
+                NetworkReplyProfile read = c.existing();
+                RadiusTerminationAction termination = spec.terminationAction() != null
+                        ? spec.terminationAction() : read.terminationAction();
+                RadiusServiceType serviceType = spec.serviceType() != null
+                        ? spec.serviceType().get() : read.serviceType();
+                // §27.13: a value the SDK decoded as unknown is never re-sent. Carrying one from
+                // the read would store the wrong value, so the action fails here, locally, with no
+                // request, and apply stops.
+                if (termination == RadiusTerminationAction.UNKNOWN
+                        || serviceType == RadiusServiceType.UNKNOWN) {
+                    throw new NetworkError("network profile of segment '" + s.related()
+                            + "' carries a termination_action or service_type this SDK does not "
+                            + "know; it is not re-sent (CONTRACT.md §27.13), so the update is not made");
+                }
+                api.network().replaceProfile(read.segmentId(), new ReplaceNetworkReplyProfileRequest(
+                        new NetworkReplyProfileInput(read.dictionary(),
+                                spec.filterId() != null ? spec.filterId().get() : read.filterId(),
+                                spec.idleTimeoutSecs() != null
+                                        ? spec.idleTimeoutSecs().get() : read.idleTimeoutSecs(),
+                                serviceType, spec.sessionTimeoutSecs(), termination),
+                        res.networkSegmentVersions.get(s.related()), read.version()));
+            }
             case NOOP -> {
                 // Never reached: execute() short-circuits a no-op before here.
             }
@@ -839,6 +1052,11 @@ public final class ManifestApi {
             }
             throw new BindingRebindFailedException(assignFailure.getMessage(), restored);
         }
+    }
+
+    /** A stated optional profile member's value; "none" (stated {@code null}) leaves the key out. */
+    private static <T> @Nullable T stated(@Nullable JsonNullable<T> member) {
+        return member == null ? null : member.get();
     }
 
     private static @Nullable String strOrNull(@Nullable UUID id) {
