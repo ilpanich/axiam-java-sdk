@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Contract 1.62 (accompanying the AXIAM 1.1.0 release), which carries contract 1.61 with it: release
 1.0.1 was never tagged, so what its section recorded ships here, in one release. `CONTRACT.md`,
 `openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`
-commit `d76c5a80b` (the `claude/release-1.1.0` plan branch; `proto/` is unchanged), and the §27
+commit `d25413506` (the `claude/release-1.1.0` plan branch; `proto/` is unchanged), and the §27
 surface is regenerated: **202 operations across 29 namespaces** (was 190 across 28), the new one
 being `network`. The contract is additive and clarifying on the wire; the source-breaking changes
 are named below. The artifact version is **1.1.0** (`axiam-sdk` and `axiam-bom`).
@@ -112,6 +112,14 @@ Wire-additive; source-breaking in the places below. Each entry says what to chan
 
 ### Changed
 
+- Re-vendored the 1.62 corrections (`CONTRACT.md`, `openapi.json` version 1.1.0 and its digest,
+  `management-registry.json`) from axiam `d25413506`; `gen_management.py --check` is clean. Contract
+  1.62 corrections (C162-05, §12.1 rule 3, §6.1 rule 11, §14.6): `AuthInterceptor` no longer attaches
+  the session's or an adopted device credential as `Authorization: Bearer` to any `/oauth2/*`
+  request (either issuer form), nor refreshes ahead of one, and `AuthAuthenticator` does not retry
+  one with a session bearer; a credential the caller sets on that one call (the RFC 7592
+  `registration_access_token`) is untouched. The README conformance statement names §36 and says
+  manifest pruning is not offered in any namespace (§27.10).
 - Javadoc of the regenerated models follows the 1.62 `openapi.json` descriptions (certificate
   subjects and the Ed25519 PKCS#8 note, a client's `scopes` ceiling, and the other corrected
   response texts).
@@ -127,6 +135,10 @@ Wire-additive; source-breaking in the places below. Each entry says what to chan
 
 ### Tests
 
+- `OauthNoSessionCredentialTest`: with a device credential adopted, and in a second run with a
+  password session, `deviceAuthorize`, `devicePoll`, `oidcRefresh` and `loginClientCredentials`
+  carry no `Authorization` header while the next management call does; `readClientRegistration`
+  still carries its explicit token.
 - `NetworkManagementTest`: §36.8 tests 1 to 5 (the surface and the absent decision route, versions
   and `reason_code`, closed bodies, open decoding and pagination, errors and the single request
   of a `429` / `503`). `NetworkManifestTest`: the "Manifest, `network`" tests of §27.9.

@@ -25,7 +25,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 ## Contract conformance
 
 This SDK conforms to **contract 1.62**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
-§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33 and §34, with
+§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33, §34 and §36, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
 gRPC-only `getUserInfo` operation and the §1.1.1 gRPC-only `validateToken`/
@@ -78,7 +78,11 @@ the request `user_id` of `certificates.generate` and `signCsr` is a `String` (§
 5); and the device grant authenticating its client (§14.1: a configured secret goes in the
 form body at `deviceAuthorize` and every `devicePoll`, a public client sends none). This
 SDK has no `private_key_jwt` assertion and generates no DPoP proof, so those two rows of
-§14.6 do not apply to it.
+§14.6 do not apply to it. No session or adopted credential is ever attached to a request to
+`/oauth2/*` (§12.1 rule 3, §6.1 rule 11, §14.6): only a credential the caller hands to one
+call, such as the RFC 7592 `registration_access_token`, goes there. Manifest pruning: not
+offered in any namespace (§27.10). The vendored `CONTRACT.md`, `openapi.json` and
+`management-registry.json` are `ilpanich/axiam` commit `d25413506`.
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a
