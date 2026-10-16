@@ -39,7 +39,9 @@ import java.util.UUID;
  *     on and the deployment does not make every tenant share one issuer (D-55). A stream of an
  *     inactive transmitter is kept, and carries nothing.
  * @param transmitterInactiveReason Why the transmitter is inactive, when it is.
- * @param updatedAt When it was last written.
+ * @param updatedAtRaw When it was last written. -- the server's own string, exactly as sent
+ *     (CONTRACT.md §32.2, contract 1.62); {@code updatedAt()} is the parsed instant, and a body built
+ *     from this read sends this string
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -63,6 +65,16 @@ public record SsfStream(
         @JsonProperty("tenant_id") UUID tenantId,
         @JsonProperty("transmitter_active") Boolean transmitterActive,
         @JsonProperty("transmitter_inactive_reason") @Nullable String transmitterInactiveReason,
-        @JsonProperty("updated_at") OffsetDateTime updatedAt
+        @JsonProperty("updated_at") String updatedAtRaw
 ) {
+
+    /**
+     * updated_at as an instant. Parsed from updatedAtRaw(), which is what the server sent and what
+     * a body built from this read must carry (CONTRACT.md §32.2, contract 1.62).
+     *
+     * @return the parsed updated_at, or {@code null} when the server sent none
+     */
+    public @Nullable OffsetDateTime updatedAt() {
+        return updatedAtRaw == null ? null : OffsetDateTime.parse(updatedAtRaw);
+    }
 }

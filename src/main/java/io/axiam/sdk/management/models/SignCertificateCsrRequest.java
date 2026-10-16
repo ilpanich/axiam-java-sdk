@@ -42,7 +42,7 @@ public record SignCertificateCsrRequest(
         @JsonProperty("issuer_ca_id") UUID issuerCaId,
         @JsonProperty("metadata") @Nullable JsonNode metadata,
         @JsonProperty("subject_alt_names") @Nullable List<SubjectAltName> subjectAltNames,
-        @JsonProperty("user_id") @Nullable UUID userId,
+        @JsonProperty("user_id") @Nullable String userId,
         @JsonProperty("validity_days") Integer validityDays
 ) {
 }

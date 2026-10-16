@@ -46,7 +46,7 @@ public record CreateCertificateRequest(
         @JsonProperty("metadata") @Nullable JsonNode metadata,
         @JsonProperty("subject") String subject,
         @JsonProperty("subject_alt_names") @Nullable List<SubjectAltName> subjectAltNames,
-        @JsonProperty("user_id") @Nullable UUID userId,
+        @JsonProperty("user_id") @Nullable String userId,
         @JsonProperty("validity_days") Integer validityDays
 ) {
 }

@@ -183,21 +183,28 @@ CALL_SITE_NOTES: dict[str, str] = {
         "into `next`, wait until every SP has refreshed the metadata, then promote."
     ),
     "ssf.update_stream": (
-        "An omitted optional member takes its default (§32.2) — **except "
-        "`authorization_header`, which absent keeps the stored one** — unless the "
-        "update moves `endpoint_url` to another scheme, host or port while a header "
-        "is stored: then it must carry `authorization_header` again or "
-        "`clear_authorization_header: true`, else `400` (§32.3 rule 5). An update "
-        "overtaken by the receiver's own write is `409`: read the stream again "
-        "(never retried, §32.8 test 5). **Contract 1.61:** `expected_updated_at` "
-        "(the `updated_at` string you read, sent as given) makes the update "
-        "conditional on that version, `409` if the stream was written since; and "
-        "`events_requested` has three meanings on an update (§32.2): absent "
-        "*resets* the stream to every event of `events_allowed`, `[]` is stored as "
-        "the receiver's \"none\", a list is stored as given. An edit therefore "
-        "sends back the `events_requested` and `expected_updated_at` it read. "
-        "`ReplacementBodies.from(SsfStream)` turns a read into the body, "
-        "carrying both."
+        "**An update replaces** (§27.4 rule 5, §32.2): an omitted optional member takes "
+        "its default — `description`, `endpoint_url` and `status_reason` null, "
+        "`subject_format` `iss_sub`, `status` `enabled`, `clear_authorization_header` "
+        "false — **except `authorization_header`, which absent keeps the stored one**, "
+        "unless the update moves `endpoint_url` to another scheme, host or port while a "
+        "header is stored: then it must carry `authorization_header` again or "
+        "`clear_authorization_header: true`, else `400` (§32.3 rule 5). "
+        "**`events_requested` has three meanings on an update** (§32.2, contract 1.62), "
+        "and they must be kept apart: **absent resets** the stream to every event of "
+        "`events_allowed`, widening any narrowing the receiver made; **`[]` is stored as "
+        "the receiver's \"none\"** and the stream carries nothing; **a list is stored as "
+        "given** and refused `400` if any entry is outside `events_allowed`. A raw API "
+        "client is bound by the same meaning. An edit therefore sends back the "
+        "`events_requested` and the `expected_updated_at` it read: "
+        "`ReplacementBodies.ssfStream(stream, changes)` does that and cuts "
+        "`events_requested` to a lowered `events_allowed`; the plain converter "
+        "`ReplacementBodies.from(SsfStream)` carries both as read and leaves the cut to "
+        "you. `expected_updated_at` (contract 1.61) is the `updated_at` **string the "
+        "server sent** (`SsfStream.updatedAtRaw()`), sent as given: the update is `409` "
+        "if the stream was written since — by the receiver as well as an administrator — "
+        "and a `409` is never retried (§32.8 test 5): read the stream again. An assigned "
+        "`null` is the same as never setting it (§27.11 rule 5)."
     ),
     "scim_targets.create": (
         "**The credential is bound to its URL** (§31.3 rule 2): `credential` is "
@@ -1117,7 +1124,10 @@ DATE_TIME_AS_STRING = {
 # caller's to see -- a `java.util.UUID` makes the malformed value unrepresentable,
 # which is a client-side judgement of it. The RESPONSE `Certificate.user_id` stays
 # a `UUID`. Source-breaking: the record constructors change.
-STRING_REQUEST_MEMBERS: set[tuple[str, str]] = set()
+STRING_REQUEST_MEMBERS = {
+    ("CreateCertificateRequest", "user_id"),
+    ("SignCertificateCsrRequest", "user_id"),
+}
 
 # Response timestamps whose server spelling is kept next to the parsed value.
 # CONTRACT.md §32.2 (contract 1.62, normative): "the `SsfStream` it returns keeps
@@ -1127,7 +1137,9 @@ STRING_REQUEST_MEMBERS: set[tuple[str, str]] = set()
 # INSTANT it stored with the string it is sent, so re-rendering one can miss.
 # The record component is the raw string (`updatedAtRaw`, bound to the wire name);
 # `updatedAt()` is a derived accessor that parses it.
-RAW_TIMESTAMPS: set[tuple[str, str]] = set()
+RAW_TIMESTAMPS = {
+    ("SsfStream", "updated_at"),
+}
 
 
 def emit_raw_timestamp_accessors(fields: list[dict]) -> list[str]:
