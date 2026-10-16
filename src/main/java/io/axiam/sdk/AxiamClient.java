@@ -1464,6 +1464,24 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     /**
+     * A tenant's network segments and the RADIUS reply profile each owns (CONTRACT &sect;36,
+     * contract 1.62): a segment is a node of the reserved {@code /network} subtree of the resource
+     * tree (kind, VLAN, Filter-Id envelope, placement rank), its profile is the typed
+     * {@code axiam-radius-reply/1} record a decision renders, and the tenant's Session-Timeout cap
+     * is one more row of it. Every write is conditional on the {@code version} the caller read
+     * and a {@code 409} names its {@code reason_code}. The namespace is human-only, and the
+     * decision route FreeRADIUS calls is not SDK work.
+     *
+     * <p>The same handle as {@code management().network()} (&sect;27.2 rule 4).
+     * Acquiring it performs no I/O (&sect;27.2 rule 1).
+     *
+     * @return the network namespace handle
+     */
+    public io.axiam.sdk.management.NetworkApi network() {
+        return management().network();
+    }
+
+    /**
      * {@code POST /api/v1/auth/login}. Returns a typed {@link LoginResult} —
      * an MFA challenge (HTTP 202) is an expected outcome, not an exception;
      * check {@link LoginResult#mfaRequired()} before assuming a session was
