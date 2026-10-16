@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.axiam.sdk.Sensitive;
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.management.models.NetworkSegmentKind;
+import io.axiam.sdk.management.models.RadiusServiceType;
+import io.axiam.sdk.management.models.RadiusTerminationAction;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -42,6 +45,11 @@ import java.util.Set;
  * @param users users, their role assignments and their group memberships
  * @param serviceAccounts service accounts and the roles bound to them (CONTRACT.md
  *                        &sect;27.6.1 item 3, contract 1.51)
+ * @param network the {@code network} namespace &mdash; the tenant's Session-Timeout cap, its
+ *                segments and their reply profiles (CONTRACT.md &sect;27.6.2, contract 1.62);
+ *                {@link NetworkSpec#empty()} says nothing about the network. The namespace
+ *                is human-only: an {@code apply} whose manifest has a {@code network} section
+ *                needs a human caller
  */
 public record ManagementManifest(
         List<ResourceSpec> resources,
@@ -49,7 +57,8 @@ public record ManagementManifest(
         List<RoleSpec> roles,
         List<GroupSpec> groups,
         List<UserSpec> users,
-        List<ServiceAccountSpec> serviceAccounts) {
+        List<ServiceAccountSpec> serviceAccounts,
+        NetworkSpec network) {
 
     /**
      * Canonical constructor, defensively copying every list.
@@ -60,6 +69,7 @@ public record ManagementManifest(
      * @param groups groups and their roles
      * @param users users and their bindings
      * @param serviceAccounts service accounts and their role bindings
+     * @param network the network section, or {@code null} for none
      */
     public ManagementManifest {
         resources = List.copyOf(resources);
@@ -68,6 +78,24 @@ public record ManagementManifest(
         groups = List.copyOf(groups);
         users = List.copyOf(users);
         serviceAccounts = List.copyOf(serviceAccounts);
+        network = network == null ? NetworkSpec.empty() : network;
+    }
+
+    /**
+     * A manifest with no {@code network} section &mdash; the six-argument form every manifest
+     * had before contract 1.62.
+     *
+     * @param resources resources, in any order
+     * @param permissions permissions
+     * @param roles roles and their grants
+     * @param groups groups and their roles
+     * @param users users and their bindings
+     * @param serviceAccounts service accounts and their role bindings
+     */
+    public ManagementManifest(List<ResourceSpec> resources, List<PermissionSpec> permissions,
+            List<RoleSpec> roles, List<GroupSpec> groups, List<UserSpec> users,
+            List<ServiceAccountSpec> serviceAccounts) {
+        this(resources, permissions, roles, groups, users, serviceAccounts, NetworkSpec.empty());
     }
 
     /**
@@ -77,7 +105,8 @@ public record ManagementManifest(
      */
     public static ManagementManifest empty() {
         return new ManagementManifest(
-                List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                NetworkSpec.empty());
     }
 
     /**
@@ -378,6 +407,254 @@ public record ManagementManifest(
     }
 
     /**
+     * The {@code network} section of a manifest (CONTRACT.md &sect;27.6.2, contract 1.62).
+     *
+     * <p>Natural keys: a segment is identified by <strong>site + kind + name</strong>, where
+     * {@code kind} is the wire spelling {@code access} or {@code quarantine} (there is no
+     * {@code zones} spelling anywhere in a manifest); a profile by <strong>its segment</strong>; the
+     * policy is a <strong>singleton</strong>. A manifest that names one natural key twice, lists
+     * one Filter-Id twice in a segment, carries two policies or a profile whose segment no spec
+     * declares is refused before any request.
+     *
+     * @param policies the tenant's Session-Timeout cap; at most one, and a list only so that a
+     *                 second one is representable and refused rather than silently dropped
+     * @param segments the segments, in the order they are written
+     * @param profiles the reply profiles, one per segment at most
+     */
+    public record NetworkSpec(List<PolicySpec> policies, List<SegmentSpec> segments,
+                              List<ProfileSpec> profiles) {
+
+        /**
+         * Canonical constructor, defensively copying every list.
+         *
+         * @param policies the cap
+         * @param segments the segments
+         * @param profiles the profiles
+         */
+        public NetworkSpec {
+            policies = List.copyOf(policies);
+            segments = List.copyOf(segments);
+            profiles = List.copyOf(profiles);
+        }
+
+        /**
+         * A section that says nothing about the network.
+         *
+         * @return an empty section
+         */
+        public static NetworkSpec empty() {
+            return new NetworkSpec(List.of(), List.of(), List.of());
+        }
+
+        /**
+         * Whether the manifest states nothing about the network.
+         *
+         * @return {@code true} when there is no policy, segment or profile
+         */
+        public boolean isEmpty() {
+            return policies.isEmpty() && segments.isEmpty() && profiles.isEmpty();
+        }
+    }
+
+    /**
+     * The tenant's Session-Timeout cap, a singleton (CONTRACT.md &sect;27.6.2 item 1).
+     *
+     * @param sessionTimeoutMaxSecs the cap in seconds; the server takes 300 to 86 400
+     */
+    public record PolicySpec(int sessionTimeoutMaxSecs) {
+    }
+
+    /**
+     * A network segment (CONTRACT.md &sect;27.6.2 item 1).
+     *
+     * <p>The natural key is {@code site} + {@code kind} + {@code name}; they are the key and never
+     * drift (a segment's kind and place do not change, &sect;36.3 rule 4). Every other member is a
+     * field. A member left {@code null} is silent: an update carries the read's value (rule 3),
+     * and a create omits it, taking the server's default. {@code filterIds} compares as a
+     * <em>set</em> (the order is the author's, and a reorder alone is never an update), and a
+     * list that repeats a name is refused at {@code plan}.
+     *
+     * @param key manifest-local identifier, referred to by a profile's {@code segment}
+     * @param site the wire {@code site_key}
+     * @param kind {@code access} or {@code quarantine}, the value the API reads and writes
+     * @param name the segment's name
+     * @param vlanId the VLAN, 1 to 4094; the server checks it
+     * @param rank the placement rank, required of an {@code access} segment and absent for a
+     *             {@code quarantine} one, or {@code null} to say nothing
+     * @param filterIds the Filter-Id envelope, in the order to send, or {@code null} to say
+     *                  nothing; {@code List.of()} states an empty envelope
+     * @param enabled whether the segment is a placement candidate, or {@code null} to say
+     *                nothing
+     */
+    public record SegmentSpec(String key, String site, NetworkSegmentKind kind, String name,
+                              int vlanId, @Nullable Integer rank, @Nullable List<String> filterIds,
+                              @Nullable Boolean enabled) {
+
+        /**
+         * Canonical constructor, defensively copying the envelope.
+         *
+         * @param key manifest-local identifier
+         * @param site the wire site key
+         * @param kind {@code access} or {@code quarantine}
+         * @param name the segment's name
+         * @param vlanId the VLAN
+         * @param rank the rank, or {@code null}
+         * @param filterIds the envelope, or {@code null}
+         * @param enabled whether it is a candidate, or {@code null}
+         */
+        public SegmentSpec {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(site, "site");
+            Objects.requireNonNull(kind, "kind");
+            Objects.requireNonNull(name, "name");
+            filterIds = filterIds == null ? null : List.copyOf(filterIds);
+        }
+
+        /**
+         * An {@code access} segment.
+         *
+         * @param key manifest-local identifier
+         * @param site the wire site key
+         * @param name the segment's name
+         * @param vlanId the VLAN
+         * @param rank the placement rank
+         * @return the spec, saying nothing else
+         */
+        public static SegmentSpec access(String key, String site, String name, int vlanId, int rank) {
+            return new SegmentSpec(key, site, NetworkSegmentKind.ACCESS, name, vlanId, rank, null, null);
+        }
+
+        /**
+         * A {@code quarantine} segment.
+         *
+         * @param key manifest-local identifier
+         * @param site the wire site key
+         * @param name the segment's name
+         * @param vlanId the VLAN
+         * @return the spec, saying nothing else
+         */
+        public static SegmentSpec quarantine(String key, String site, String name, int vlanId) {
+            return new SegmentSpec(key, site, NetworkSegmentKind.QUARANTINE, name, vlanId, null, null, null);
+        }
+
+        /**
+         * This spec with a stated Filter-Id envelope.
+         *
+         * @param ids the Filter-Id names, in the order to send
+         * @return the new spec
+         */
+        public SegmentSpec withFilterIds(List<String> ids) {
+            return new SegmentSpec(key, site, kind, name, vlanId, rank, ids, enabled);
+        }
+
+        /**
+         * This spec with a stated {@code enabled}.
+         *
+         * @param value whether the segment is a placement candidate
+         * @return the new spec
+         */
+        public SegmentSpec withEnabled(boolean value) {
+            return new SegmentSpec(key, site, kind, name, vlanId, rank, filterIds, value);
+        }
+    }
+
+    /**
+     * A segment's reply profile, identified by its segment (CONTRACT.md &sect;27.6.2 item 1).
+     *
+     * <p>A member left {@code null} (or, for the three that can be "none", never set) is silent:
+     * an update carries the read's value, which for the timeout is the <em>effective</em> one
+     * (&sect;36.3 rule 6). A member <em>stated</em> {@code null} through
+     * {@link #withIdleTimeoutSecs}, {@link #withFilterId} or {@link #withServiceType} is "none":
+     * the replacement leaves it out, which is how a replacement clears an optional member.
+     *
+     * @param segment the {@code key} of a segment spec of the same manifest
+     * @param sessionTimeoutSecs {@code Session-Timeout}; compared with the value as the read
+     *                           returns it, the effective (clamped) one
+     * @param terminationAction {@code Termination-Action}, or {@code null} to say nothing
+     * @param idleTimeoutSecs {@code Idle-Timeout}; {@code null} says nothing, a
+     *                        {@link JsonNullable#ofNull()} states "none"
+     * @param filterId {@code Filter-Id}; {@code null} says nothing, a {@link JsonNullable#ofNull()}
+     *                 states "none"
+     * @param serviceType {@code Service-Type}; {@code null} says nothing, a
+     *                    {@link JsonNullable#ofNull()} states "none"
+     */
+    public record ProfileSpec(String segment, int sessionTimeoutSecs,
+                              @Nullable RadiusTerminationAction terminationAction,
+                              @Nullable JsonNullable<Integer> idleTimeoutSecs,
+                              @Nullable JsonNullable<String> filterId,
+                              @Nullable JsonNullable<RadiusServiceType> serviceType) {
+
+        /**
+         * Canonical constructor.
+         *
+         * @param segment the segment spec's key
+         * @param sessionTimeoutSecs the timeout
+         * @param terminationAction the action, or {@code null}
+         * @param idleTimeoutSecs the idle timeout, or {@code null} for no statement
+         * @param filterId the Filter-Id, or {@code null} for no statement
+         * @param serviceType the service type, or {@code null} for no statement
+         */
+        public ProfileSpec {
+            Objects.requireNonNull(segment, "segment");
+        }
+
+        /**
+         * A profile stating only its timeout.
+         *
+         * @param segment the segment spec's key
+         * @param sessionTimeoutSecs {@code Session-Timeout}, in seconds
+         * @return the spec, saying nothing else
+         */
+        public static ProfileSpec of(String segment, int sessionTimeoutSecs) {
+            return new ProfileSpec(segment, sessionTimeoutSecs, null, null, null, null);
+        }
+
+        /**
+         * This spec with a stated {@code Termination-Action}.
+         *
+         * @param action the action
+         * @return the new spec
+         */
+        public ProfileSpec withTerminationAction(RadiusTerminationAction action) {
+            return new ProfileSpec(segment, sessionTimeoutSecs, action, idleTimeoutSecs, filterId,
+                    serviceType);
+        }
+
+        /**
+         * This spec with a stated {@code Idle-Timeout}.
+         *
+         * @param seconds the idle timeout, or {@code null} for "none" (the key is left out)
+         * @return the new spec
+         */
+        public ProfileSpec withIdleTimeoutSecs(@Nullable Integer seconds) {
+            return new ProfileSpec(segment, sessionTimeoutSecs, terminationAction,
+                    JsonNullable.of(seconds), filterId, serviceType);
+        }
+
+        /**
+         * This spec with a stated {@code Filter-Id}.
+         *
+         * @param id the Filter-Id, or {@code null} for "none" (the key is left out)
+         * @return the new spec
+         */
+        public ProfileSpec withFilterId(@Nullable String id) {
+            return new ProfileSpec(segment, sessionTimeoutSecs, terminationAction, idleTimeoutSecs,
+                    JsonNullable.of(id), serviceType);
+        }
+
+        /**
+         * This spec with a stated {@code Service-Type}.
+         *
+         * @param type the service type, or {@code null} for "none" (the key is left out)
+         * @return the new spec
+         */
+        public ProfileSpec withServiceType(@Nullable RadiusServiceType type) {
+            return new ProfileSpec(segment, sessionTimeoutSecs, terminationAction, idleTimeoutSecs,
+                    filterId, JsonNullable.of(type));
+        }
+    }
+
+    /**
      * Assembles a {@link ManagementManifest} fluently, validating at the end.
      *
      * <p>A forward reference — a scope naming a resource no {@code resource(...)}
@@ -393,6 +670,9 @@ public record ManagementManifest(
         private final List<GroupSpec> groups = new ArrayList<>();
         private final List<UserSpec> users = new ArrayList<>();
         private final List<ServiceAccountSpec> serviceAccounts = new ArrayList<>();
+        private final List<PolicySpec> networkPolicies = new ArrayList<>();
+        private final List<SegmentSpec> networkSegments = new ArrayList<>();
+        private final List<ProfileSpec> networkProfiles = new ArrayList<>();
         private final List<String> problems = new ArrayList<>();
 
         /** Mutable scope lists, keyed by resource key, folded in at build time. */
@@ -684,6 +964,41 @@ public record ManagementManifest(
         }
 
         /**
+         * Declares the tenant's Session-Timeout cap (CONTRACT.md &sect;27.6.2). A manifest
+         * carries at most one: a second call is refused at {@link #build}.
+         *
+         * @param sessionTimeoutMaxSecs the cap in seconds (the server takes 300 to 86 400)
+         * @return this builder
+         */
+        public Builder networkPolicy(int sessionTimeoutMaxSecs) {
+            networkPolicies.add(new PolicySpec(sessionTimeoutMaxSecs));
+            return this;
+        }
+
+        /**
+         * Declares a network segment (CONTRACT.md &sect;27.6.2).
+         *
+         * @param segment the segment, see {@link SegmentSpec#access} and
+         *                {@link SegmentSpec#quarantine}
+         * @return this builder
+         */
+        public Builder networkSegment(SegmentSpec segment) {
+            networkSegments.add(segment);
+            return this;
+        }
+
+        /**
+         * Declares a segment's reply profile (CONTRACT.md &sect;27.6.2).
+         *
+         * @param profile the profile; its {@code segment} names a {@link #networkSegment} key
+         * @return this builder
+         */
+        public Builder networkProfile(ProfileSpec profile) {
+            networkProfiles.add(profile);
+            return this;
+        }
+
+        /**
          * Returns the assembled manifest, or throws with the reason it cannot be
          * reconciled.
          *
@@ -724,7 +1039,8 @@ public record ManagementManifest(
                         s.description(), serviceAccountRoles.getOrDefault(s.key(), List.of())));
             }
             ManagementManifest manifest = new ManagementManifest(withScopes, permissions,
-                    withGrants, withGroupRoles, withBindings, withServiceAccountRoles);
+                    withGrants, withGroupRoles, withBindings, withServiceAccountRoles,
+                    new NetworkSpec(networkPolicies, networkSegments, networkProfiles));
             ManifestValidation.validate(manifest);
             return manifest;
         }

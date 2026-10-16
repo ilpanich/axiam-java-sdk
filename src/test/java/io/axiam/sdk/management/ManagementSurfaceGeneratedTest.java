@@ -1144,6 +1144,92 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
         client.management().scimTargets().reconcile(EXAMPLE_ID);
     }
 
+    /** Exercises network.list_segments. */
+    @Test
+    void networkListSegments() throws Exception {
+        mount("GET", "/api/v1/network/segments", 200, "{\"items\": [{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"enabled\": true, \"filter_ids\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"kind\": \"access\", \"name\": \"example\", \"path\": \"example\", \"site_key\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1, \"vlan_id\": 1}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        client.management().network().listSegments(null, PageRequest.of(50));
+        client.management().network().listSegmentsAll(null, PageRequest.of(50));
+    }
+
+    /** Exercises network.create_segment. */
+    @Test
+    void networkCreateSegment() throws Exception {
+        mount("POST", "/api/v1/network/segments", 201, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"enabled\": true, \"filter_ids\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"kind\": \"access\", \"name\": \"example\", \"path\": \"example\", \"site_key\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1, \"vlan_id\": 1}");
+        client.management().network().createSegment(new io.axiam.sdk.management.models.CreateNetworkSegmentRequest(null, null, io.axiam.sdk.management.models.NetworkSegmentKind.ACCESS, "example", null, "example", 1));
+    }
+
+    /** Exercises network.get_segment. */
+    @Test
+    void networkGetSegment() throws Exception {
+        mount("GET", "/api/v1/network/segments/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"enabled\": true, \"filter_ids\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"kind\": \"access\", \"name\": \"example\", \"path\": \"example\", \"site_key\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1, \"vlan_id\": 1}");
+        client.management().network().getSegment(EXAMPLE_ID);
+    }
+
+    /** Exercises network.replace_segment. */
+    @Test
+    void networkReplaceSegment() throws Exception {
+        mount("PUT", "/api/v1/network/segments/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"enabled\": true, \"filter_ids\": [], \"id\": \"11111111-1111-4111-8111-111111111111\", \"kind\": \"access\", \"name\": \"example\", \"path\": \"example\", \"site_key\": \"example\", \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1, \"vlan_id\": 1}");
+        client.management().network().replaceSegment(EXAMPLE_ID, new io.axiam.sdk.management.models.ReplaceNetworkSegmentRequest(true, java.util.List.of(), null, 1L, 1));
+    }
+
+    /** Exercises network.delete_segment. */
+    @Test
+    void networkDeleteSegment() throws Exception {
+        mount("DELETE", "/api/v1/network/segments/" + EXAMPLE_ID + "", 204, "");
+        client.management().network().deleteSegment(EXAMPLE_ID, 1L);
+    }
+
+    /** Exercises network.list_profiles. */
+    @Test
+    void networkListProfiles() throws Exception {
+        mount("GET", "/api/v1/network/profiles", 200, "{\"items\": [{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"dictionary\": \"example\", \"segment_id\": \"11111111-1111-4111-8111-111111111111\", \"session_timeout_clamped\": true, \"session_timeout_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"termination_action\": \"default\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1}], \"total\": 1, \"offset\": 0, \"limit\": 50}");
+        client.management().network().listProfiles(PageRequest.of(50));
+        client.management().network().listProfilesAll(PageRequest.of(50));
+    }
+
+    /** Exercises network.create_profile. */
+    @Test
+    void networkCreateProfile() throws Exception {
+        mount("POST", "/api/v1/network/profiles", 201, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"dictionary\": \"example\", \"segment_id\": \"11111111-1111-4111-8111-111111111111\", \"session_timeout_clamped\": true, \"session_timeout_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"termination_action\": \"default\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1}");
+        client.management().network().createProfile(new io.axiam.sdk.management.models.CreateNetworkReplyProfileRequest(new io.axiam.sdk.management.models.NetworkReplyProfileInput(null, null, null, null, 1, null), EXAMPLE_ID, 1L));
+    }
+
+    /** Exercises network.get_profile. */
+    @Test
+    void networkGetProfile() throws Exception {
+        mount("GET", "/api/v1/network/profiles/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"dictionary\": \"example\", \"segment_id\": \"11111111-1111-4111-8111-111111111111\", \"session_timeout_clamped\": true, \"session_timeout_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"termination_action\": \"default\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1}");
+        client.management().network().getProfile(EXAMPLE_ID);
+    }
+
+    /** Exercises network.replace_profile. */
+    @Test
+    void networkReplaceProfile() throws Exception {
+        mount("PUT", "/api/v1/network/profiles/" + EXAMPLE_ID + "", 200, "{\"created_at\": \"2026-08-26T00:00:00Z\", \"created_by\": \"11111111-1111-4111-8111-111111111111\", \"dictionary\": \"example\", \"segment_id\": \"11111111-1111-4111-8111-111111111111\", \"session_timeout_clamped\": true, \"session_timeout_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"termination_action\": \"default\", \"updated_at\": \"2026-08-26T00:00:00Z\", \"updated_by\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1}");
+        client.management().network().replaceProfile(EXAMPLE_ID, new io.axiam.sdk.management.models.ReplaceNetworkReplyProfileRequest(new io.axiam.sdk.management.models.NetworkReplyProfileInput(null, null, null, null, 1, null), 1L, 1L));
+    }
+
+    /** Exercises network.delete_profile. */
+    @Test
+    void networkDeleteProfile() throws Exception {
+        mount("DELETE", "/api/v1/network/profiles/" + EXAMPLE_ID + "", 204, "");
+        client.management().network().deleteProfile(EXAMPLE_ID, 1L);
+    }
+
+    /** Exercises network.get_policy. */
+    @Test
+    void networkGetPolicy() throws Exception {
+        mount("GET", "/api/v1/network/policy", 200, "{\"session_timeout_max_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1}");
+        client.management().network().getPolicy();
+    }
+
+    /** Exercises network.replace_policy. */
+    @Test
+    void networkReplacePolicy() throws Exception {
+        mount("PUT", "/api/v1/network/policy", 200, "{\"session_timeout_max_secs\": 1, \"tenant_id\": \"11111111-1111-4111-8111-111111111111\", \"version\": 1}");
+        client.management().network().replacePolicy(new io.axiam.sdk.management.models.ReplaceNetworkPolicyRequest(1, 1L));
+    }
+
     /** Exercises settings.get_org. */
     @Test
     void settingsGetOrg() throws Exception {
@@ -1434,6 +1520,18 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "groups.remove_member",
                 "groups.remove_service_account",
                 "groups.update",
+                "network.create_profile",
+                "network.create_segment",
+                "network.delete_profile",
+                "network.delete_segment",
+                "network.get_policy",
+                "network.get_profile",
+                "network.get_segment",
+                "network.list_profiles",
+                "network.list_segments",
+                "network.replace_policy",
+                "network.replace_profile",
+                "network.replace_segment",
                 "notification_rules.create",
                 "notification_rules.delete",
                 "notification_rules.get",
@@ -1572,7 +1670,7 @@ class ManagementSurfaceGeneratedTest extends ManagementTestBase {
                 "webhooks.get",
                 "webhooks.list",
                 "webhooks.update");
-        assertEquals(190, exercised.size(),
+        assertEquals(202, exercised.size(),
                 "the generated surface must reach every operation the registry declares");
         assertEquals(expectedSurface(), exercised,
                 "the generated surface and the registry must name the same operations");

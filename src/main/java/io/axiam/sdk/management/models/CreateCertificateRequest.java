@@ -19,7 +19,12 @@ import java.util.UUID;
  * @param issuerCaId the server's issuer_ca_id field
  * @param keyAlgorithm the server's key_algorithm field
  * @param metadata the server's metadata field
- * @param subject the server's subject field
+ * @param subject The certificate's common name, e.g. {@code device-001}: a bare name or one {@code
+ *     CN=} component, at most 64 characters (RFC 5280 {@code ub-common-name}), printable — a control
+ *     character, tab or line break, an invisible or bidirectional formatting character, or two spaces
+ *     in a row is refused with {@code 400}. A name that is to be written into another system's
+ *     configuration (a FreeRADIUS table, an ACL) should match {@code
+ *     ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$}.
  * @param subjectAltNames The names a {@code Server} certificate is issued for, as {@code [{"dns":
  *     "api.lakeside.internal"}, {"ip": "10.0.0.5"}]}. Required for {@code cert_type: Server} and
  *     refused for every other type. Each name, and the common name, must be admitted by the tenant's

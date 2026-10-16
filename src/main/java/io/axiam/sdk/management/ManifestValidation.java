@@ -85,6 +85,8 @@ final class ManifestValidation {
             checkBindings("service account '" + sa.key() + "'", sa.roles(), keys, problems);
         }
 
+        validateNetwork(manifest.network(), problems);
+
         try {
             topologicalOrder(manifest);
         } catch (NetworkError e) {
@@ -95,6 +97,63 @@ final class ManifestValidation {
             throw new NetworkError("manifest is not reconcilable (" + problems.size()
                     + " problem(s)): " + String.join("; ", problems));
         }
+    }
+
+    /**
+     * CONTRACT.md &sect;27.6.2 item 1: the {@code network} section is refused, before any request,
+     * when it names one natural key twice, lists one Filter-Id twice in a segment, carries two
+     * policies or a profile whose segment no spec declares.
+     */
+    private static void validateNetwork(ManagementManifest.NetworkSpec network, List<String> problems) {
+        if (network.policies().size() > 1) {
+            problems.add("manifest carries " + network.policies().size() + " network policies; "
+                    + "the tenant has exactly one, so a manifest carries at most one");
+        }
+        duplicates("network segment", network.segments().stream()
+                .map(ManagementManifest.SegmentSpec::key).toList(), problems);
+        Set<String> naturalKeys = new HashSet<>();
+        Set<String> segmentKeys = new HashSet<>();
+        for (ManagementManifest.SegmentSpec segment : network.segments()) {
+            segmentKeys.add(segment.key());
+            if (segment.kind() == io.axiam.sdk.management.models.NetworkSegmentKind.UNKNOWN) {
+                problems.add("network segment '" + segment.key() + "' has no kind: it is "
+                        + "'access' or 'quarantine', the wire spelling");
+            }
+            String natural = naturalKey(segment);
+            if (!naturalKeys.add(natural)) {
+                problems.add("network segment natural key " + natural
+                        + " (site/kind/name) is declared more than once");
+            }
+            if (segment.filterIds() != null) {
+                Set<String> seen = new HashSet<>();
+                for (String id : segment.filterIds()) {
+                    if (!seen.add(id)) {
+                        problems.add("network segment '" + segment.key() + "' lists Filter-Id '"
+                                + id + "' more than once; filter_ids compares as a set");
+                    }
+                }
+            }
+        }
+        Set<String> profiled = new HashSet<>();
+        for (ManagementManifest.ProfileSpec profile : network.profiles()) {
+            if (!segmentKeys.contains(profile.segment())) {
+                problems.add("network profile names segment '" + profile.segment()
+                        + "', which no segment declares");
+            } else if (!profiled.add(profile.segment())) {
+                problems.add("network segment '" + profile.segment()
+                        + "' has more than one profile; a profile is identified by its segment");
+            }
+        }
+    }
+
+    /**
+     * A segment's natural key: site + kind (the wire spelling) + name.
+     *
+     * @param segment the segment spec
+     * @return the key, as {@code site/kind/name}
+     */
+    static String naturalKey(ManagementManifest.SegmentSpec segment) {
+        return segment.site() + "/" + segment.kind().wire() + "/" + segment.name();
     }
 
     private static void duplicates(String kind, List<String> keys, List<String> problems) {

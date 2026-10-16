@@ -25,11 +25,14 @@ import io.axiam.sdk.management.models.KeyAlgorithm;
 import io.axiam.sdk.management.models.ManagedBy;
 import io.axiam.sdk.management.models.MfaMethodType;
 import io.axiam.sdk.management.models.NameIdFormat;
+import io.axiam.sdk.management.models.NetworkSegmentKind;
 import io.axiam.sdk.management.models.NotificationEventType;
 import io.axiam.sdk.management.models.PermissionEffect;
 import io.axiam.sdk.management.models.PgpKeyAlgorithm;
 import io.axiam.sdk.management.models.PgpKeyPurpose;
 import io.axiam.sdk.management.models.PgpKeyStatus;
+import io.axiam.sdk.management.models.RadiusServiceType;
+import io.axiam.sdk.management.models.RadiusTerminationAction;
 import io.axiam.sdk.management.models.ReactorMode;
 import io.axiam.sdk.management.models.SamlBinding;
 import io.axiam.sdk.management.models.SamlIdpCredentialStatus;
@@ -203,6 +206,13 @@ class ManagementOpenValuesGeneratedTest {
         assertEquals(NameIdFormat.UNKNOWN, JSON.readValue(UNLISTED, NameIdFormat.class));
     }
 
+    /** §27.11 rule 1 for NetworkSegmentKind. */
+    @Test
+    void networkSegmentKindIsOpen() throws Exception {
+        assertEquals(NetworkSegmentKind.ACCESS, JSON.readValue("\"access\"", NetworkSegmentKind.class));
+        assertEquals(NetworkSegmentKind.UNKNOWN, JSON.readValue(UNLISTED, NetworkSegmentKind.class));
+    }
+
     /** §27.11 rule 1 for NotificationEventType. */
     @Test
     void notificationEventTypeIsOpen() throws Exception {
@@ -236,6 +246,20 @@ class ManagementOpenValuesGeneratedTest {
     void pgpKeyStatusIsOpen() throws Exception {
         assertEquals(PgpKeyStatus.ACTIVE, JSON.readValue("\"Active\"", PgpKeyStatus.class));
         assertEquals(PgpKeyStatus.UNKNOWN, JSON.readValue(UNLISTED, PgpKeyStatus.class));
+    }
+
+    /** §27.11 rule 1 for RadiusServiceType. */
+    @Test
+    void radiusServiceTypeIsOpen() throws Exception {
+        assertEquals(RadiusServiceType.FRAMED_USER, JSON.readValue("\"framed_user\"", RadiusServiceType.class));
+        assertEquals(RadiusServiceType.UNKNOWN, JSON.readValue(UNLISTED, RadiusServiceType.class));
+    }
+
+    /** §27.11 rule 1 for RadiusTerminationAction. */
+    @Test
+    void radiusTerminationActionIsOpen() throws Exception {
+        assertEquals(RadiusTerminationAction.DEFAULT, JSON.readValue("\"default\"", RadiusTerminationAction.class));
+        assertEquals(RadiusTerminationAction.UNKNOWN, JSON.readValue(UNLISTED, RadiusTerminationAction.class));
     }
 
     /** §27.11 rule 1 for ReactorMode. */

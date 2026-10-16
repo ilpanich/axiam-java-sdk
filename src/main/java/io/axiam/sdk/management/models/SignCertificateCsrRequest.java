@@ -17,7 +17,10 @@ import java.util.UUID;
  *
  * <p>No {@code subject} and no {@code key_algorithm}: both are read out of the CSR, which is the
  * only place they can be stated without the row and the certificate being able to disagree. No key
- * is returned, so there is no key field anywhere on this exchange.
+ * is returned, so there is no key field anywhere on this exchange. The CSR's common name meets the
+ * rules of {@code subject} on {@code POST /api/v1/certificates} (printable, at most 64 characters)
+ * and is refused, not rewritten, when it does not. So does the value of every other attribute of
+ * the CSR's subject, and a subject with more than one common name is refused.
  *
  * @param certType the server's cert_type field
  * @param csrPem PEM-encoded PKCS#10 request — a {@code BEGIN CERTIFICATE REQUEST} block. The
