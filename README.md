@@ -81,8 +81,8 @@ SDK has no `private_key_jwt` assertion and generates no DPoP proof, so those two
 §14.6 do not apply to it. No session or adopted credential is ever attached to a request to
 `/oauth2/*` (§12.1 rule 3, §6.1 rule 11, §14.6): only a credential the caller hands to one
 call, such as the RFC 7592 `registration_access_token`, goes there. Manifest pruning: not
-offered in any namespace (§27.10). The vendored `CONTRACT.md`, `openapi.json` and
-`management-registry.json` are `ilpanich/axiam` commit `d25413506`.
+offered in any namespace (§27.10). The vendored `CONTRACT.md` is `ilpanich/axiam` commit `d25413506`; `openapi.json` and
+`management-registry.json` are commit `e8722b668` (spec digest `sha256:7c3a5091…c8a1`).
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a

@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-10-16
 
 Contract 1.62 (accompanying the AXIAM 1.1.0 release), which carries contract 1.61 with it: release
-1.0.1 was never tagged, so what its section recorded ships here, in one release. `CONTRACT.md`,
-`openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`
-commit `d25413506` (the `claude/release-1.1.0` plan branch; `proto/` is unchanged), and the §27
+1.0.1 was never tagged, so what its section recorded ships here, in one release. `CONTRACT.md`
+is re-vendored byte for byte from `ilpanich/axiam` commit `d25413506`, and `openapi.json` and
+`management-registry.json` from commit `e8722b668` (spec digest `sha256:7c3a5091…c8a1`; the
+`claude/release-1.1.0` plan branch; `proto/` is unchanged), and the §27
 surface is regenerated: **202 operations across 29 namespaces** (was 190 across 28), the new one
 being `network`. The contract is additive and clarifying on the wire; the source-breaking changes
 are named below. The artifact version is **1.1.0** (`axiam-sdk` and `axiam-bom`).
@@ -113,7 +114,8 @@ Wire-additive; source-breaking in the places below. Each entry says what to chan
 ### Changed
 
 - Re-vendored the 1.62 corrections (`CONTRACT.md`, `openapi.json` version 1.1.0 and its digest,
-  `management-registry.json`) from axiam `d25413506`; `gen_management.py --check` is clean. Contract
+  `management-registry.json`) from axiam (`CONTRACT.md` at `d25413506`; `openapi.json` and
+  `management-registry.json` at `e8722b668`, spec digest `sha256:7c3a5091…c8a1`); `gen_management.py --check` is clean. Contract
   1.62 corrections (C162-05, §12.1 rule 3, §6.1 rule 11, §14.6): `AuthInterceptor` no longer attaches
   the session's or an adopted device credential as `Authorization: Bearer` to any `/oauth2/*`
   request (either issuer form), nor refreshes ahead of one, and `AuthAuthenticator` does not retry
