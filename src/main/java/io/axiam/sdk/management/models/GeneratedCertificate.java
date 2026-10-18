@@ -35,8 +35,12 @@ import io.axiam.sdk.Sensitive;
  *     issued before the binding existed (schema v98, #533).
  * @param notAfter Validity end.
  * @param notBefore Validity start.
- * @param privateKeyPem PEM-encoded private key — returned only on generation. -- SECRET: redacted
- *     from toString and from every JSON rendering except the one request body it is sent in
+ * @param privateKeyPem PEM-encoded private key — returned only on generation. An unencrypted
+ *     PKCS#8 {@code PRIVATE KEY} block. An Ed25519 key AXIAM generated is RFC 8410 version 1 ({@code
+ *     version} INTEGER 0, the 32-byte seed and no embedded public key), which OpenSSL 3.0 reads; the
+ *     longer RFC 5958 v2 form it does not. An RSA-4096 key is the usual PKCS#8 {@code RSAPrivateKey}.
+ *     -- SECRET: redacted from toString and from every JSON rendering except the one request body it
+ *     is sent in
  * @param publicCertPem PEM-encoded public certificate.
  * @param status the server's status field
  * @param subject The certificate's common name, e.g. {@code device-001}. The normalised value: a

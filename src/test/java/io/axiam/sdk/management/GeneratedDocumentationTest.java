@@ -66,7 +66,9 @@ class GeneratedDocumentationTest {
                 }
             }
         }
-        assertEquals(8, replacements, "every replace-style operation was read");
+        // Eleven since contract 1.62 (§34.6 item o): the registry holds eleven `replace` operations,
+        // the three network PUTs among them.
+        assertEquals(11, replacements, "every replace-style operation was read");
     }
 
     /**

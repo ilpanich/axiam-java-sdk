@@ -39,7 +39,9 @@ import java.util.List;
  * @param profile the server's profile field
  * @param redirectUris the server's redirect_uris field
  * @param requirePar the server's require_par field
- * @param scopes the server's scopes field
+ * @param scopes Replace the client's scopes. On a {@code managed_by: dcr | cimd} client a scope
+ *     the request adds that is outside the tenant's effective {@code dcr_allowed_scopes} is refused
+ *     with {@code 422} (#636); an administrator-managed client is not bounded.
  * @param selfSignedTlsClientAuthThumbprints the server's self_signed_tls_client_auth_thumbprints
  *     field
  * @param tlsClientAuthSanDns the server's tls_client_auth_san_dns field

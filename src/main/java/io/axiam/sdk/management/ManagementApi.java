@@ -6,7 +6,7 @@ package io.axiam.sdk.management;
 import io.axiam.sdk.internal.ManagementTransport;
 
 /**
- * The CONTRACT §27 management surface: 190 operations across 28 namespaces.
+ * The CONTRACT §27 management surface: 202 operations across 29 namespaces.
  *
  * <p>§27.2 makes this namespacing normative rather than stylistic: twenty namespaces have a list
  * and fourteen a get, so flattening 147 operations onto the client would need a disambiguating
@@ -236,6 +236,21 @@ public final class ManagementApi {
      */
     public ScimTargetsApi scimTargets() {
         return new ScimTargetsApi(transport, NamespaceScope.inherited());
+    }
+
+    /**
+     * A tenant's network segments and the RADIUS reply profile each owns (RADIUS D4): a segment is
+     * a node of the reserved /network subtree of the resource tree (kind, VLAN, Filter-Id
+     * envelope, placement rank), and its profile is the typed {@code axiam-radius-reply/1} record
+     * a decision renders. Every write is conditional on the {@code version} the caller read and
+     * passes the server's write gate. The tenant's Session-Timeout cap is one more row of it
+     * (get_policy, replace_policy): lowering it is always allowed, raising it is allowed and
+     * audited. The decision route FreeRADIUS calls is not in this registry.
+     *
+     * @return the network namespace handle
+     */
+    public NetworkApi network() {
+        return new NetworkApi(transport, NamespaceScope.inherited());
     }
 
     /**

@@ -129,18 +129,27 @@ public final class SsfApi {
     /**
      * Issues PUT /api/v1/tenants/{tenant_id}/ssf/streams/{stream_id}.
      *
-     * <p>An omitted optional member takes its default (§32.2) — <strong>except {@code
-     * authorization_header}, which absent keeps the stored one</strong> — unless the update moves {@code
-     * endpoint_url} to another scheme, host or port while a header is stored: then it must carry
-     * {@code authorization_header} again or {@code clear_authorization_header: true}, else {@code
-     * 400} (§32.3 rule 5). An update overtaken by the receiver's own write is {@code 409}: read
-     * the stream again (never retried, §32.8 test 5). <strong>Contract 1.61:</strong> {@code expected_updated_at}
-     * (the {@code updated_at} string you read, sent as given) makes the update conditional on that
-     * version, {@code 409} if the stream was written since; and {@code events_requested} has three
-     * meanings on an update (§32.2): absent *resets* the stream to every event of {@code
-     * events_allowed}, {@code []} is stored as the receiver's "none", a list is stored as given.
-     * An edit therefore sends back the {@code events_requested} and {@code expected_updated_at} it
-     * read. {@code ReplacementBodies.from(SsfStream)} turns a read into the body, carrying both.
+     * <p><strong>An update replaces</strong> (§27.4 rule 5, §32.2): an omitted optional member takes its default
+     * — {@code description}, {@code endpoint_url} and {@code status_reason} null, {@code
+     * subject_format} {@code iss_sub}, {@code status} {@code enabled}, {@code
+     * clear_authorization_header} false — <strong>except {@code authorization_header}, which absent keeps
+     * the stored one</strong>, unless the update moves {@code endpoint_url} to another scheme, host or
+     * port while a header is stored: then it must carry {@code authorization_header} again or
+     * {@code clear_authorization_header: true}, else {@code 400} (§32.3 rule 5). <strong>{@code
+     * events_requested} has three meanings on an update</strong> (§32.2, contract 1.62), and they must be
+     * kept apart: <strong>absent resets</strong> the stream to every event of {@code events_allowed}, widening
+     * any narrowing the receiver made; <strong>{@code []} is stored as the receiver's "none"</strong> and the
+     * stream carries nothing; <strong>a list is stored as given</strong> and refused {@code 400} if any entry is
+     * outside {@code events_allowed}. A raw API client is bound by the same meaning. An edit
+     * therefore sends back the {@code events_requested} and the {@code expected_updated_at} it
+     * read: {@code ReplacementBodies.ssfStream(stream, changes)} does that and cuts {@code
+     * events_requested} to a lowered {@code events_allowed}; the plain converter {@code
+     * ReplacementBodies.from(SsfStream)} carries both as read and leaves the cut to you. {@code
+     * expected_updated_at} (contract 1.61) is the {@code updated_at} <strong>string the server sent</strong>
+     * ({@code SsfStream.updatedAtRaw()}), sent as given: the update is {@code 409} if the stream
+     * was written since — by the receiver as well as an administrator — and a {@code 409} is never
+     * retried (§32.8 test 5): read the stream again. An assigned {@code null} is the same as never
+     * setting it (§27.11 rule 5).
      *
      * <p>This is a REPLACEMENT, not a patch (§27.4 rule 5). The body's required members must be
      * set; an optional member left null is omitted and takes its default -- not the value stored.

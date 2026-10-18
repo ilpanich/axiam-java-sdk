@@ -56,23 +56,28 @@ public final class ReplacementBodies {
 
     /**
      * {@code ssf.update_stream}'s body from a {@code get_stream} result
-     * (&sect;32.2). {@code authorization_header} and
-     * {@code clear_authorization_header} are left absent: absent keeps the stored
-     * header.
+     * (&sect;32.2) &mdash; <strong>the plain converter</strong>.
+     * {@code authorization_header} and {@code clear_authorization_header} are left absent:
+     * absent keeps the stored header.
      *
-     * <p>Contract 1.61: the body carries the {@code events_requested} and the
-     * {@code expected_updated_at} that were read. An {@code events_requested} of
-     * {@code []} stays {@code []} (the receiver's "none"; omitting it would
-     * <em>widen</em> the stream to every allowed event), and the
-     * {@code updated_at} is sent back as the same instant, in ISO-8601 with its
-     * offset (an {@link java.time.OffsetDateTime} does not keep the response's own
-     * spelling, so a trailing-zero fraction or a {@code +00:00} reads back as
-     * {@code Z}; the comparison is of the instant), so the
-     * update is refused {@code 409} if the stream was written (by the receiver as
-     * well as by an administrator) in between. When you lower
-     * {@code events_allowed} on the returned body, cut {@code events_requested} to
-     * the new ceiling yourself (the body is a record: rebuild it); pass
-     * {@code null} for {@code expectedUpdatedAt} to replace whatever is stored.
+     * <p>The body carries the {@code events_requested} and the {@code expected_updated_at}
+     * that were read (contract 1.61). An {@code events_requested} of {@code []} stays
+     * {@code []} (the receiver's "none"; omitting it would <em>widen</em> the stream to
+     * every allowed event), and {@code expected_updated_at} is the response's <em>own
+     * string</em> ({@link SsfStream#updatedAtRaw()}, contract 1.62): the server compares the
+     * instant it stored, and a re-rendered offset or fraction can miss. The update is
+     * therefore refused {@code 409} if the stream was written (by the receiver as well as by
+     * an administrator) in between; read it again, never retry the same body.
+     *
+     * <p><strong>The caller's duty.</strong> This converter cannot know that you will lower
+     * {@code events_allowed}. If you do, <em>cut {@code events_requested} to the new
+     * ceiling yourself</em> (the body is a record: rebuild it), because an entry outside
+     * {@code events_allowed} is refused {@code 400}; and an {@code events_requested} you
+     * <em>omit</em> resets the stream to every allowed event, widening what the receiver
+     * narrowed. The three meanings of {@code events_requested} on an update are stated at
+     * {@code SsfApi.updateStream}. To have the cut done for you, use
+     * {@link #ssfStream(SsfStream, SsfStreamChanges)}. Pass {@code null} for
+     * {@code expectedUpdatedAt} to replace whatever is stored.
      *
      * @param stream the stream as read
      * @return the replacement body
@@ -87,12 +92,60 @@ public final class ReplacementBodies {
                 stream.endpointUrl(),
                 stream.eventsAllowed(),
                 stream.eventsRequested(),
-                stream.updatedAt() == null ? null
-                        : DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(stream.updatedAt()),
+                stream.updatedAtRaw(),
                 stream.receiverClientId(),
                 stream.status(),
                 stream.statusReason(),
                 stream.subjectFormat());
+    }
+
+    /**
+     * {@code ssf.update_stream}'s body from a {@code get_stream} result and the changes to
+     * make &mdash; <strong>the change-taking form</strong> (&sect;32.2, contract 1.62; the
+     * composed read-modify-write form of &sect;27.4 rule 5).
+     *
+     * <p>It applies {@code changes} over what was read and sends the
+     * {@code events_requested} and the {@code expected_updated_at} <em>as read</em>: the
+     * response's own string, an {@code []} as {@code []}. When the changes lower
+     * {@code events_allowed} and do not name {@code events_requested}, the
+     * {@code events_requested} that was read is <strong>cut to the new
+     * {@code events_allowed}</strong> (the entries still in it, in their order). An
+     * {@code events_requested} the changes name is sent as given; the server judges it
+     * ({@code 400} outside the ceiling). A {@code null} {@code expectedUpdatedAt} in the
+     * changes means "none": the key is left out, and {@code null} is never sent.
+     *
+     * <p>A {@code 409} from the update means the stream changed since it was read; the
+     * administrator reads again and decides, and this form does not retry (&sect;32.3 rule 4).
+     *
+     * @param stream the stream as read
+     * @param changes what to change; members never set keep what was read
+     * @return the replacement body
+     */
+    public static SsfStreamInput ssfStream(SsfStream stream, SsfStreamChanges changes) {
+        SsfStreamInput merged = changes.applyTo(from(stream));
+        if (!changes.hasEventsAllowed() || changes.hasEventsRequested()
+                || merged.eventsRequested() == null) {
+            return merged;
+        }
+        java.util.Set<String> ceiling = new java.util.HashSet<>(merged.eventsAllowed());
+        java.util.List<String> cut = merged.eventsRequested().stream()
+                .filter(ceiling::contains).toList();
+        return new SsfStreamInput(merged.audience(), merged.authorizationHeader(),
+                merged.clearAuthorizationHeader(), merged.deliveryMethod(), merged.description(),
+                merged.endpointUrl(), merged.eventsAllowed(), cut, merged.expectedUpdatedAt(),
+                merged.receiverClientId(), merged.status(), merged.statusReason(),
+                merged.subjectFormat());
+    }
+
+    /**
+     * {@code ssf.update_stream}'s body from a {@code get_stream} result, with nothing
+     * changed: the same body as {@link #from(SsfStream)}.
+     *
+     * @param stream the stream as read
+     * @return the replacement body
+     */
+    public static SsfStreamInput ssfStream(SsfStream stream) {
+        return ssfStream(stream, SsfStreamChanges.empty());
     }
 
     /**

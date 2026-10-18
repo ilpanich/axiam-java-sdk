@@ -112,10 +112,28 @@ public record ApplyReport(List<AppliedStep> steps) {
      *                 {@code false} when the restoring re-assignment itself failed too
      *                 (the subject is left holding neither), {@code null} for every
      *                 other step
+     * @param reasonCode on a step that failed with a {@code 409}, the body's {@code reason_code}
+     *                   verbatim (CONTRACT.md &sect;36.4, &sect;27.6.2 item 5) &mdash; a caller
+     *                   branches on it and never on {@code message}; {@code null} for any other
+     *                   outcome, or a {@code 409} that named none
      */
     public record StepOutcome(Status status, @Nullable String message,
                               @Nullable ServiceAccountCreatedResponse createdServiceAccount,
-                              @Nullable Boolean restored) {
+                              @Nullable Boolean restored, @Nullable String reasonCode) {
+
+        /**
+         * An outcome without a {@code reason_code}: every step that is not a {@code 409}.
+         *
+         * @param status created, updated, unchanged, failed or not-attempted
+         * @param message the error the server or transport gave, on a failed step only
+         * @param createdServiceAccount the one-time service account, or {@code null}
+         * @param restored the rebind restore flag, or {@code null}
+         */
+        public StepOutcome(Status status, @Nullable String message,
+                           @Nullable ServiceAccountCreatedResponse createdServiceAccount,
+                           @Nullable Boolean restored) {
+            this(status, message, createdServiceAccount, restored, null);
+        }
 
         /**
          * The common case: no service-account secret, no rebind to report.
@@ -125,7 +143,7 @@ public record ApplyReport(List<AppliedStep> steps) {
          *                only; {@code null} otherwise
          */
         public StepOutcome(Status status, @Nullable String message) {
-            this(status, message, null, null);
+            this(status, message, null, null, null);
         }
     }
 

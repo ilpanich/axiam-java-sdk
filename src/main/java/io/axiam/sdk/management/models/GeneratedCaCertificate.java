@@ -56,11 +56,13 @@ import io.axiam.sdk.Sensitive;
  * @param parentCaId The CA in this organization that signed this one. {@code None} for an
  *     organization-level CA, which is either self-signed or imported and has no parent inside AXIAM.
  * @param privateKeyPem PEM-encoded private key — returned only on generation, and only when there
- *     is one to return. Absent under {@code vault_pki} custody, where the key was generated inside
- *     Vault and no API exports it. The field is omitted rather than sent as {@code null} so a client
- *     that has always read it keeps working unchanged for every custodian that does produce a key. --
- *     SECRET: redacted from toString and from every JSON rendering except the one request body it is
- *     sent in
+ *     is one to return. An unencrypted PKCS#8 {@code PRIVATE KEY} block. An Ed25519 key is RFC 8410
+ *     version 1 ({@code version} INTEGER 0, the 32-byte seed and no embedded public key), which
+ *     OpenSSL 3.0 reads; an RSA-4096 key is the usual PKCS#8 {@code RSAPrivateKey}. Absent under
+ *     {@code vault_pki} custody, where the key was generated inside Vault and no API exports it. The
+ *     field is omitted rather than sent as {@code null} so a client that has always read it keeps
+ *     working unchanged for every custodian that does produce a key. -- SECRET: redacted from toString
+ *     and from every JSON rendering except the one request body it is sent in
  * @param publicCertPem PEM-encoded public certificate. The certificate that *signs*, which under
  *     {@code vault_pki} custody is the intermediate rather than the root beneath which it was created.
  * @param status the server's status field

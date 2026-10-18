@@ -420,11 +420,28 @@ public final class ManagementTransport {
         return switch (response.code()) {
             case 404 -> new NotFoundError(operation,
                     operation + ": not found (or not visible to this tenant)" + detail);
-            case 409 -> new ConflictError(operation, operation + ": conflict" + detail);
+            case 409 -> new ConflictError(operation, operation + ": conflict" + detail,
+                    reasonCode(peeked));
             case 400, 422 -> new ValidationError(operation, response.code(),
                     operation + ": request rejected" + detail, parseFieldErrors(peeked));
             default -> ErrorMapper.fromHttpStatus(response.code(), operation + detail, response);
         };
+    }
+
+    /**
+     * The {@code reason_code} of a 409 body (CONTRACT.md &sect;36.4), verbatim, or {@code null}
+     * when the body is not JSON or names none. Never read out of {@code message}.
+     */
+    private static @Nullable String reasonCode(String body) {
+        if (body.isEmpty()) {
+            return null;
+        }
+        try {
+            JsonNode code = READER.readTree(body).path("reason_code");
+            return code.isTextual() ? code.asText() : null;
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /** At most a few KB of an error body is needed to explain the refusal. */

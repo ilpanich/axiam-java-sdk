@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the CONTRACT §27 management surface for the Java SDK.
 
-Reads ``management-registry.json`` (190 operations across 28 namespaces as of
-contract 1.61, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
+Reads ``management-registry.json`` (202 operations across 29 namespaces as of
+contract 1.62, maintained in ``ilpanich/axiam`` and vendored here) plus ``openapi.json`` for the
 schemas those operations carry, and writes:
 
 - ``src/main/java/io/axiam/sdk/management/models/*.java`` — one record per
@@ -183,21 +183,28 @@ CALL_SITE_NOTES: dict[str, str] = {
         "into `next`, wait until every SP has refreshed the metadata, then promote."
     ),
     "ssf.update_stream": (
-        "An omitted optional member takes its default (§32.2) — **except "
-        "`authorization_header`, which absent keeps the stored one** — unless the "
-        "update moves `endpoint_url` to another scheme, host or port while a header "
-        "is stored: then it must carry `authorization_header` again or "
-        "`clear_authorization_header: true`, else `400` (§32.3 rule 5). An update "
-        "overtaken by the receiver's own write is `409`: read the stream again "
-        "(never retried, §32.8 test 5). **Contract 1.61:** `expected_updated_at` "
-        "(the `updated_at` string you read, sent as given) makes the update "
-        "conditional on that version, `409` if the stream was written since; and "
-        "`events_requested` has three meanings on an update (§32.2): absent "
-        "*resets* the stream to every event of `events_allowed`, `[]` is stored as "
-        "the receiver's \"none\", a list is stored as given. An edit therefore "
-        "sends back the `events_requested` and `expected_updated_at` it read. "
-        "`ReplacementBodies.from(SsfStream)` turns a read into the body, "
-        "carrying both."
+        "**An update replaces** (§27.4 rule 5, §32.2): an omitted optional member takes "
+        "its default — `description`, `endpoint_url` and `status_reason` null, "
+        "`subject_format` `iss_sub`, `status` `enabled`, `clear_authorization_header` "
+        "false — **except `authorization_header`, which absent keeps the stored one**, "
+        "unless the update moves `endpoint_url` to another scheme, host or port while a "
+        "header is stored: then it must carry `authorization_header` again or "
+        "`clear_authorization_header: true`, else `400` (§32.3 rule 5). "
+        "**`events_requested` has three meanings on an update** (§32.2, contract 1.62), "
+        "and they must be kept apart: **absent resets** the stream to every event of "
+        "`events_allowed`, widening any narrowing the receiver made; **`[]` is stored as "
+        "the receiver's \"none\"** and the stream carries nothing; **a list is stored as "
+        "given** and refused `400` if any entry is outside `events_allowed`. A raw API "
+        "client is bound by the same meaning. An edit therefore sends back the "
+        "`events_requested` and the `expected_updated_at` it read: "
+        "`ReplacementBodies.ssfStream(stream, changes)` does that and cuts "
+        "`events_requested` to a lowered `events_allowed`; the plain converter "
+        "`ReplacementBodies.from(SsfStream)` carries both as read and leaves the cut to "
+        "you. `expected_updated_at` (contract 1.61) is the `updated_at` **string the "
+        "server sent** (`SsfStream.updatedAtRaw()`), sent as given: the update is `409` "
+        "if the stream was written since — by the receiver as well as an administrator — "
+        "and a `409` is never retried (§32.8 test 5): read the stream again. An assigned "
+        "`null` is the same as never setting it (§27.11 rule 5)."
     ),
     "scim_targets.create": (
         "**The credential is bound to its URL** (§31.3 rule 2): `credential` is "
@@ -1030,11 +1037,17 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
             base_type = "boolean"
         if (schema_name, wire) in DATE_TIME_AS_STRING:
             base_type = "String"
+        if (schema_name, wire) in STRING_REQUEST_MEMBERS:
+            base_type = "String"
+        raw_timestamp = (schema_name, wire) in RAW_TIMESTAMPS
+        if raw_timestamp:
+            base_type = "String"
         if (schema_name, wire) in DRAFT_PROPERTIES:
             base_type = DRAFT_TWINS[base_type]
         fields.append({
             "wire": wire,
-            "name": member(wire),
+            "name": member(wire) + ("Raw" if raw_timestamp else ""),
+            "raw_timestamp": raw_timestamp,
             "type": f"JsonNullable<{base_type}>" if explicit_null else base_type,
             "inner": base_type,
             "explicit_null": explicit_null,
@@ -1049,6 +1062,9 @@ def field_list(schema_name: str, secrets: set[str]) -> tuple[list[dict[str, Any]
             "required": (wire in required and wire not in DEFAULT_TRUE_WHEN_ABSENT
                          and not explicit_null),
             "doc": (props[wire].get("description") or f"the server's {wire} field") + (
+                " -- the server's own string, exactly as sent (CONTRACT.md §32.2, "
+                "contract 1.62); `updatedAt()` is the parsed instant, and a body built from "
+                "this read sends this string" if raw_timestamp else "") + (
                 " -- `false` when the server omitted it (a server older than 1.0.0; "
                 "CONTRACT.md §27.15 note 6)" if default_false else ""),
             "secret": wire in secrets,
@@ -1099,6 +1115,50 @@ DATE_TIME_AS_STRING = {
     ("ScimTargetInput", "expected_updated_at"),
     ("SsfStreamInput", "expected_updated_at"),
 }
+
+
+# Request members that are UUIDs on the wire but an UNTYPED string in the SDK.
+# CONTRACT.md §27.11 rule 5 (contract 1.62, normative): the request `user_id` of
+# `certificates.generate` and `sign_csr` is the language's plain optional string,
+# so that a value that is not a UUID can be sent and the server's `400` is the
+# caller's to see -- a `java.util.UUID` makes the malformed value unrepresentable,
+# which is a client-side judgement of it. The RESPONSE `Certificate.user_id` stays
+# a `UUID`. Source-breaking: the record constructors change.
+STRING_REQUEST_MEMBERS = {
+    ("CreateCertificateRequest", "user_id"),
+    ("SignCertificateCsrRequest", "user_id"),
+}
+
+# Response timestamps whose server spelling is kept next to the parsed value.
+# CONTRACT.md §32.2 (contract 1.62, normative): "the `SsfStream` it returns keeps
+# the server's own string next to the parsed value ... and every helper that builds
+# a body from a read sends that string". An `OffsetDateTime` has no spelling of its
+# own (a `+00:00` offset, nine fraction digits), and the server compares the
+# INSTANT it stored with the string it is sent, so re-rendering one can miss.
+# The record component is the raw string (`updatedAtRaw`, bound to the wire name);
+# `updatedAt()` is a derived accessor that parses it.
+RAW_TIMESTAMPS = {
+    ("SsfStream", "updated_at"),
+}
+
+
+def emit_raw_timestamp_accessors(fields: list[dict]) -> list[str]:
+    """The parsed accessor beside each RAW_TIMESTAMPS component (§32.2)."""
+    out: list[str] = []
+    for f in fields:
+        if not f.get("raw_timestamp"):
+            continue
+        parsed = f["name"][:-len("Raw")]
+        out.append("")
+        out.extend(javadoc(
+            f"{f['wire']} as an instant. Parsed from {f['name']}(), which is what the "
+            f"server sent and what a body built from this read must carry (CONTRACT.md "
+            f"§32.2, contract 1.62).",
+            "    ", [f"@return the parsed {f['wire']}, or {{@code null}} when the server sent none"]))
+        out.append(f"    public @Nullable OffsetDateTime {parsed}() {{")
+        out.append(f"        return {f['name']} == null ? null : OffsetDateTime.parse({f['name']});")
+        out.append("    }")
+    return out
 
 
 def emit_required_checks(type_name: str, fields: list[dict]) -> list[str]:
@@ -1249,6 +1309,7 @@ def emit_record(name: str, secrets: set[str], replacement: bool, draft: bool = F
             body.extend(emit_required_checks(type_name, fields))
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
+        body.extend(emit_raw_timestamp_accessors(fields))
         if not draft:
             body.extend(emit_factories(name, type_name))
         if all_optional and not draft:
@@ -1541,6 +1602,11 @@ def implicit_params(namespace: str, op: dict[str, Any]) -> set[str]:
     return out
 
 
+def is_integer(query_param: dict[str, Any]) -> bool:
+    """Whether a registry query parameter is declared an integer."""
+    return query_param.get("type") == "integer"
+
+
 def split_query(op: dict[str, Any]) -> tuple[list[Any], list[Any]]:
     """This operation's non-paging query params, split required / optional."""
     extra = extra_query_params(op)
@@ -1559,7 +1625,11 @@ def operation_params(namespace: str, opname: str, op: dict[str, Any]) -> list[di
                        "doc": f"the {escape(p['name'])} path parameter"})
     required_q, optional_q = split_query(op)
     for q in required_q:
-        params.append({"name": member(q["name"]), "type": "String", "wire": q["name"],
+        # A required integer (the `version` of a network delete, §36.3 rule 2) is a
+        # primitive `long`: the call cannot be made without one, which is the
+        # compile-time form of "cannot be called without one" (§36.8 test 2).
+        params.append({"name": member(q["name"]), "type": "long" if is_integer(q) else "String",
+                       "wire": q["name"],
                        "doc": f"the required {escape(q['name'])} query parameter"})
     if op["request_body"] == "schema":
         params.append({"name": "body", "type": f"{MODELS_PACKAGE}.{pascal(op['request_schema'])}",
@@ -1733,7 +1803,8 @@ def emit_operation(namespace: str, opname: str, op: dict[str, Any]) -> list[str]
     required_q, optional_q = split_query(op)
     lines.append("        Map<String, @Nullable String> query = new LinkedHashMap<>();")
     for q in required_q:
-        lines.append(f'        query.put("{q["name"]}", {member(q["name"])});')
+        value = f"Long.toString({member(q['name'])})" if is_integer(q) else member(q["name"])
+        lines.append(f'        query.put("{q["name"]}", {value});')
     for q in optional_q:
         lines.append(f'        query.put("{q["name"]}", {member(q["name"])});')
     if op["paginated"]:
@@ -2006,7 +2077,7 @@ def call_arguments(namespace: str, opname: str, op: dict[str, Any],
             args.append('"example"')
             route = route.replace(f"{{{name}}}", "example")
     required_q, optional_q = split_query(op)
-    args.extend('"example"' for _ in required_q)
+    args.extend('1L' if is_integer(q) else '"example"' for q in required_q)
     if op["request_body"] == "schema":
         canonical = f"{namespace}.{opname}"
         if canonical in PRECHECK_TEST_BODIES:

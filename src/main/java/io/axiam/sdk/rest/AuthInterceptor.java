@@ -99,6 +99,15 @@ public final class AuthInterceptor implements Interceptor {
         // as the device instead.
         boolean isDeviceAuthCall = SessionState.isDeviceAuthPath(encodedPath);
 
+        // CONTRACT.md §12.1 rule 3 (last paragraph), §6.1 rule 11, §14.6 (contract
+        // 1.62, C162-05): a session's or an adopted credential is never attached
+        // to a request to /oauth2/*. The client's own authentication travels in
+        // the form body or on the connection; a credential the caller set on that
+        // one request (RFC 7591/7592 registration token, §28.12) is already on the
+        // request and is left exactly as it is -- this interceptor only ever ADDS
+        // the session's bearer, so skipping the addition is the whole rule.
+        boolean isOauth2Call = SessionState.isOauth2Endpoint(encodedPath);
+
         // Host-isolation (3A): only same-origin requests receive the bearer
         // token and CSRF token. A request built against an absolute
         // third-party URL (or a redirect resolved off-origin) is left
@@ -133,7 +142,7 @@ public final class AuthInterceptor implements Interceptor {
         // Non-blocking read — never session/guard.lock() synchronously here.
         String access = session.cachedAccessToken();
         if (sameHost && !isRefreshCall && !isSessionlessSetupCall && !hasAdoptedDeviceToken
-                && !isDeviceAuthCall
+                && !isDeviceAuthCall && !isOauth2Call
                 && access != null && session.isNearExpiry(access, NEAR_EXPIRY_BUFFER_MILLIS)) {
             UUID proactiveActingTenant = actingTenant == null ? null : actingTenant.tenantId();
             access = guard.refreshIfNeeded(access, () -> session.doHttpRefresh(proactiveActingTenant))
@@ -151,7 +160,7 @@ public final class AuthInterceptor implements Interceptor {
             // N4.1: the device POST authenticates by mTLS alone — a bearer token
             // (or CSRF token) left over from an earlier cookie/bearer session must
             // not ride along on the very call that means to replace it.
-            if (access != null && !isSessionlessSetupCall && !isDeviceAuthCall) {
+            if (access != null && !isSessionlessSetupCall && !isDeviceAuthCall && !isOauth2Call) {
                 builder.header("Authorization", "Bearer " + access);
             }
             String csrf = session.csrfToken();
