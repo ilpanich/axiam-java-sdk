@@ -16,13 +16,16 @@ import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
 
 import org.jspecify.annotations.Nullable;
 
+import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedTrustManager;
 import javax.net.ssl.X509TrustManager;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.CertificateException;
@@ -201,7 +204,7 @@ public final class AuthClientInterceptor implements ClientInterceptor {
         try {
             TrustManagerFactory systemTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             systemTmf.init((KeyStore) null);
-            X509TrustManager systemTm = firstX509(systemTmf.getTrustManagers());
+            X509ExtendedTrustManager systemTm = firstX509(systemTmf.getTrustManagers());
 
             if (customCaPem == null || customCaPem.length == 0) {
                 return systemTm;
@@ -215,7 +218,7 @@ public final class AuthClientInterceptor implements ClientInterceptor {
 
             TrustManagerFactory customTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             customTmf.init(customStore);
-            X509TrustManager customTm = firstX509(customTmf.getTrustManagers());
+            X509ExtendedTrustManager customTm = firstX509(customTmf.getTrustManagers());
 
             return new CompositeX509TrustManager(systemTm, customTm);
         } catch (GeneralSecurityException | IOException e) {
@@ -224,22 +227,27 @@ public final class AuthClientInterceptor implements ClientInterceptor {
         }
     }
 
-    private static X509TrustManager firstX509(TrustManager[] tms) {
+    // Netty's OpenSSL provider (with gRPC >= 1.85 enabling HTTPS endpoint identification) rejects
+    // a plain X509TrustManager on JDKs where its reflective wrapper no longer works (JDK 25+), so
+    // only X509ExtendedTrustManager instances are accepted — SunJSSE's default always is one.
+    private static X509ExtendedTrustManager firstX509(TrustManager[] tms) {
         for (TrustManager tm : tms) {
-            if (tm instanceof X509TrustManager x509) {
+            if (tm instanceof X509ExtendedTrustManager x509) {
                 return x509;
             }
         }
-        throw new IllegalStateException("no X509TrustManager found in the default TrustManagerFactory");
+        throw new IllegalStateException("no X509ExtendedTrustManager found in the default TrustManagerFactory");
     }
 
     /** Server certs are accepted if EITHER the system trust store OR the custom CA validates
-     * the chain — strict: never silently bypasses on a first-manager failure. */
-    private static final class CompositeX509TrustManager implements X509TrustManager {
-        private final X509TrustManager primary;
-        private final X509TrustManager secondary;
+     * the chain — strict: never silently bypasses on a first-manager failure. Extends
+     * {@link X509ExtendedTrustManager} so the Socket/SSLEngine overloads reach the delegates,
+     * which then also enforce endpoint identification (hostname verification). */
+    private static final class CompositeX509TrustManager extends X509ExtendedTrustManager {
+        private final X509ExtendedTrustManager primary;
+        private final X509ExtendedTrustManager secondary;
 
-        CompositeX509TrustManager(X509TrustManager primary, X509TrustManager secondary) {
+        CompositeX509TrustManager(X509ExtendedTrustManager primary, X509ExtendedTrustManager secondary) {
             this.primary = primary;
             this.secondary = secondary;
         }
@@ -250,11 +258,39 @@ public final class AuthClientInterceptor implements ClientInterceptor {
         }
 
         @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket)
+                throws CertificateException {
+            primary.checkClientTrusted(chain, authType, socket);
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
+                throws CertificateException {
+            primary.checkClientTrusted(chain, authType, engine);
+        }
+
+        @Override
         public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            checkEither(tm -> tm.checkServerTrusted(chain, authType));
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket)
+                throws CertificateException {
+            checkEither(tm -> tm.checkServerTrusted(chain, authType, socket));
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
+                throws CertificateException {
+            checkEither(tm -> tm.checkServerTrusted(chain, authType, engine));
+        }
+
+        private void checkEither(ServerCheck check) throws CertificateException {
             try {
-                primary.checkServerTrusted(chain, authType);
+                check.run(primary);
             } catch (CertificateException primaryFailure) {
-                secondary.checkServerTrusted(chain, authType);
+                check.run(secondary);
             }
         }
 
@@ -265,6 +301,11 @@ public final class AuthClientInterceptor implements ClientInterceptor {
             X509Certificate[] combined = Arrays.copyOf(a, a.length + b.length);
             System.arraycopy(b, 0, combined, a.length, b.length);
             return combined;
+        }
+
+        @FunctionalInterface
+        private interface ServerCheck {
+            void run(X509ExtendedTrustManager tm) throws CertificateException;
         }
     }
 }

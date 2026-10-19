@@ -8,7 +8,12 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.X509ExtendedTrustManager;
 import javax.net.ssl.X509TrustManager;
+
+import java.net.Socket;
 
 import java.io.ByteArrayInputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -80,6 +85,38 @@ class AuthClientInterceptorTrustManagerTest {
 
         X509Certificate cert = parseCert(pem);
         assertDoesNotThrow(() -> tm.checkServerTrusted(new X509Certificate[]{cert}, "RSA"));
+    }
+
+    @Test
+    void compositeTrustManagerIsAnExtendedTrustManagerForNettyOpenSsl() throws Exception {
+        // gRPC >= 1.85 enables HTTPS endpoint identification; Netty's OpenSSL provider then
+        // rejects a plain X509TrustManager on JDK 25+ ("unable to setup trustmanager").
+        byte[] pem = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-test-ca-6");
+        assertInstanceOf(X509ExtendedTrustManager.class, invokeBuildTrustManager(pem));
+    }
+
+    @Test
+    void socketOverloadsDelegateToTheUnderlyingTrustManagers() throws Exception {
+        byte[] pem = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-test-ca-7");
+        X509ExtendedTrustManager tm = (X509ExtendedTrustManager) invokeBuildTrustManager(pem);
+        X509Certificate[] chain = {parseCert(pem)};
+
+        assertDoesNotThrow(() -> tm.checkServerTrusted(chain, "RSA", (Socket) null));
+        assertThrows(CertificateException.class, () -> tm.checkClientTrusted(chain, "RSA", (Socket) null));
+    }
+
+    @Test
+    void engineOverloadsDelegateToTheUnderlyingTrustManagers() throws Exception {
+        byte[] pem = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-test-ca-8");
+        X509ExtendedTrustManager tm = (X509ExtendedTrustManager) invokeBuildTrustManager(pem);
+        X509Certificate[] chain = {parseCert(pem)};
+        // An engine with no handshake session is rejected by both SunJSSE delegates — the
+        // composite must surface that, never fall back to an engine-less (weaker) check.
+        SSLEngine engine = SSLContext.getDefault().createSSLEngine("localhost", 443);
+        engine.setUseClientMode(true);
+
+        assertThrows(CertificateException.class, () -> tm.checkServerTrusted(chain, "RSA", engine));
+        assertThrows(CertificateException.class, () -> tm.checkClientTrusted(chain, "RSA", engine));
     }
 
     @Test
