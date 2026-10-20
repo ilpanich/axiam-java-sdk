@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Contract 1.63 (the AXIAM 1.1.1 release) and the 1.62 conformance follow-ups (#115). `CONTRACT.md`,
 `openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`
-commit `a6cd10eba` (spec digest `sha256:6fe38c07…bedc`; `proto/` is unchanged; no operation is
+commit `d919ba0cc` (spec digest `sha256:443c9d39…8098`; `proto/` is unchanged; no operation is
 added, 202 across 29 namespaces). The minor bump records one source-breaking change.
 
 ### Source-breaking changes
@@ -40,8 +40,8 @@ added, 202 across 29 namespaces). The minor bump records one source-breaking cha
 
 - `DeviceAuthorizationRequest.client_id` is now optional in the spec; this SDK builds the form by
   hand and models no such type, so nothing changes. It generates no DPoP proof (§21.7.4 n/a), and
-  ships no AMQP audit producer (consumer only), so the §8 producer-side refusal of `tenants.` /
-  `gdpr.` actions has no place here.
+  ships no helper that builds or signs an `AuditEventMessage` (consumer only), so the §8 local
+  refusal of `tenants.` / `gdpr.` actions has no place here.
 
 ## [1.1.0] - 2026-10-16
 

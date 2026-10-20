@@ -84,9 +84,9 @@ call, such as the RFC 7592 `registration_access_token`, goes there. Manifest pru
 offered in any namespace (§27.10). Contract 1.63 (released as **1.2.0**) is met too: no `axiam_*` cookie and no `X-CSRF-Token` on any
 `/oauth2/*` request (§6.1 rule 11, §12.1 rule 3, §14.6), `ScimTargetResponse.updatedAtRaw()` sent as
 `expected_updated_at` (§31.3 rule 4), and the refusal of an unknown profile enumeration at `plan`
-(§27.6.2 item 4). This SDK ships no AMQP audit producer (consumer only), so the §8 producer-side
-refusal does not apply; it generates no DPoP proof. The vendored `CONTRACT.md`, `openapi.json` and
-`management-registry.json` are `ilpanich/axiam` commit `a6cd10eba` (spec digest `sha256:6fe38c07…bedc`).
+(§27.6.2 item 4). This SDK ships no helper that builds or signs an `AuditEventMessage` (it is a consumer
+only), so the §8 local refusal of reserved actions does not apply; it generates no DPoP proof. The vendored `CONTRACT.md`, `openapi.json` and
+`management-registry.json` are `ilpanich/axiam` commit `d919ba0cc` (spec digest `sha256:443c9d39…8098`).
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a
