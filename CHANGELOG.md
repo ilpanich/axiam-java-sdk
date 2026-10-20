@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-20
+
+Contract 1.63 (the AXIAM 1.1.1 release) and the 1.62 conformance follow-ups (#115). `CONTRACT.md`,
+`openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`
+commit `a6cd10eba` (spec digest `sha256:6fe38c07…bedc`; `proto/` is unchanged; no operation is
+added, 202 across 29 namespaces). The minor bump records one source-breaking change.
+
+### Source-breaking changes
+
+- **`ScimTargetResponse` keeps the server's own `updated_at` string (§31.3 rule 4, contract
+  1.63; C162-10).** The record component is now `String updatedAtRaw`, bound to the wire name
+  `updated_at`, and `updatedAt()` is a derived accessor returning the parsed `OffsetDateTime`, so
+  callers of `target.updatedAt()` compile unchanged, as for `SsfStream`. *Migration:* only code that
+  calls the canonical constructor changes (pass the string).
+
+### Fixed
+
+- **No session cookie and no `X-CSRF-Token` on any `/oauth2/*` request (§6.1 rule 11, §12.1 rule 3,
+  §14.6, contract 1.63).** The bearer was already withheld; the cookie jar is now withheld and the
+  stored CSRF token not echoed on the device-authorization, device-poll and token requests (and
+  every other `/oauth2/*` call), whatever session the client holds.
+- **`ReplacementBodies.from(ScimTargetResponse)` sends the response's own `updated_at` string** as
+  `expected_updated_at` instead of re-rendering the instant (C162-10).
+- **An unknown `termination_action` / `service_type` carried from the read is refused at `plan`
+  (§27.6.2 item 4; C162-07).** A manifest that changes another member of a network profile and
+  does not state the unknown one now fails `plan` (and so `apply`) with a `ValidationError` naming
+  the member, before any request, instead of failing midway through `apply` with `NetworkError`.
+  Stating the member is the way out.
+
+### Notes
+
+- `DeviceAuthorizationRequest.client_id` is now optional in the spec; this SDK builds the form by
+  hand and models no such type, so nothing changes. It generates no DPoP proof (§21.7.4 n/a), and
+  ships no AMQP audit producer (consumer only), so the §8 producer-side refusal of `tenants.` /
+  `gdpr.` actions has no place here.
+
 ## [1.1.0] - 2026-10-16
 
 Contract 1.62 (accompanying the AXIAM 1.1.0 release), which carries contract 1.61 with it: release

@@ -80,6 +80,51 @@ class CsrfInterceptorTest {
         }
     }
 
+    /** CONTRACT.md §14.6 (contract 1.63): a jar holding session cookies never reaches /oauth2/*. */
+    @Test
+    void noSessionCookieAndNoCsrfHeaderOnAnyOauth2Request() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            for (int i = 0; i < 4; i++) {
+                server.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+            }
+            server.start();
+
+            String baseUrl = server.url("/").toString();
+            CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
+            SessionState session = new SessionState(cookieManager, baseUrl, "acme-tenant", null, null);
+            session.setCsrfToken("csrf-abc");
+            java.net.URI uri = server.url("/").uri();
+            cookieManager.put(uri, java.util.Map.of("Set-Cookie", java.util.List.of(
+                    "axiam_access=a1; Path=/", "axiam_refresh=r1; Path=/")));
+
+            OkHttpClient client = new OkHttpClient.Builder()
+                    .cookieJar(new JavaNetCookieJar(cookieManager))
+                    .addInterceptor(new AuthInterceptor(new RefreshGuard(), session))
+                    .build();
+            session.attachHttpClient(client);
+
+            RequestBody body = RequestBody.create("a=b", MediaType.get("application/x-www-form-urlencoded"));
+            for (String path : new String[] {"oauth2/device_authorization", "oauth2/token",
+                    "oauth2/token", "t/acme/oauth2/token"}) {
+                try (Response r = client.newCall(new Request.Builder().url(baseUrl + path).post(body).build()).execute()) {
+                    assertEquals(200, r.code());
+                }
+                RecordedRequest req = server.takeRequest();
+                assertNull(req.getHeader("Cookie"), path + " must carry no session cookie");
+                assertNull(req.getHeader("X-CSRF-Token"), path + " must carry no X-CSRF-Token");
+            }
+
+            // Control: the same jar and token DO reach an ordinary API call.
+            server.enqueue(new MockResponse().setResponseCode(200).setBody("{}"));
+            try (Response r = client.newCall(new Request.Builder().url(baseUrl + "api/v1/authz/check").post(body).build()).execute()) {
+                assertEquals(200, r.code());
+            }
+            RecordedRequest api = server.takeRequest();
+            assertEquals("csrf-abc", api.getHeader("X-CSRF-Token"));
+            assertEquals(true, api.getHeader("Cookie") != null && api.getHeader("Cookie").contains("axiam_access"));
+        }
+    }
+
     @Test
     void authenticatorReturnsNullAfterTwoPriorResponses() {
         RefreshGuard guard = new RefreshGuard();

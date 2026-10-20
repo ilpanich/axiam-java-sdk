@@ -3,6 +3,7 @@ package io.axiam.sdk.management;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.axiam.sdk.internal.LocalRefusal;
 import io.axiam.sdk.errors.ConflictError;
 import io.axiam.sdk.errors.NetworkError;
 import io.axiam.sdk.management.models.AddMemberRequest;
@@ -588,10 +589,34 @@ public final class ManifestApi {
                         && !Objects.equals(spec.filterId().get(), found.filterId()))
                     || (spec.serviceType() != null
                         && spec.serviceType().get() != found.serviceType());
+            if (drifted) {
+                // §27.6.2 item 4 (contract 1.62): an update carries every unstated member from the
+                // read, and a value decoded as unknown is never re-sent (§27.13). So the refusal
+                // is here, at plan, before any write, and not half-way through apply.
+                refuseUnknownCarried("termination_action", spec.terminationAction() == null
+                        && found.terminationAction() == RadiusTerminationAction.UNKNOWN, segment.key());
+                refuseUnknownCarried("service_type", spec.serviceType() == null
+                        && found.serviceType() == RadiusServiceType.UNKNOWN, segment.key());
+            }
             out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
                     ManagementPlan.Target.NETWORK_PROFILE, segment.key(), summary,
                     drifted ? Kind.UPDATE_NETWORK_PROFILE : Kind.NOOP,
                     new ProfileChange(spec, found), segment.key()));
+        }
+    }
+
+    /**
+     * Refuses a profile update that would carry a member this SDK decoded as unknown.
+     *
+     * <p>A Java enum constant cannot hold the spelling it was decoded from, so the message names
+     * the member and says the value is one this SDK does not know.
+     */
+    private static void refuseUnknownCarried(String member, boolean carriesUnknown, String segmentKey) {
+        if (carriesUnknown) {
+            throw LocalRefusal.of("manifest.plan", "network.profiles[" + segmentKey + "]." + member,
+                    "the stored value is one this SDK does not know and the manifest does not state "
+                            + "it; it is not re-sent (CONTRACT.md §27.6.2 item 4, §27.13). State "
+                            + member + " to update this profile");
         }
     }
 
@@ -997,19 +1022,11 @@ public final class ManifestApi {
                 ProfileChange c = (ProfileChange) s.spec();
                 ManagementManifest.ProfileSpec spec = c.spec();
                 NetworkReplyProfile read = c.existing();
+                // An unknown value carried from the read was refused at plan (computeNetwork).
                 RadiusTerminationAction termination = spec.terminationAction() != null
                         ? spec.terminationAction() : read.terminationAction();
                 RadiusServiceType serviceType = spec.serviceType() != null
                         ? spec.serviceType().get() : read.serviceType();
-                // §27.13: a value the SDK decoded as unknown is never re-sent. Carrying one from
-                // the read would store the wrong value, so the action fails here, locally, with no
-                // request, and apply stops.
-                if (termination == RadiusTerminationAction.UNKNOWN
-                        || serviceType == RadiusServiceType.UNKNOWN) {
-                    throw new NetworkError("network profile of segment '" + s.related()
-                            + "' carries a termination_action or service_type this SDK does not "
-                            + "know; it is not re-sent (CONTRACT.md §27.13), so the update is not made");
-                }
                 api.network().replaceProfile(read.segmentId(), new ReplaceNetworkReplyProfileRequest(
                         new NetworkReplyProfileInput(read.dictionary(),
                                 spec.filterId() != null ? spec.filterId().get() : read.filterId(),

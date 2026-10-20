@@ -27,7 +27,9 @@ import java.util.UUID;
  * @param scope Which users it provisions.
  * @param state the server's state field
  * @param tenantId The owning tenant.
- * @param updatedAt When it was last written: the version an update is conditional on.
+ * @param updatedAtRaw When it was last written: the version an update is conditional on. -- the
+ *     server's own string, exactly as sent (CONTRACT.md §32.2, contract 1.62); {@code updatedAt()} is
+ *     the parsed instant, and a body built from this read sends this string
  * @param userNameFrom Which attribute becomes {@code userName}.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -44,7 +46,17 @@ public record ScimTargetResponse(
         @JsonProperty("scope") ScimTargetScope scope,
         @JsonProperty("state") @Nullable ScimTargetDeliveryState state,
         @JsonProperty("tenant_id") UUID tenantId,
-        @JsonProperty("updated_at") OffsetDateTime updatedAt,
+        @JsonProperty("updated_at") String updatedAtRaw,
         @JsonProperty("user_name_from") UserNameSource userNameFrom
 ) {
+
+    /**
+     * updated_at as an instant. Parsed from updatedAtRaw(), which is what the server sent and what
+     * a body built from this read must carry (CONTRACT.md §32.2, contract 1.62).
+     *
+     * @return the parsed updated_at, or {@code null} when the server sent none
+     */
+    public @Nullable OffsetDateTime updatedAt() {
+        return updatedAtRaw == null ? null : OffsetDateTime.parse(updatedAtRaw);
+    }
 }
