@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.62**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.63**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33, §34 and §36, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
@@ -81,8 +81,12 @@ SDK has no `private_key_jwt` assertion and generates no DPoP proof, so those two
 §14.6 do not apply to it. No session or adopted credential is ever attached to a request to
 `/oauth2/*` (§12.1 rule 3, §6.1 rule 11, §14.6): only a credential the caller hands to one
 call, such as the RFC 7592 `registration_access_token`, goes there. Manifest pruning: not
-offered in any namespace (§27.10). The vendored `CONTRACT.md` is `ilpanich/axiam` commit `d25413506`; `openapi.json` and
-`management-registry.json` are commit `e8722b668` (spec digest `sha256:7c3a5091…c8a1`).
+offered in any namespace (§27.10). Contract 1.63 (released as **1.2.0**) is met too: no `axiam_*` cookie and no `X-CSRF-Token` on any
+`/oauth2/*` request (§6.1 rule 11, §12.1 rule 3, §14.6), `ScimTargetResponse.updatedAtRaw()` sent as
+`expected_updated_at` (§31.3 rule 4), and the refusal of an unknown profile enumeration at `plan`
+(§27.6.2 item 4). This SDK ships no helper that builds or signs an `AuditEventMessage` (it is a consumer
+only), so the §8 local refusal of reserved actions does not apply; it generates no DPoP proof. The vendored `CONTRACT.md`, `openapi.json` and
+`management-registry.json` are `ilpanich/axiam` commit `d919ba0cc` (spec digest `sha256:443c9d39…8098`).
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a
@@ -315,7 +319,7 @@ and the two `SupportedVersions` constants ever stop agreeing.
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>1.1.0</version>
+  <version>1.2.0</version>
 </dependency>
 ```
 
@@ -329,7 +333,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>1.1.0</version>
+      <version>1.2.0</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -341,7 +345,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:1.1.0")
+    implementation("io.github.ilpanich:axiam-sdk:1.2.0")
 }
 ```
 
@@ -349,7 +353,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:1.1.0"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.2.0"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```

@@ -2,6 +2,7 @@ package io.axiam.sdk.management;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.errors.ValidationError;
 import io.axiam.sdk.management.models.NetworkSegmentKind;
 import io.axiam.sdk.management.models.RadiusServiceType;
 import io.axiam.sdk.management.models.RadiusTerminationAction;
@@ -407,18 +408,26 @@ class NetworkManifestTest extends ManagementTestBase {
     }
 
     @Test
-    void anUnknownEnumerationOnTheReadIsNeverReSentSoTheUpdateFailsLocally() throws Exception {
+    void anUnknownEnumerationOnTheReadIsRefusedAtPlanWithNoWriteUnlessTheManifestStatesIt() throws Exception {
         mountReads(policy(3600, 0), page(labSegment(5)),
-                page(profile(LAB, 3600, false, "a_future_action", 600, "lab-in", "framed_user", 5)));
+                page(profile(LAB, 3600, false, "future", 600, "lab-in", "framed_user", 5)));
         Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+        ManagementManifest other = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800), null);
 
-        ApplyReport report = client.management().manifest().apply(
-                manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800), null));
+        ValidationError e = assertThrows(ValidationError.class, () -> client.management().manifest().plan(other));
+        assertTrue(e.getMessage().contains("termination_action"), e.getMessage());
+        assertThrows(ValidationError.class, () -> client.management().manifest().apply(other));
+        assertEquals(0, put.calls(), "§27.6.2 item 4: refused before any write");
 
-        assertEquals(0, put.calls(), "§27.13: a value decoded as unknown is not sent back");
-        assertTrue(report.failure().orElseThrow().outcome().message().contains("does not know"));
+        // The same for service_type.
+        mountReads(policy(3600, 0), page(labSegment(5)),
+                page(profile(LAB, 3600, false, "radius_request", 600, "lab-in", "a_future_service", 5)));
+        ValidationError s = assertThrows(ValidationError.class, () -> client.management().manifest().plan(other));
+        assertTrue(s.getMessage().contains("service_type"), s.getMessage());
 
         // Stating the member is the way out: a stated value is sent.
+        mountReads(policy(3600, 0), page(labSegment(5)),
+                page(profile(LAB, 3600, false, "future", 600, "lab-in", "framed_user", 5)));
         put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
         client.management().manifest().apply(manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800)
                 .withTerminationAction(RadiusTerminationAction.RADIUS_REQUEST), null));

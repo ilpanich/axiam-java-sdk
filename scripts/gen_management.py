@@ -1130,6 +1130,7 @@ STRING_REQUEST_MEMBERS = {
 }
 
 # Response timestamps whose server spelling is kept next to the parsed value.
+# CONTRACT.md §31.3 rule 4 (contract 1.63) extends it to `ScimTargetResponse`.
 # CONTRACT.md §32.2 (contract 1.62, normative): "the `SsfStream` it returns keeps
 # the server's own string next to the parsed value ... and every helper that builds
 # a body from a read sends that string". An `OffsetDateTime` has no spelling of its
@@ -1139,6 +1140,7 @@ STRING_REQUEST_MEMBERS = {
 # `updatedAt()` is a derived accessor that parses it.
 RAW_TIMESTAMPS = {
     ("SsfStream", "updated_at"),
+    ("ScimTargetResponse", "updated_at"),
 }
 
 

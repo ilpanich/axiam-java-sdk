@@ -169,6 +169,22 @@ class ScimTargetsTest extends ManagementTestBase {
         assertEquals(read, conflict.last().json().path("expected_updated_at").asText());
     }
 
+    @Test
+    void theReadModifyWriteSendsTheResponsesOwnUpdatedAtString() throws Exception {
+        // §31.3 rule 4 (contract 1.63): the server's spelling, not a re-rendered instant.
+        UUID id = UUID.randomUUID();
+        String raw = "2026-10-05T02:00:00.120000+02:00";
+        ObjectNode body = targetBody();
+        body.put("updated_at", raw);
+        mount("GET", TARGETS + "/" + id, 200, body.toString());
+        Route put = mount("PUT", TARGETS + "/" + id, 200, body.toString());
+        io.axiam.sdk.management.models.ScimTargetResponse read = client.scimTargets().get(id);
+        assertEquals(raw, read.updatedAtRaw());
+        assertEquals(java.time.OffsetDateTime.parse(raw), read.updatedAt());
+        client.scimTargets().update(id, ReplacementBodies.from(read));
+        assertEquals(raw, put.last().json().path("expected_updated_at").asText());
+    }
+
     // ── 4. Open decoding and pagination ──────────────────────────────────
 
     @Test

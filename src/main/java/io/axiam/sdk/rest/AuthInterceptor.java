@@ -164,7 +164,7 @@ public final class AuthInterceptor implements Interceptor {
                 builder.header("Authorization", "Bearer " + access);
             }
             String csrf = session.csrfToken();
-            if (csrf != null && !isSessionlessSetupCall && !isDeviceAuthCall
+            if (csrf != null && !isSessionlessSetupCall && !isDeviceAuthCall && !isOauth2Call
                     && STATE_CHANGING_METHODS.contains(original.method())) {
                 builder.header("X-CSRF-Token", csrf);
             }
@@ -186,7 +186,9 @@ public final class AuthInterceptor implements Interceptor {
         // — this authenticates by mTLS alone and a stale cookie must not ride
         // along either) AND on every later same-host request for as long as a
         // device token is adopted, not only the call that adopted it.
-        Chain effectiveChain = (isSessionlessSetupCall || isDeviceAuthCall
+        // CONTRACT.md §6.1 rule 11, §12.1 rule 3 (contract 1.63): no axiam_* session cookie and
+        // no X-CSRF-Token on any /oauth2/* request, whatever session the client holds.
+        Chain effectiveChain = (isSessionlessSetupCall || isDeviceAuthCall || isOauth2Call
                 || (sameHost && hasAdoptedDeviceToken))
                 ? chain.withCookieJar(new LoadSuppressedCookieJar(chain.getCookieJar()))
                 : chain;

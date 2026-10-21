@@ -14,11 +14,11 @@ import java.util.UUID;
 /**
  * The network management namespace (CONTRACT §27.1).
  *
- * <p>A tenant's network segments and the RADIUS reply profile each owns (RADIUS D4): a segment is
- * a node of the reserved /network subtree of the resource tree (kind, VLAN, Filter-Id envelope,
- * placement rank), and its profile is the typed {@code axiam-radius-reply/1} record a decision
- * renders. Every write is conditional on the {@code version} the caller read and passes the
- * server's write gate. The tenant's Session-Timeout cap is one more row of it (get_policy,
+ * <p>A tenant's network segments and the RADIUS reply profile each owns (RADIUS Live profile): a
+ * segment is a node of the reserved /network subtree of the resource tree (kind, VLAN, Filter-Id
+ * envelope, placement rank), and its profile is the typed {@code axiam-radius-reply/1} record a
+ * decision renders. Every write is conditional on the {@code version} the caller read and passes
+ * the server's write gate. The tenant's Session-Timeout cap is one more row of it (get_policy,
  * replace_policy): lowering it is always allowed, raising it is allowed and audited. The decision
  * route FreeRADIUS calls is not in this registry.
  *
