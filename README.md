@@ -319,7 +319,7 @@ and the two `SupportedVersions` constants ever stop agreeing.
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>1.2.0</version>
+  <version>1.1.1</version>
 </dependency>
 ```
 
@@ -333,7 +333,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>1.2.0</version>
+      <version>1.1.1</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -345,7 +345,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:1.2.0")
+    implementation("io.github.ilpanich:axiam-sdk:1.1.1")
 }
 ```
 
@@ -353,7 +353,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:1.2.0"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.1.1"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-21
+
+### Added
+
+- Contract 1.63 re-sync and 1.62 conformance follow-ups (1.2.0)
+
+### Changed
+
+- re-vendor contract 1.63 final from AXIAM d919ba0cc
+
+- Bump actions/setup-java from 6.0.1 to 6.1.0
+
+- Bump the minor-patch group with 5 updates
+
+- Bump org.sonatype.central:central-publishing-maven-plugin
+
+### Fixed
+
+- Make custom-CA composite an X509ExtendedTrustManager
+
 ## [1.2.0] - 2026-10-20
 
 Contract 1.63 (the AXIAM 1.1.1 release) and the 1.62 conformance follow-ups (#115). `CONTRACT.md`,
