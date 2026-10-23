@@ -103,9 +103,16 @@ public final class AuthAuthenticator implements Authenticator {
             return null;
         }
 
-        return response.request().newBuilder()
-                .header("Authorization", "Bearer " + refreshed.access())
-                .build();
+        okhttp3.Request.Builder replay = response.request().newBuilder()
+                .header("Authorization", "Bearer " + refreshed.access());
+        // This replay is built below the application interceptors, so AuthInterceptor does not run
+        // again: the refresh rotated the CSRF token (session cookie and header), and a state-changing
+        // request must carry the stored one (§3 non-browser rule 2), not the one it first went out with.
+        String csrf = session.csrfToken();
+        if (csrf != null && response.request().header("X-CSRF-Token") != null) {
+            replay.header("X-CSRF-Token", csrf);
+        }
+        return replay.build();
     }
 
     private static int responseCount(Response response) {
