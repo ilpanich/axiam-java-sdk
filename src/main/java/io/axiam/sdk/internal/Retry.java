@@ -57,6 +57,30 @@ public final class Retry {
     }
 
     /**
+     * Decides and serves the wait before a retry: how a caller that has a deadline (the device
+     * grant's {@code expires_in}, CONTRACT.md &sect;14.2 rule 4) keeps a &sect;16 retry from
+     * sending anything past it, and sleeps on its own clock.
+     */
+    public interface Pacer {
+        /**
+         * Whether a retry after {@code delayMillis} may still be sent.
+         *
+         * @param delayMillis the full wait before the retry (jittered backoff, floored at the
+         *                    server's {@code Retry-After})
+         * @return {@code false} to stop retrying and surface the error
+         */
+        boolean admits(long delayMillis);
+
+        /**
+         * Serves the wait.
+         *
+         * @param delayMillis the wait
+         * @throws InterruptedException if interrupted
+         */
+        void sleep(long delayMillis) throws InterruptedException;
+    }
+
+    /**
      * Runs {@code op}, retrying up to {@link #DEFAULT_MAX_ATTEMPTS} times
      * when {@code retryable} matches the thrown exception.
      *
@@ -117,11 +141,47 @@ public final class Retry {
                 telemetry, operation);
     }
 
+    /**
+     * The attempt-aware overload with a {@link Pacer}: a retry whose wait the pacer does not admit
+     * is not sent, and the error is surfaced as it stands.
+     *
+     * @param <T>         the type {@code op} produces
+     * @param maxAttempts the maximum number of attempts (must be &gt;= 1)
+     * @param op          the operation, given the attempt number
+     * @param retryable   decides whether a thrown exception should trigger a retry
+     * @param telemetry   the &sect;19 dispatcher notified before each retry wait
+     * @param operation   canonical operation name for the retry event
+     * @param pacer       admits and serves each wait
+     * @return {@code op}'s result, once it succeeds
+     */
+    public static <T> T withRetry(int maxAttempts, IntFunction<T> op,
+                                  Predicate<RuntimeException> retryable,
+                                  TelemetryDispatcher telemetry, String operation, Pacer pacer) {
+        return withRetry(maxAttempts, op, retryable, pacer, new SecureRandom(), telemetry, operation);
+    }
+
     /** Test-injectable twin of the attempt-aware overload. */
     static <T> T withRetry(int maxAttempts, IntFunction<T> op,
                            Predicate<RuntimeException> retryable,
                            Sleeper sleeper, Random random,
                            TelemetryDispatcher telemetry, String operation) {
+        return withRetry(maxAttempts, op, retryable, new Pacer() {
+            @Override
+            public boolean admits(long delayMillis) {
+                return true;
+            }
+
+            @Override
+            public void sleep(long delayMillis) throws InterruptedException {
+                sleeper.sleep(delayMillis);
+            }
+        }, random, telemetry, operation);
+    }
+
+    private static <T> T withRetry(int maxAttempts, IntFunction<T> op,
+                                   Predicate<RuntimeException> retryable,
+                                   Pacer pacer, Random random,
+                                   TelemetryDispatcher telemetry, String operation) {
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts must be >= 1");
         }
@@ -136,13 +196,16 @@ public final class Retry {
                 }
 
                 long delay = computeDelayMillis(attempt, e, random);
+                if (!pacer.admits(delay)) {
+                    throw e;
+                }
                 // §16.5 — without this event a retried-then-succeeded call is
                 // invisible: a slow success with no signal that the server is
                 // failing.
                 telemetry.emit(new io.axiam.sdk.telemetry.TelemetryEvent.Retry(
                         operation, attempt, Duration.ofMillis(delay), String.valueOf(e.getMessage())));
                 try {
-                    sleeper.sleep(delay);
+                    pacer.sleep(delay);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw e;

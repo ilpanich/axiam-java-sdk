@@ -101,4 +101,26 @@ public final class StatusRetry {
             throw t.error;
         }
     }
+
+    /**
+     * {@link #run(boolean, TelemetryDispatcher, String, IntFunction)} with a {@link Retry.Pacer}:
+     * the caller's deadline and clock govern each retry wait.
+     *
+     * @param <T>       the result type
+     * @param enabled   whether the client's retry policy is on (off: one attempt)
+     * @param telemetry the &sect;19 dispatcher notified before each retry wait
+     * @param operation canonical operation name for the retry event
+     * @param pacer     admits and serves each wait
+     * @param attempt   one attempt, given its 1-based number
+     * @return the first successful attempt's result
+     */
+    public static <T> T run(boolean enabled, TelemetryDispatcher telemetry, String operation,
+                            Retry.Pacer pacer, IntFunction<T> attempt) {
+        try {
+            return Retry.withRetry(enabled ? Retry.DEFAULT_MAX_ATTEMPTS : 1, attempt,
+                    e -> e instanceof Transient, telemetry, operation, pacer);
+        } catch (Transient t) {
+            throw t.error;
+        }
+    }
 }
