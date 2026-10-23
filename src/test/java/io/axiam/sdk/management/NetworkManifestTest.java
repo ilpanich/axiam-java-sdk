@@ -455,6 +455,44 @@ class NetworkManifestTest extends ManagementTestBase {
     }
 
     @Test
+    void anUnknownEnumerationOnTheReadIsNoChangeWhenNothingDiffersAndApplyWritesNothing() throws Exception {
+        // C164-12, §27.9: the same read (an unknown member, never re-sent) with nothing that
+        // differs is NoChange -- the refusal is for an update that would carry the unknown value.
+        for (String[] unknown : new String[][] {
+                {"future", "framed_user"}, {"radius_request", "a_future_service"}}) {
+            mountReads(policy(3600, 0), page(labSegment(5)),
+                    page(profile(LAB, 3600, false, unknown[0], 600, "lab-in", unknown[1], 5)));
+            Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+            Route post = mount("POST", PROFILES, 201, labProfile());
+            ManagementManifest same = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 3600), null);
+
+            assertEquals(List.of(ManagementPlan.Change.NO_CHANGE),
+                    changes(client.management().manifest().plan(same), ManagementPlan.Target.NETWORK_PROFILE));
+            client.management().manifest().apply(same);
+
+            assertEquals(0, put.calls(), "NoChange: no PUT");
+            assertEquals(0, post.calls(), "NoChange: no POST");
+        }
+    }
+
+    @Test
+    void anUnknownServiceTypeIsRefusedAtApplyWithNoWriteUnlessTheManifestStatesIt() throws Exception {
+        // C164-12: the same for service_type, at apply; stating the member is the way out.
+        String unknownService = profile(LAB, 3600, false, "radius_request", 600, "lab-in", "a_future_service", 5);
+        mountReads(policy(3600, 0), page(labSegment(5)), page(unknownService));
+        Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+        ManagementManifest other = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800), null);
+
+        assertThrows(ValidationError.class, () -> client.management().manifest().apply(other));
+        assertEquals(0, put.calls(), "§27.6.2 item 4: refused before any write");
+
+        client.management().manifest().apply(manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800)
+                .withServiceType(RadiusServiceType.FRAMED_USER), null));
+        assertEquals(1, put.calls());
+        assertEquals("framed_user", put.last().json().path("profile").path("service_type").asText());
+    }
+
+    @Test
     void aStatedServiceTypeThatDiffersIsUpdatedAtApply() throws Exception {
         // C163-09: service_type at apply -- a stated value that differs from the read (here: the
         // read has none) is an Update that is sent.

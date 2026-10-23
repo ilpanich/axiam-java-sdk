@@ -52,7 +52,7 @@ public record ScimTargetResponse(
 
     /**
      * updated_at as an instant. Parsed from updatedAtRaw(), which is what the server sent and what
-     * a body built from this read must carry (CONTRACT.md §32.2, contract 1.62).
+     * a body built from this read must carry (CONTRACT.md §31.3 rule 4, contract 1.63).
      *
      * @return the parsed updated_at, or {@code null} when the server sent none
      */

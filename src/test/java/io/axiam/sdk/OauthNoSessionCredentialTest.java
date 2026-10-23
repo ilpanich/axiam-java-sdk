@@ -164,6 +164,8 @@ class OauthNoSessionCredentialTest {
             assertEquals(CSRF, create.getHeader("X-CSRF-Token"), "the management write echoes the CSRF token");
             assertTrue(create.getHeader("Cookie").contains("axiam_csrf=" + CSRF),
                     "the management write carries the axiam_csrf cookie");
+            assertTrue(create.getHeader("Cookie").contains("axiam_access=" + sessionAccess),
+                    "the management write carries the session cookie");
         }
     }
 

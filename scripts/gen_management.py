@@ -1146,7 +1146,7 @@ RAW_TIMESTAMPS = {
 }
 
 
-def emit_raw_timestamp_accessors(fields: list[dict]) -> list[str]:
+def emit_raw_timestamp_accessors(fields: list[dict], schema_name: str) -> list[str]:
     """The parsed accessor beside each RAW_TIMESTAMPS component (§32.2)."""
     out: list[str] = []
     for f in fields:
@@ -1157,7 +1157,8 @@ def emit_raw_timestamp_accessors(fields: list[dict]) -> list[str]:
         out.extend(javadoc(
             f"{f['wire']} as an instant. Parsed from {f['name']}(), which is what the "
             f"server sent and what a body built from this read must carry (CONTRACT.md "
-            f"§32.2, contract 1.62).",
+            + ("§31.3 rule 4, contract 1.63)." if schema_name == "ScimTargetResponse"
+               else "§32.2, contract 1.62)."),
             "    ", [f"@return the parsed {f['wire']}, or {{@code null}} when the server sent none"]))
         out.append(f"    public @Nullable OffsetDateTime {parsed}() {{")
         out.append(f"        return {f['name']} == null ? null : OffsetDateTime.parse({f['name']});")
@@ -1313,7 +1314,7 @@ def emit_record(name: str, secrets: set[str], replacement: bool, draft: bool = F
             body.extend(emit_required_checks(type_name, fields))
         body.extend(emit_omit_when_empty(type_name, fields))
         body.extend(emit_default_true_helpers(fields))
-        body.extend(emit_raw_timestamp_accessors(fields))
+        body.extend(emit_raw_timestamp_accessors(fields, name))
         if not draft:
             body.extend(emit_factories(name, type_name))
         if all_optional and not draft:
