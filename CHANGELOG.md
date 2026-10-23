@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#120).
 `CONTRACT.md`, `openapi.json` and `management-registry.json` are re-vendored byte for byte from
-`ilpanich/axiam` commit `fb92ec4`; `proto/` is unchanged and no operation is added (202 across 29
+`ilpanich/axiam` commit `fb92ec4` (`CONTRACT.md` alone from `21beda0`, the 1.64 amendment of
+2026-10-23); `proto/` is unchanged and no operation is added (202 across 29
 namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
 is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()` and a
 three-argument constructor), so the minor is not bumped.
@@ -33,6 +34,15 @@ three-argument constructor), so the minor is not bumped.
 
 ### Changed
 
+- **`devicePoll` on a `429` now throws `OAuthProtocolError` (`rate_limit_exceeded`, §14.2 rule 9
+  since contract 1.63) instead of `NetworkError`** (C164-22). A caller catching `NetworkError`
+  around `devicePoll` sees the change; it is not source-breaking, so the patch bump stands. The
+  status decides, not the body (contract 1.64, amended; C164-04): any `429`, a bodiless one and a
+  `429 {"error":"slow_down"}` included, is `rate_limit_exceeded` carrying its `Retry-After`, and in
+  `deviceLogin` only a `400 slow_down` raises the interval. A `5xx` stays a transport failure
+  whatever its body (rule 6; tested with `500 {"error":"server_error"}`).
+- `deviceLogin` measures the `expires_in` deadline on a clock, so the time a poll takes counts
+  (C164-05); the §14.6 tests use a recorded clock instead of wall-clock sleeps (C164-11).
 - Tests (C163-08, C163-09): the login mock returns `axiam_csrf` and `X-CSRF-Token`, and no
   `/oauth2/*` request carries a `Cookie` or CSRF token, with `management().users().create(..)` as
   the control; `NetworkManifestTest` gains `NoChange` (no PUT) and `service_type` at `apply`.
@@ -59,7 +69,9 @@ three-argument constructor), so the minor is not bumped.
 
 - Make custom-CA composite an X509ExtendedTrustManager
 
-## [1.2.0] - 2026-10-20
+## [1.1.1] — contract 1.63 detail (recorded as 1.2.0 before release) - 2026-10-20
+
+This entry was written as `1.2.0` and shipped as **1.1.1** (above); no `1.2.0` was ever published.
 
 Contract 1.63 (the AXIAM 1.1.1 release) and the 1.62 conformance follow-ups (#115). `CONTRACT.md`,
 `openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`
