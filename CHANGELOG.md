@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-23
+
+Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#120).
+`CONTRACT.md`, `openapi.json` and `management-registry.json` are re-vendored byte for byte from
+`ilpanich/axiam` commit `fb92ec4`; `proto/` is unchanged and no operation is added (202 across 29
+namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
+is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()` and a
+three-argument constructor), so the minor is not bumped.
+
+### Fixed
+
+- **A `429 rate_limit_exceeded` on a device-code poll is waited out (§14.2 rule 9, §14.6, contract
+  1.64).** `deviceLogin` no longer takes it for a transport failure: it waits `Retry-After` (a
+  minimum, capped at the `expires_in` deadline), counts the wait as one interval, does not raise the
+  interval for it, and polls again. A single `devicePoll` raises `OAuthProtocolError` with
+  `error() == "rate_limit_exceeded"`, and `retryAfterSeconds()` carries the header (`0` when absent).
+- **A stated `UNKNOWN` `termination_action` / `service_type` is refused at manifest validation
+  (C163-20)**, before any request, as a stated unknown segment `kind` is, instead of failing at
+  `apply`.
+- **The refusal at `plan` of an unknown profile enumeration quotes the raw value (C163-10;
+  contract 1.64 (c) allows it).** The list-profiles read keeps each item's raw `termination_action`
+  and `service_type`; the message quotes it, control characters replaced and capped at 64
+  characters, and says the value is unknown when the read carried none.
+
+### Changed
+
+- Tests (C163-08, C163-09): the login mock returns `axiam_csrf` and `X-CSRF-Token`, and no
+  `/oauth2/*` request carries a `Cookie` or CSRF token, with `management().users().create(..)` as
+  the control; `NetworkManifestTest` gains `NoChange` (no PUT) and `service_type` at `apply`.
+- Documentation (C163-18): the README's source-breaking list names `ScimTargetResponse.updatedAtRaw`,
+  its Javadoc cites §31.3 rule 4 (contract 1.63), and the README states contract 1.64.
+
 ## [1.1.1] - 2026-10-21
 
 ### Added
