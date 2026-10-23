@@ -171,6 +171,41 @@ public final class ErrorMapper {
     }
 
     /**
+     * Maps a failed device-grant poll (CONTRACT.md &sect;14.2): as {@link #fromOAuth2Response}, and
+     * a {@code 429} whose body carries an {@code error} is an {@link OAuthProtocolError}
+     * ({@code rate_limit_exceeded}, rule 9) holding its delta-seconds {@code Retry-After}, so the
+     * polling loop can wait it out (contract 1.64).
+     *
+     * @param status   the HTTP response status code
+     * @param response the live response, or {@code null}
+     * @param message  a human-readable description, used only on fall-through
+     * @return the mapped exception, ready to throw
+     */
+    public static RuntimeException fromDevicePollResponse(int status, @Nullable Response response,
+                                                          String message) {
+        if (status == 429) {
+            OAuthProtocolError protocolError = oauth2ErrorBody(response);
+            if (protocolError != null) {
+                return new OAuthProtocolError(protocolError.error(), protocolError.errorDescription(),
+                        retryAfterSeconds(response));
+            }
+        }
+        return fromOAuth2Response(status, response, message);
+    }
+
+    private static long retryAfterSeconds(@Nullable Response response) {
+        String value = response == null ? null : response.header("Retry-After");
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Long.parseLong(value.trim()));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
      * Reads an {@code OAuth2ErrorResponse} body without consuming it: a JSON
      * object whose {@code error} is a non-empty string, with an optional
      * string {@code error_description}. {@code null} for anything else,

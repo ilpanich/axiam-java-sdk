@@ -183,6 +183,58 @@ class AxiamClientDeviceFlowTest {
     }
 
     @Test
+    void rateLimitedPollIsWaitedOutAndLeavesTheIntervalUnchanged() throws Exception {
+        // §14.6 (contract 1.64): a mock answers one poll with 429 and Retry-After; the loop
+        // waits, polls again and completes; the interval is unchanged. Interval 1 s,
+        // Retry-After 2 s: the waits are 1 (poll 1, answered 429), 2 (the Retry-After,
+        // counted as one interval), 1 (poll 2, pending: interval unchanged) = 4 s. Had the 429
+        // been read as slow_down the interval would be 6 s and the loop 9 s.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.deviceAuthorizationResponse(base, 60, 1));
+            server.enqueue(OidcTestSupport.oauthError(429, "rate_limit_exceeded").setHeader("Retry-After", "2"));
+            server.enqueue(OidcTestSupport.oauthError(400, "authorization_pending"));
+            server.enqueue(OidcTestSupport.tokenResponse("device-access-token", null, null));
+            server.start();
+
+            try (AxiamClient client = deviceClient(base)) {
+                long start = System.nanoTime();
+                OidcTokenSet tokens = assertDoesNotThrow(() -> client.deviceLogin(null, null, null, a -> { }),
+                        "§14.2 rule 9: a 429 rate_limit_exceeded on a poll is not terminal");
+                long elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+                assertEquals("device-access-token", tokens.accessToken().expose());
+                // discovery + device_authorization + three polls
+                assertEquals(5, server.getRequestCount());
+                assertTrue(elapsedMillis >= 3_900,
+                        "the loop waits Retry-After as a minimum (took " + elapsedMillis + " ms)");
+                assertTrue(elapsedMillis < 7_000,
+                        "the 429 does not raise the interval (took " + elapsedMillis + " ms)");
+            }
+        }
+    }
+
+    @Test
+    void rateLimitedPollRetryAfterIsCappedAtTheDeadline() throws Exception {
+        // §14.2 rule 9: Retry-After is a minimum, capped at the expires_in deadline of rule 4.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.deviceAuthorizationResponse(base, 5, 1));
+            server.enqueue(OidcTestSupport.oauthError(429, "rate_limit_exceeded").setHeader("Retry-After", "3600"));
+            server.start();
+
+            try (AxiamClient client = deviceClient(base)) {
+                OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
+                        () -> client.deviceLogin(null, null, null, a -> { }));
+                assertEquals("expired_token", error.error());
+                assertEquals(3, server.getRequestCount(), "no poll is sent past the deadline");
+            }
+        }
+    }
+
+    @Test
     void accessDeniedAndExpiredTokenStayDistinct() throws Exception {
         // §14.2 rule 3: "a human said no" and "nobody answered" are the only
         // two pieces of information the device can act on.

@@ -3442,7 +3442,16 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         // not touch the session) and is not retried -- deviceLogin treats it as terminal.
         // This SDK implements the §21.7 verifier half only and generates no DPoP proof, so a
         // client registered for DPoP cannot be driven from here and meets that 401 (§21.7.3).
-        JsonNode wire = postToken(config, builder.build(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::token_endpoint, config.token_endpoint()),
+                tenantId);
+        JsonNode wire;
+        try (Response response = executeFormPost(url, builder.build())) {
+            if (!response.isSuccessful()) {
+                throw ErrorMapper.fromDevicePollResponse(response.code(), response, "token request failed");
+            }
+            wire = readJson(response);
+        }
         // No nonce: the device grant has no authorization request to carry one.
         return buildTokenSet(wire, config, null);
     }
@@ -3459,22 +3468,27 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         int intervalSeconds = authorization.interval();
         long remainingSeconds = authorization.expiresIn();
+        // §14.2 rule 9 (contract 1.64): a 429's Retry-After, a minimum for the next wait.
+        long retryAfterSeconds = 0;
 
         while (true) {
+            // The 429's wait counts as the interval, not on top of it, and never raises it.
+            long waitSeconds = Math.max(intervalSeconds, retryAfterSeconds);
+            retryAfterSeconds = 0;
             // §14.2 rule 4: the deadline is authoritative. Checking before
             // sleeping keeps the SDK from issuing a request that can only be
             // refused, and reports it under the same expired_token code the
             // server would have used — so a caller's branch does not care
             // which side noticed first.
-            if (intervalSeconds >= remainingSeconds) {
+            if (waitSeconds >= remainingSeconds) {
                 throw new OAuthProtocolError("expired_token",
                         "the device authorization expired before the user completed it "
                                 + "(client-side deadline from expires_in; CONTRACT.md §14.2 rule 4)");
             }
-            remainingSeconds -= intervalSeconds;
+            remainingSeconds -= waitSeconds;
 
             try {
-                Thread.sleep(Duration.ofSeconds(intervalSeconds));
+                Thread.sleep(Duration.ofSeconds(waitSeconds));
             } catch (InterruptedException e) {
                 // Restore the flag rather than swallowing it: a caller
                 // shutting the device down must be able to observe the
@@ -3494,6 +3508,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                     case "slow_down" -> {
                         // §14.2 rule 1: cumulative, never reset.
                         intervalSeconds += SLOW_DOWN_INCREMENT_SECONDS;
+                        continue;
+                    }
+                    case "rate_limit_exceeded" -> {
+                        // §14.2 rule 9 (contract 1.64): not terminal, and not a slow_down --
+                        // the interval is unchanged; Retry-After is a minimum for the next wait.
+                        retryAfterSeconds = e.retryAfterSeconds();
                         continue;
                     }
                     // expired_token / access_denied / invalid_grant — terminal.
