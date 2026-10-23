@@ -11,14 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#120).
 `CONTRACT.md`, `openapi.json` and `management-registry.json` are re-vendored byte for byte from
-`ilpanich/axiam` commit `fb92ec4` (`CONTRACT.md` alone from `21beda0`, the 1.64 amendment of
+`ilpanich/axiam` commit `fb92ec4` (`CONTRACT.md` alone from `b3f8687`, the 1.64 amendments of
 2026-10-23); `proto/` is unchanged and no operation is added (202 across 29
 namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
-is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()` and a
-three-argument constructor), so the minor is not bumped.
+is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()`, a
+three-argument constructor and the public `ErrorMapper.fromDevicePollResponse`), so the minor is not bumped.
 
 ### Fixed
 
+- **The replay after a reactive 401 refresh carries the rotated `X-CSRF-Token` (§9 rule 1, §3;
+  C164-26).** OkHttp builds the replay below the application interceptors, so `AuthAuthenticator`
+  now sets the session's stored token on a state-changing request that carried one; before, AXIAM's
+  CSRF middleware answered the replay `403`.
+- **A single `devicePoll` is retried within the attempt on a `5xx` or a transport failure (§14.2
+  rule 6, §16.2; C164-25)**, at most three attempts and never on a `429`, which is the loop's
+  rule-9 wait. With retry disabled it is sent once.
+- **A huge `Retry-After` on a poll reaches the typed `expired_token` (C164-30)**; the value is
+  clamped to a day, so `Instant` arithmetic no longer overflows.
 - **A `429 rate_limit_exceeded` on a device-code poll is waited out (§14.2 rule 9, §14.6, contract
   1.64).** `deviceLogin` no longer takes it for a transport failure: it waits `Retry-After` (a
   minimum, capped at the `expires_in` deadline), counts the wait as one interval, does not raise the
