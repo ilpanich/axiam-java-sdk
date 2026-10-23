@@ -78,6 +78,16 @@ public final class Retry {
          * @throws InterruptedException if interrupted
          */
         void sleep(long delayMillis) throws InterruptedException;
+
+        /**
+         * The jitter source of the backoff; a test pins it to place a retry exactly on a
+         * deadline.
+         *
+         * @return the random source ({@code SecureRandom} unless overridden)
+         */
+        default Random random() {
+            return new SecureRandom();
+        }
     }
 
     /**
@@ -154,10 +164,10 @@ public final class Retry {
      * @param pacer       admits and serves each wait
      * @return {@code op}'s result, once it succeeds
      */
-    public static <T> T withRetry(int maxAttempts, IntFunction<T> op,
-                                  Predicate<RuntimeException> retryable,
-                                  TelemetryDispatcher telemetry, String operation, Pacer pacer) {
-        return withRetry(maxAttempts, op, retryable, pacer, new SecureRandom(), telemetry, operation);
+    static <T> T withRetry(int maxAttempts, IntFunction<T> op,
+                           Predicate<RuntimeException> retryable,
+                           TelemetryDispatcher telemetry, String operation, Pacer pacer) {
+        return withRetry(maxAttempts, op, retryable, pacer, pacer.random(), telemetry, operation);
     }
 
     /** Test-injectable twin of the attempt-aware overload. */

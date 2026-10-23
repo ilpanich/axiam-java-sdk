@@ -569,10 +569,11 @@ class AxiamClientDeviceFlowTest {
 
     @Test
     void theInPollRetryNeverSendsAtOrAfterTheDeadline() throws Exception {
-        // C164-36, §14.2 rule 4: expires_in 12, interval 5, every poll 503 + Retry-After: 120 (the
-        // floor is clamped at 5 s). The loop's poll at t = 5 is retried at t = 10; the retry after
-        // that would be at t = 15, past the deadline, so it is not sent: no request at or after
-        // t = 12 on the clock, and the loop ends with expired_token.
+        // C164-36, §14.2 rule 4: expires_in 30, interval 5, every poll 503 + Retry-After: 120 (the
+        // floor is clamped at 5 s). Polls go out at 5, 10, 15 (one attempt of three), then 20 and 25;
+        // the retry due at t = 30 is exactly the deadline, which is not before it, so it is not sent
+        // (C164-45: this pins the strict boundary): no request at or after t = 30 on the clock, and
+        // the loop ends with expired_token.
         try (MockWebServer server = new MockWebServer()) {
             String base = server.url("/").toString();
             RecordedClock clock = new RecordedClock();
@@ -586,7 +587,7 @@ class AxiamClientDeviceFlowTest {
                         return OidcTestSupport.discoveryResponse(base);
                     }
                     if (path.endsWith("device_authorization")) {
-                        return OidcTestSupport.deviceAuthorizationResponse(base, 12, 5);
+                        return OidcTestSupport.deviceAuthorizationResponse(base, 30, 5);
                     }
                     requestSeconds.add(java.time.Duration.between(start, clock.now()).toSeconds());
                     return new okhttp3.mockwebserver.MockResponse().setResponseCode(503)
@@ -601,8 +602,8 @@ class AxiamClientDeviceFlowTest {
                                 () -> client.deviceLogin(null, null, null, a -> { }, clock)));
                 assertEquals("expired_token", error.error());
             }
-            assertEquals(List.of(5L, 10L), requestSeconds, "nothing at or after t = 12 s");
-            assertEquals(List.of(5L, 5L), clock.sleeps, "the loop's wait, then the in-poll retry wait");
+            assertEquals(List.of(5L, 10L, 15L, 20L, 25L), requestSeconds, "nothing at or after t = 30 s");
+            assertEquals(List.of(5L, 5L, 5L, 5L, 5L), clock.sleeps, "loop wait, two in-poll waits, loop wait, one in-poll wait");
         }
     }
 
@@ -628,6 +629,66 @@ class AxiamClientDeviceFlowTest {
             assertEquals(3, server.getRequestCount(), "discovery, authorization and the one poll");
             assertEquals(List.of(2L), clock.sleeps, "no retry wait was served");
         }
+    }
+
+    /** A jitter source pinned to {@code value} in [0, 1): the in-attempt backoff is {@code value * 200} ms. */
+    private static java.util.Random jitter(double value) {
+        return new java.util.Random() {
+            @Override
+            public double nextDouble() {
+                return value;
+            }
+        };
+    }
+
+    private void pollJustBeforeTheDeadlineWithJitter(double jitterValue, boolean retrySent) throws Exception {
+        // C164-45: a bare 500 (no Retry-After) to a poll at deadline - 100 ms. The retry's wait is the
+        // jittered backoff alone, pinned here: a deadline check that adds only the Retry-After floor
+        // and not the jitter would send the retry whatever the jitter.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.deviceAuthorizationResponse(base, 12, 2));
+            server.enqueue(serverError500());
+            if (retrySent) {
+                server.enqueue(OidcTestSupport.tokenResponse("device-access-token", null, null));
+            }
+            server.start();
+
+            RecordedClock clock = new RecordedClock();
+            try (AxiamClient client = deviceClient(base)) {
+                client.setPollJitterForTesting(jitter(jitterValue));
+                java.util.function.Supplier<OidcTokenSet> login = () -> client.deviceLogin(null, null, null,
+                        a -> clock.advance(java.time.Duration.ofMillis(9_900)), clock);
+                if (retrySent) {
+                    assertEquals("device-access-token", assertTimeoutPreemptively(
+                            java.time.Duration.ofSeconds(10), login::get).accessToken().expose());
+                    assertEquals(4, server.getRequestCount(), "discovery, authorization, the poll and its retry");
+                    assertEquals(List.of(2L, 0L), clock.sleeps, "the zero-jitter retry fits before the deadline");
+                } else {
+                    OAuthProtocolError error = assertTimeoutPreemptively(java.time.Duration.ofSeconds(10),
+                            () -> assertThrows(OAuthProtocolError.class, login::get));
+                    assertEquals("expired_token", error.error());
+                    assertEquals(3, server.getRequestCount(), "discovery, authorization and the one poll");
+                    assertEquals(List.of(2L), clock.sleeps, "no retry wait was served");
+                }
+            }
+        }
+    }
+
+    @Test
+    void aBare500JustBeforeTheDeadlineIsNotRetriedWhenTheMaximumJitterWouldPassIt() throws Exception {
+        pollJustBeforeTheDeadlineWithJitter(0.999999, false); // 199 ms wait: 11.9 s + 199 ms > 12 s
+    }
+
+    @Test
+    void aRetryDueExactlyAtTheDeadlineIsNotSent() throws Exception {
+        pollJustBeforeTheDeadlineWithJitter(0.5, false); // 100 ms wait: 11.9 s + 100 ms == the deadline
+    }
+
+    @Test
+    void aRetryThatFitsBeforeTheDeadlineIsStillSent() throws Exception {
+        pollJustBeforeTheDeadlineWithJitter(0.0, true); // no wait: the check is not "never retry"
     }
 
     @Test

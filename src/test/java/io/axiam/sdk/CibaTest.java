@@ -471,6 +471,53 @@ class CibaTest {
         assertEquals(List.of(5L, 10L), at, "nothing at 15 s, past the 12 s deadline");
     }
 
+    @Test
+    void t07pInPollRetryNeverSendsAtOrAfterTheDeadline() throws Exception {
+        // §34.2 P10, §33.8 test 7 (second half), C164-43: every poll 503 + Retry-After: 120 (the floor is
+        // clamped at 5 s), expires_in 12, interval 5: polls at 5 and 10; the retry after that would
+        // be at 15, past the deadline, so it is not sent and expired_token is raised.
+        OidcConfiguration config = configuration();
+        AxiamClient client = client(random());
+        TestClock clock = new TestClock();
+        List<Long> at = new ArrayList<>();
+        tokenScript(clock, at, json(503, "{\"error\":\"temporarily_unavailable\"}").setHeader("Retry-After", "120"));
+        OAuthProtocolError e = assertThrows(OAuthProtocolError.class, () -> client.cibaAwait(
+                new CibaInitiateResponse(Sensitive.of(random()), 12, 5, clock.start), null, config, clock));
+        assertTrue(e.isExpiredToken());
+        assertEquals(List.of(5L, 10L), at, "no ciba_poll request at or after received_at + 12");
+    }
+
+    private void cibaPollJustBeforeTheDeadline(double jitterValue) throws Exception {
+        // C164-45 (CIBA twin): a bare 500 to a poll at deadline - 100 ms; the retry's wait is the pinned
+        // jitter alone, so a check that ignores the jitter would send it.
+        OidcConfiguration config = configuration();
+        AxiamClient client = client(random());
+        client.setPollJitterForTesting(new java.util.Random() {
+            @Override
+            public double nextDouble() {
+                return jitterValue;
+            }
+        });
+        TestClock clock = new TestClock();
+        clock.sleep(Duration.ofMillis(6_900)); // t = 6.9 s; the loop's wait of 5 s puts the poll at 11.9 s
+        List<Long> at = new ArrayList<>();
+        RouteServer.Route token = tokenScript(clock, at, json(500, "{\"error\":\"server_error\"}"));
+        OAuthProtocolError e = assertThrows(OAuthProtocolError.class, () -> client.cibaAwait(
+                new CibaInitiateResponse(Sensitive.of(random()), 12, 5, clock.start), null, config, clock));
+        assertTrue(e.isExpiredToken());
+        assertEquals(1, token.calls(), "the retry would have been due at or after the 12 s deadline");
+    }
+
+    @Test
+    void t07qMaximumJitterDoesNotPassTheDeadline() throws Exception {
+        cibaPollJustBeforeTheDeadline(0.999999); // 199 ms: 11.9 s + 199 ms > 12 s
+    }
+
+    @Test
+    void t07rARetryDueExactlyAtTheDeadlineIsNotSent() throws Exception {
+        cibaPollJustBeforeTheDeadline(0.5); // 100 ms: 11.9 s + 100 ms == 12 s
+    }
+
     // ── 8. Transient failure is not terminal ─────────────────────────────
 
     @Test
