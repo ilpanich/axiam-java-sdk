@@ -171,10 +171,12 @@ public final class ErrorMapper {
     }
 
     /**
-     * Maps a failed device-grant poll (CONTRACT.md &sect;14.2): as {@link #fromOAuth2Response}, and
-     * a {@code 429} whose body carries an {@code error} is an {@link OAuthProtocolError}
-     * ({@code rate_limit_exceeded}, rule 9) holding its delta-seconds {@code Retry-After}, so the
-     * polling loop can wait it out (contract 1.64).
+     * Maps a failed device-grant poll (CONTRACT.md &sect;14.2): as {@link #fromOAuth2Response}
+     * &mdash; so a {@code 5xx} is a transport failure whatever its body (rule 6) &mdash; except
+     * that <em>any</em> {@code 429} is the rule-9 wait, decided by the status and not by the body
+     * (contract 1.64, amended): an {@link OAuthProtocolError} {@code rate_limit_exceeded} holding
+     * its delta-seconds {@code Retry-After}, even when the body names another code
+     * ({@code slow_down}) or has none.
      *
      * @param status   the HTTP response status code
      * @param response the live response, or {@code null}
@@ -184,11 +186,9 @@ public final class ErrorMapper {
     public static RuntimeException fromDevicePollResponse(int status, @Nullable Response response,
                                                           String message) {
         if (status == 429) {
-            OAuthProtocolError protocolError = oauth2ErrorBody(response);
-            if (protocolError != null) {
-                return new OAuthProtocolError(protocolError.error(), protocolError.errorDescription(),
-                        retryAfterSeconds(response));
-            }
+            OAuthProtocolError body = oauth2ErrorBody(response);
+            return new OAuthProtocolError("rate_limit_exceeded",
+                    body == null ? null : body.errorDescription(), retryAfterSeconds(response));
         }
         return fromOAuth2Response(status, response, message);
     }

@@ -3459,36 +3459,45 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     @Override
     public OidcTokenSet deviceLogin(@Nullable String scope, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration, Consumer<DeviceAuthorization> onUserCode) {
+        return deviceLogin(scope, tenantId, configuration, onUserCode, io.axiam.sdk.oidc.CibaClock.system());
+    }
+
+    /**
+     * {@link #deviceLogin(String, UUID, OidcConfiguration, Consumer)} on a caller-supplied clock:
+     * the deadline is measured on it (request time counts, §14.2 rule 4) and every wait is slept
+     * on it, which is how the &sect;14.6 tests record the waits without a wall clock.
+     */
+    OidcTokenSet deviceLogin(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration, Consumer<DeviceAuthorization> onUserCode,
+            io.axiam.sdk.oidc.CibaClock clock) {
         Objects.requireNonNull(onUserCode, "onUserCode");
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         DeviceAuthorization authorization = deviceAuthorize(scope, tenantId, config);
+        java.time.Instant deadline = clock.now().plusSeconds(authorization.expiresIn());
 
         // §14.3 rule 2 — before any polling.
         onUserCode.accept(authorization);
 
         int intervalSeconds = authorization.interval();
-        long remainingSeconds = authorization.expiresIn();
         // §14.2 rule 9 (contract 1.64): a 429's Retry-After, a minimum for the next wait.
         long retryAfterSeconds = 0;
 
         while (true) {
             // The 429's wait counts as the interval, not on top of it, and never raises it.
-            long waitSeconds = Math.max(intervalSeconds, retryAfterSeconds);
+            Duration wait = Duration.ofSeconds(Math.max(intervalSeconds, retryAfterSeconds));
             retryAfterSeconds = 0;
-            // §14.2 rule 4: the deadline is authoritative. Checking before
-            // sleeping keeps the SDK from issuing a request that can only be
-            // refused, and reports it under the same expired_token code the
-            // server would have used — so a caller's branch does not care
-            // which side noticed first.
-            if (waitSeconds >= remainingSeconds) {
+            // §14.2 rule 4: the deadline is authoritative and measured on the clock, so the time
+            // a poll took counts. Checking before sleeping keeps the SDK from issuing a request
+            // that can only be refused, and reports it under the same expired_token code the
+            // server would have used — so a caller's branch does not care which side noticed first.
+            if (!clock.now().plus(wait).isBefore(deadline)) {
                 throw new OAuthProtocolError("expired_token",
                         "the device authorization expired before the user completed it "
                                 + "(client-side deadline from expires_in; CONTRACT.md §14.2 rule 4)");
             }
-            remainingSeconds -= waitSeconds;
 
             try {
-                Thread.sleep(Duration.ofSeconds(waitSeconds));
+                clock.sleep(wait);
             } catch (InterruptedException e) {
                 // Restore the flag rather than swallowing it: a caller
                 // shutting the device down must be able to observe the
@@ -3506,7 +3515,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                         continue;
                     }
                     case "slow_down" -> {
-                        // §14.2 rule 1: cumulative, never reset.
+                        // §14.2 rule 1: cumulative, never reset. Only the 400 gets here: a 429 is
+                        // mapped to rate_limit_exceeded whatever its body names (rule 9).
                         intervalSeconds += SLOW_DOWN_INCREMENT_SECONDS;
                         continue;
                     }
