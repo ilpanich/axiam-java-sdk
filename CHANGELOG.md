@@ -15,10 +15,20 @@ Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#12
 2026-10-23); `proto/` is unchanged and no operation is added (202 across 29
 namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
 is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()`, a
-three-argument constructor and the public `ErrorMapper.fromDevicePollResponse`), so the minor is not bumped.
+three-argument constructor, the public `ErrorMapper.fromDevicePollResponse` and the public
+`Retry.Pacer` with its `StatusRetry.run` / `Retry.withRetry` overloads), so the minor is not bumped.
 
 ### Fixed
 
+- **The §16 retry inside a device poll never sends past the `expires_in` deadline (§14.2 rule 4;
+  C164-36).** `deviceLogin` hands the poll its deadline and clock; before each in-poll retry the
+  full wait (jittered backoff, floored at `Retry-After`) is checked, a retry that would reach the
+  deadline is not sent, and the loop reports `expired_token`. The waits are slept on the injected
+  clock. A bare `devicePoll` keeps the unbounded §16 behaviour.
+- **The device and CIBA polls no longer ride OkHttp's silent replay of a dropped POST (§16.1;
+  C164-39).** They use a client with `retryOnConnectionFailure(false)`, so the §16 runner alone
+  counts attempts: three drops end in the `NetworkError` after three requests, not a fourth that
+  succeeds.
 - **The replay after a reactive 401 refresh carries the rotated `X-CSRF-Token` (§9 rule 1, §3;
   C164-26).** OkHttp builds the replay below the application interceptors, so `AuthAuthenticator`
   now sets the session's stored token on a state-changing request that carried one; before, AXIAM's
@@ -50,6 +60,10 @@ three-argument constructor and the public `ErrorMapper.fromDevicePollResponse`),
   `429 {"error":"slow_down"}` included, is `rate_limit_exceeded` carrying its `Retry-After`, and in
   `deviceLogin` only a `400 slow_down` raises the interval. A `5xx` stays a transport failure
   whatever its body (rule 6; tested with `500 {"error":"server_error"}`).
+- Tests (C164-38, C164-41): two `500`s then `200`, three `500`s (the cap is pinned: a cap of 5 fails),
+  two transport failures then `200`, three transport failures, retry disabled, the CIBA poll's
+  drops, and both deadline cases of C164-36 on the recorded clock; the deadline tests run under a
+  preemptive timeout, so a regression fails instead of hanging.
 - `deviceLogin` measures the `expires_in` deadline on a clock, so the time a poll takes counts
   (C164-05); the §14.6 tests use a recorded clock instead of wall-clock sleeps (C164-11).
 - Tests (C163-08, C163-09): the login mock returns `axiam_csrf` and `X-CSRF-Token`, and no
