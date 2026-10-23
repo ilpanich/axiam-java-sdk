@@ -15,11 +15,14 @@ Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#12
 2026-10-23); `proto/` is unchanged and no operation is added (202 across 29
 namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
 is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()`, a
-three-argument constructor, the public `ErrorMapper.fromDevicePollResponse` and the public
-`Retry.Pacer` with its `StatusRetry.run` / `Retry.withRetry` overloads), so the minor is not bumped.
+three-argument constructor and the public `ErrorMapper.fromDevicePollResponse`; the `Retry.Pacer`
+interface and a `StatusRetry.run` overload live in the non-API `io.axiam.sdk.internal` package), so the minor is not bumped.
 
 ### Fixed
 
+- **The §16 retry inside a CIBA poll never sends past the `cibaAwait` deadline either (§33.7 rule 5,
+  §34.2 P10, §33.8 test 7; C164-43).** `cibaAwait` hands `cibaRedeem` a pacer on its clock and its
+  `received_at + expires_in` deadline, as the device loop does; a bare `cibaPoll` is unchanged.
 - **The §16 retry inside a device poll never sends past the `expires_in` deadline (§14.2 rule 4;
   C164-36).** `deviceLogin` hands the poll its deadline and clock; before each in-poll retry the
   full wait (jittered backoff, floored at `Retry-After`) is checked, a retry that would reach the
@@ -60,6 +63,10 @@ three-argument constructor, the public `ErrorMapper.fromDevicePollResponse` and 
   `429 {"error":"slow_down"}` included, is `rate_limit_exceeded` carrying its `Retry-After`, and in
   `deviceLogin` only a `400 slow_down` raises the interval. A `5xx` stays a transport failure
   whatever its body (rule 6; tested with `500 {"error":"server_error"}`).
+- Tests (C164-45, C164-48): the deadline checks of both polls are pinned to the jittered backoff
+  (an injected jitter source, a bare `500` at deadline − 100 ms), to the strict boundary (a retry
+  due exactly at the deadline is not sent; `expires_in` 30 for the device loop) and to the
+  P10 case for CIBA; `Retry.withRetry(…, Pacer)` is package-private.
 - Tests (C164-38, C164-41): two `500`s then `200`, three `500`s (the cap is pinned: a cap of 5 fails),
   two transport failures then `200`, three transport failures, retry disabled, the CIBA poll's
   drops, and both deadline cases of C164-36 on the recorded clock; the deadline tests run under a
