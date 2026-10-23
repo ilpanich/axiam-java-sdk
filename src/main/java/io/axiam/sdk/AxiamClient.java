@@ -3445,13 +3445,30 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         String url = oauth2Url(
                 preferredEndpoint(config, MtlsEndpointAliases::token_endpoint, config.token_endpoint()),
                 tenantId);
-        JsonNode wire;
-        try (Response response = executeFormPost(url, builder.build())) {
-            if (!response.isSuccessful()) {
-                throw ErrorMapper.fromDevicePollResponse(response.code(), response, "token request failed");
+        FormBody form = builder.build();
+        // §14.2 rule 6, §16.2: a 5xx or a transport failure is retried within the poll under §16
+        // (at most three attempts) and then surfaced; a 429 is never retried here -- it is rule 9's
+        // wait, which belongs to the loop (C164-25).
+        JsonNode wire = io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "device_poll", n -> {
+            Response response;
+            try {
+                response = executeFormPost(url, form);
+            } catch (NetworkError e) {
+                throw new io.axiam.sdk.internal.StatusRetry.Transient(e, 0);
             }
-            wire = readJson(response);
-        }
+            try (response) {
+                if (!response.isSuccessful()) {
+                    int code = response.code();
+                    RuntimeException err = ErrorMapper.fromDevicePollResponse(code, response, "token request failed");
+                    if (code >= 500 && err instanceof NetworkError) {
+                        throw new io.axiam.sdk.internal.StatusRetry.Transient(err,
+                                io.axiam.sdk.internal.StatusRetry.retryAfterMillis(response));
+                    }
+                    throw err;
+                }
+                return readJson(response);
+            }
+        });
         // No nonce: the device grant has no authorization request to carry one.
         return buildTokenSet(wire, config, null);
     }

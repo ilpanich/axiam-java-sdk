@@ -193,13 +193,18 @@ public final class ErrorMapper {
         return fromOAuth2Response(status, response, message);
     }
 
+    /** Largest {@code Retry-After}, in seconds, a device poll keeps. */
+    private static final long MAX_RETRY_AFTER_SECONDS = 86_400L;
+
     private static long retryAfterSeconds(@Nullable Response response) {
         String value = response == null ? null : response.header("Retry-After");
         if (value == null) {
             return 0;
         }
         try {
-            return Math.max(0, Long.parseLong(value.trim()));
+            // Clamped to a day: the loop adds it to an Instant, and a hostile value must reach the
+            // deadline check (the typed expired_token) rather than overflow (C164-30).
+            return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(0, Long.parseLong(value.trim())));
         } catch (NumberFormatException e) {
             return 0;
         }

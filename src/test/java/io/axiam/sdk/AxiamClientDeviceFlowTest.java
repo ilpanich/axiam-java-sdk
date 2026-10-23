@@ -197,6 +197,11 @@ class AxiamClientDeviceFlowTest {
         @Override
         public void sleep(java.time.Duration duration) {
             sleeps.add(duration.toSeconds());
+            advance(duration);
+        }
+
+        /** Time that passes outside a sleep: a callback, or a request in flight. */
+        synchronized void advance(java.time.Duration duration) {
             now = now.plus(duration);
         }
     }
@@ -339,6 +344,128 @@ class AxiamClientDeviceFlowTest {
                     () -> runDeviceLogin(server, clock));
             assertEquals("device-access-token", tokens.accessToken().expose());
             assertEquals(5, server.getRequestCount());
+        }
+    }
+
+    @Test
+    void aHugeRetryAfterIsCappedAtTheDeadlineNotAnOverflow() throws Exception {
+        // C164-30: Retry-After is clamped, so the deadline check (the typed expired_token) is
+        // reached instead of an Instant overflow.
+        for (String huge : List.of("99999999999999999", "9223372036854775807")) {
+            try (MockWebServer server = new MockWebServer()) {
+                String base = server.url("/").toString();
+                server.enqueue(OidcTestSupport.discoveryResponse(base));
+                server.enqueue(OidcTestSupport.deviceAuthorizationResponse(base, 60, 1));
+                server.enqueue(serverRateLimit(huge));
+                server.start();
+
+                RecordedClock clock = new RecordedClock();
+                OAuthProtocolError error = assertTimeoutPreemptively(java.time.Duration.ofSeconds(10),
+                        () -> assertThrows(OAuthProtocolError.class, () -> runDeviceLogin(server, clock)));
+                assertEquals("expired_token", error.error());
+                assertEquals(List.of(1L), clock.sleeps);
+                assertEquals(3, server.getRequestCount());
+            }
+        }
+    }
+
+    @Test
+    void timeSpentInTheUserCodeCallbackCountsAgainstTheDeadline() throws Exception {
+        // C164-29 (C164-05): the deadline is a clock instant, not a budget of sleeps. A callback
+        // that takes 25 s of a 30 s grant leaves no room for a 5 s interval: nothing is polled.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(OidcTestSupport.deviceAuthorizationResponse(base, 30, 5));
+            server.start();
+
+            RecordedClock clock = new RecordedClock();
+            try (AxiamClient client = deviceClient(base)) {
+                OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
+                        () -> client.deviceLogin(null, null, null,
+                                a -> clock.advance(java.time.Duration.ofSeconds(25)), clock));
+                assertEquals("expired_token", error.error());
+            }
+            assertEquals(List.of(), clock.sleeps);
+            assertEquals(2, server.getRequestCount(), "no poll after the deadline");
+        }
+    }
+
+    @Test
+    void timeSpentInAPollCountsAgainstTheDeadline() throws Exception {
+        // C164-29: each poll takes 4 s of a 12 s grant at interval 2. Sleeps alone would allow six
+        // polls; on the clock the third wait (t = 12) is at the deadline, so exactly two go out.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            RecordedClock clock = new RecordedClock();
+            server.setDispatcher(new okhttp3.mockwebserver.Dispatcher() {
+                @Override
+                public okhttp3.mockwebserver.MockResponse dispatch(RecordedRequest request) {
+                    String path = request.getRequestUrl().encodedPath();
+                    if (path.endsWith("openid-configuration")) {
+                        return OidcTestSupport.discoveryResponse(base);
+                    }
+                    if (path.endsWith("device_authorization")) {
+                        return OidcTestSupport.deviceAuthorizationResponse(base, 12, 2);
+                    }
+                    clock.advance(java.time.Duration.ofSeconds(4));
+                    return OidcTestSupport.oauthError(400, "authorization_pending");
+                }
+            });
+            server.start();
+
+            try (AxiamClient client = deviceClient(base)) {
+                OAuthProtocolError error = assertThrows(OAuthProtocolError.class,
+                        () -> client.deviceLogin(null, null, null, a -> { }, clock));
+                assertEquals("expired_token", error.error());
+            }
+            assertEquals(List.of(2L, 2L), clock.sleeps);
+            assertEquals(4, server.getRequestCount(), "discovery, authorization and two polls");
+        }
+    }
+
+    @Test
+    void aSinglePollIsRetriedWithinTheAttemptOnA5xxButNeverOnA429() throws Exception {
+        // C164-25, §14.2 rule 6 / §16.2: 500 server_error and 503 are retried within the poll
+        // (at most three attempts); a 429 is the loop's rule-9 wait and is sent once.
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(new okhttp3.mockwebserver.MockResponse().setResponseCode(500)
+                    .setHeader("Content-Type", "application/json").setBody("{\"error\":\"server_error\"}"));
+            server.enqueue(new okhttp3.mockwebserver.MockResponse().setResponseCode(503));
+            server.enqueue(OidcTestSupport.tokenResponse("device-access-token", null, null));
+            server.enqueue(serverRateLimit("1"));
+            server.start();
+
+            try (AxiamClient client = deviceClient(base)) {
+                OidcTokenSet tokens = client.devicePoll(io.axiam.sdk.Sensitive.of(DEVICE_CODE), null, null);
+                assertEquals("device-access-token", tokens.accessToken().expose());
+                assertEquals(4, server.getRequestCount(), "discovery and three attempts");
+
+                OAuthProtocolError limited = assertThrows(OAuthProtocolError.class,
+                        () -> client.devicePoll(io.axiam.sdk.Sensitive.of(DEVICE_CODE), null, null));
+                assertEquals("rate_limit_exceeded", limited.error());
+                assertEquals(5, server.getRequestCount(), "a 429 is not retried within the poll");
+            }
+        }
+    }
+
+    @Test
+    void withRetryDisabledASinglePollIsSentOnce() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            String base = server.url("/").toString();
+            server.enqueue(OidcTestSupport.discoveryResponse(base));
+            server.enqueue(new okhttp3.mockwebserver.MockResponse().setResponseCode(500)
+                    .setHeader("Content-Type", "application/json").setBody("{\"error\":\"server_error\"}"));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(base, TENANT_ID).oidcClientId("my-device")
+                    .retryDisabled().build()) {
+                assertThrows(io.axiam.sdk.errors.NetworkError.class,
+                        () -> client.devicePoll(io.axiam.sdk.Sensitive.of(DEVICE_CODE), null, null));
+                assertEquals(2, server.getRequestCount());
+            }
         }
     }
 
