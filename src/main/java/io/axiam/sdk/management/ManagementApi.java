@@ -32,6 +32,11 @@ public final class ManagementApi {
         this.transport = transport;
     }
 
+    /** The client's transport, for the manifest reconciler's raw reads (package-private). */
+    ManagementTransport transport() {
+        return transport;
+    }
+
     /**
      * Organizations an SDK client may read and configure. Creation and deletion are outside the
      * SDK boundary (§27.0).

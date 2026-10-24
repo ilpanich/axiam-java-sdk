@@ -435,6 +435,115 @@ class NetworkManifestTest extends ManagementTestBase {
         assertEquals(RadiusServiceType.FRAMED_USER, RadiusServiceType.fromWire("framed_user"));
     }
 
+    @Test
+    void aProfileThatMatchesTheReadIsNoChangeAndApplyWritesNothing() throws Exception {
+        // C163-09: same read, nothing differs: NoChange, and no PUT or POST on apply.
+        mountReads(policy(3600, 0), page(labSegment(5)), page(labProfile()));
+        Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+        Route post = mount("POST", PROFILES, 201, labProfile());
+        ManagementManifest same = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 3600)
+                .withTerminationAction(RadiusTerminationAction.RADIUS_REQUEST)
+                .withIdleTimeoutSecs(600).withFilterId("lab-in")
+                .withServiceType(RadiusServiceType.FRAMED_USER), null);
+
+        assertEquals(List.of(ManagementPlan.Change.NO_CHANGE),
+                changes(client.management().manifest().plan(same), ManagementPlan.Target.NETWORK_PROFILE));
+        client.management().manifest().apply(same);
+
+        assertEquals(0, put.calls(), "NoChange: no PUT");
+        assertEquals(0, post.calls(), "NoChange: no POST");
+    }
+
+    @Test
+    void anUnknownEnumerationOnTheReadIsNoChangeWhenNothingDiffersAndApplyWritesNothing() throws Exception {
+        // C164-12, §27.9: the same read (an unknown member, never re-sent) with nothing that
+        // differs is NoChange -- the refusal is for an update that would carry the unknown value.
+        for (String[] unknown : new String[][] {
+                {"future", "framed_user"}, {"radius_request", "a_future_service"}}) {
+            mountReads(policy(3600, 0), page(labSegment(5)),
+                    page(profile(LAB, 3600, false, unknown[0], 600, "lab-in", unknown[1], 5)));
+            Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+            Route post = mount("POST", PROFILES, 201, labProfile());
+            ManagementManifest same = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 3600), null);
+
+            assertEquals(List.of(ManagementPlan.Change.NO_CHANGE),
+                    changes(client.management().manifest().plan(same), ManagementPlan.Target.NETWORK_PROFILE));
+            client.management().manifest().apply(same);
+
+            assertEquals(0, put.calls(), "NoChange: no PUT");
+            assertEquals(0, post.calls(), "NoChange: no POST");
+        }
+    }
+
+    @Test
+    void anUnknownServiceTypeIsRefusedAtApplyWithNoWriteUnlessTheManifestStatesIt() throws Exception {
+        // C164-12: the same for service_type, at apply; stating the member is the way out.
+        String unknownService = profile(LAB, 3600, false, "radius_request", 600, "lab-in", "a_future_service", 5);
+        mountReads(policy(3600, 0), page(labSegment(5)), page(unknownService));
+        Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+        ManagementManifest other = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800), null);
+
+        assertThrows(ValidationError.class, () -> client.management().manifest().apply(other));
+        assertEquals(0, put.calls(), "§27.6.2 item 4: refused before any write");
+
+        client.management().manifest().apply(manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800)
+                .withServiceType(RadiusServiceType.FRAMED_USER), null));
+        assertEquals(1, put.calls());
+        assertEquals("framed_user", put.last().json().path("profile").path("service_type").asText());
+    }
+
+    @Test
+    void aStatedServiceTypeThatDiffersIsUpdatedAtApply() throws Exception {
+        // C163-09: service_type at apply -- a stated value that differs from the read (here: the
+        // read has none) is an Update that is sent.
+        String without = profile(LAB, 3600, false, "radius_request", 600, "lab-in", null, 5);
+        mountReads(policy(3600, 0), page(labSegment(5)), page(without));
+        Route put = mount("PUT", PROFILES + "/" + LAB, 200, labProfile());
+        ManagementManifest m = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 3600)
+                .withServiceType(RadiusServiceType.FRAMED_USER), null);
+
+        assertEquals(List.of(ManagementPlan.Change.UPDATE),
+                changes(client.management().manifest().plan(m), ManagementPlan.Target.NETWORK_PROFILE));
+        client.management().manifest().apply(m);
+
+        assertEquals(1, put.calls());
+        assertEquals("framed_user", put.last().json().path("profile").path("service_type").asText());
+    }
+
+    @Test
+    void theRefusalQuotesTheRawValueTheReadCarriedCappedInLength() throws Exception {
+        // C163-10 (D-15): the raw spelling is quoted, length-capped; a control character is not echoed.
+        String longValue = "a_future_" + "x".repeat(200);
+        mountReads(policy(3600, 0), page(labSegment(5)),
+                page(profile(LAB, 3600, false, "future\\u0007", 600, "lab-in", longValue, 5)));
+        ManagementManifest other = manifest(lab(), ManagementManifest.ProfileSpec.of("lab", 1800), null);
+
+        ValidationError t = assertThrows(ValidationError.class, () -> client.management().manifest().plan(other));
+        assertTrue(t.getMessage().contains("'future?'"), t.getMessage());
+        assertFalse(t.getMessage().contains("\u0007"), t.getMessage());
+
+        mountReads(policy(3600, 0), page(labSegment(5)),
+                page(profile(LAB, 3600, false, "radius_request", 600, "lab-in", longValue, 5)));
+        ValidationError s = assertThrows(ValidationError.class, () -> client.management().manifest().plan(other));
+        assertTrue(s.getMessage().contains("'" + longValue.substring(0, 64) + "...'"), s.getMessage());
+        assertFalse(s.getMessage().contains(longValue), "capped");
+    }
+
+    @Test
+    void aStatedUnknownEnumerationIsRefusedAtValidationBeforeAnyRequest() throws Exception {
+        // C163-20: as a stated unknown `kind` is.
+        int before = totalCalls();
+        NetworkError t = assertThrows(NetworkError.class, () -> manifest(lab(),
+                ManagementManifest.ProfileSpec.of("lab", 1800)
+                        .withTerminationAction(RadiusTerminationAction.UNKNOWN), null));
+        assertTrue(t.getMessage().contains("termination_action"), t.getMessage());
+        NetworkError s = assertThrows(NetworkError.class, () -> manifest(lab(),
+                ManagementManifest.ProfileSpec.of("lab", 1800)
+                        .withServiceType(RadiusServiceType.UNKNOWN), null));
+        assertTrue(s.getMessage().contains("service_type"), s.getMessage());
+        assertEquals(before, totalCalls(), "no request");
+    }
+
     // -- refusals with zero wire calls ----------------------------------------------------------
 
     @Test

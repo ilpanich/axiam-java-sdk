@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-23
+
+Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#120).
+`CONTRACT.md`, `openapi.json` and `management-registry.json` are re-vendored byte for byte from
+`ilpanich/axiam` commit `356a6da` (platform PR #793 merge; `CONTRACT.md` is byte-identical to `b3f8687`, the 1.64 amendments of
+2026-10-23); `proto/` is unchanged and no operation is added (202 across 29
+namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
+is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()`, a
+three-argument constructor and the public `ErrorMapper.fromDevicePollResponse`; the `Retry.Pacer`
+interface and a `StatusRetry.run` overload live in the non-API `io.axiam.sdk.internal` package), so the minor is not bumped.
+
+### Fixed
+
+- **The §16 retry inside a CIBA poll never sends past the `cibaAwait` deadline either (§33.7 rule 5,
+  §34.2 P10, §33.8 test 7; C164-43).** `cibaAwait` hands `cibaRedeem` a pacer on its clock and its
+  `received_at + expires_in` deadline, as the device loop does; a bare `cibaPoll` is unchanged.
+- **The §16 retry inside a device poll never sends past the `expires_in` deadline (§14.2 rule 4;
+  C164-36).** `deviceLogin` hands the poll its deadline and clock; before each in-poll retry the
+  full wait (jittered backoff, floored at `Retry-After`) is checked, a retry that would reach the
+  deadline is not sent, and the loop reports `expired_token`. The waits are slept on the injected
+  clock. A bare `devicePoll` keeps the unbounded §16 behaviour.
+- **The device and CIBA polls no longer ride OkHttp's silent replay of a dropped POST (§16.1;
+  C164-39).** They use a client with `retryOnConnectionFailure(false)`, so the §16 runner alone
+  counts attempts: three drops end in the `NetworkError` after three requests, not a fourth that
+  succeeds.
+- **The replay after a reactive 401 refresh carries the rotated `X-CSRF-Token` (§9 rule 1, §3;
+  C164-26).** OkHttp builds the replay below the application interceptors, so `AuthAuthenticator`
+  now sets the session's stored token on a state-changing request that carried one; before, AXIAM's
+  CSRF middleware answered the replay `403`.
+- **A single `devicePoll` is retried within the attempt on a `5xx` or a transport failure (§14.2
+  rule 6, §16.2; C164-25)**, at most three attempts and never on a `429`, which is the loop's
+  rule-9 wait. With retry disabled it is sent once.
+- **A huge `Retry-After` on a poll reaches the typed `expired_token` (C164-30)**; the value is
+  clamped to a day, so `Instant` arithmetic no longer overflows.
+- **A `429 rate_limit_exceeded` on a device-code poll is waited out (§14.2 rule 9, §14.6, contract
+  1.64).** `deviceLogin` no longer takes it for a transport failure: it waits `Retry-After` (a
+  minimum, capped at the `expires_in` deadline), counts the wait as one interval, does not raise the
+  interval for it, and polls again. A single `devicePoll` raises `OAuthProtocolError` with
+  `error() == "rate_limit_exceeded"`, and `retryAfterSeconds()` carries the header (`0` when absent).
+- **A stated `UNKNOWN` `termination_action` / `service_type` is refused at manifest validation
+  (C163-20)**, before any request, as a stated unknown segment `kind` is, instead of failing at
+  `apply`.
+- **The refusal at `plan` of an unknown profile enumeration quotes the raw value (C163-10;
+  contract 1.64 (c) allows it).** The list-profiles read keeps each item's raw `termination_action`
+  and `service_type`; the message quotes it, control characters replaced and capped at 64
+  characters, and says the value is unknown when the read carried none.
+
+### Changed
+
+- **`devicePoll` on a `429` now throws `OAuthProtocolError` (`rate_limit_exceeded`, §14.2 rule 9
+  since contract 1.63) instead of `NetworkError`** (C164-22). A caller catching `NetworkError`
+  around `devicePoll` sees the change; it is not source-breaking, so the patch bump stands. The
+  status decides, not the body (contract 1.64, amended; C164-04): any `429`, a bodiless one and a
+  `429 {"error":"slow_down"}` included, is `rate_limit_exceeded` carrying its `Retry-After`, and in
+  `deviceLogin` only a `400 slow_down` raises the interval. A `5xx` stays a transport failure
+  whatever its body (rule 6; tested with `500 {"error":"server_error"}`).
+- Tests (C164-45, C164-48): the deadline checks of both polls are pinned to the jittered backoff
+  (an injected jitter source, a bare `500` at deadline − 100 ms), to the strict boundary (a retry
+  due exactly at the deadline is not sent; `expires_in` 30 for the device loop) and to the
+  P10 case for CIBA; `Retry.withRetry(…, Pacer)` is package-private.
+- Tests (C164-38, C164-41): two `500`s then `200`, three `500`s (the cap is pinned: a cap of 5 fails),
+  two transport failures then `200`, three transport failures, retry disabled, the CIBA poll's
+  drops, and both deadline cases of C164-36 on the recorded clock; the deadline tests run under a
+  preemptive timeout, so a regression fails instead of hanging.
+- `deviceLogin` measures the `expires_in` deadline on a clock, so the time a poll takes counts
+  (C164-05); the §14.6 tests use a recorded clock instead of wall-clock sleeps (C164-11).
+- Tests (C163-08, C163-09): the login mock returns `axiam_csrf` and `X-CSRF-Token`, and no
+  `/oauth2/*` request carries a `Cookie` or CSRF token, with `management().users().create(..)` as
+  the control; `NetworkManifestTest` gains `NoChange` (no PUT) and `service_type` at `apply`.
+- Documentation (C163-18): the README's source-breaking list names `ScimTargetResponse.updatedAtRaw`,
+  its Javadoc cites §31.3 rule 4 (contract 1.63), and the README states contract 1.64.
+
 ## [1.1.1] - 2026-10-21
 
 ### Added
@@ -27,7 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Make custom-CA composite an X509ExtendedTrustManager
 
-## [1.2.0] - 2026-10-20
+## [1.1.1] — contract 1.63 detail (recorded as 1.2.0 before release) - 2026-10-20
+
+This entry was written as `1.2.0` and shipped as **1.1.1** (above); no `1.2.0` was ever published.
 
 Contract 1.63 (the AXIAM 1.1.1 release) and the 1.62 conformance follow-ups (#115). `CONTRACT.md`,
 `openapi.json` and `management-registry.json` are re-vendored byte for byte from `ilpanich/axiam`

@@ -266,6 +266,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * &sect;34.2 P11 &mdash; a {@code 307} would re-send the POST elsewhere).
      */
     private final OkHttpClient sendOnceHttpClient;
+    /** The client the device and CIBA polls use: OkHttp's silent replay of a POST is off, so the §16 runner alone counts attempts (§16.1: three in total). */
+    private final OkHttpClient pollHttpClient;
 
     /** §18 shutdown flag, read on every operation. */
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -727,6 +729,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.httpClient = clientBuilder.build();
         this.session.attachHttpClient(this.httpClient);
         this.sessionlessHttpClient = io.axiam.sdk.internal.Sessionless.of(this.httpClient);
+        this.pollHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false).build();
         this.sendOnceHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false)
                 .authenticator(okhttp3.Authenticator.NONE).followRedirects(false).followSslRedirects(false)
                 .build();
@@ -751,6 +754,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.httpClient = other.httpClient;
         this.sessionlessHttpClient = other.sessionlessHttpClient;
         this.sendOnceHttpClient = other.sendOnceHttpClient;
+        this.pollHttpClient = other.pollHttpClient;
         this.refreshGuard = other.refreshGuard;
         this.jwksVerifier = other.jwksVerifier;
         this.session = other.session;
@@ -3423,9 +3427,74 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return CompletableFuture.supplyAsync(this::authenticateDevice);
     }
 
+    /** The jitter of the polls' in-attempt backoff; a test pins it (package-private). */
+    private volatile java.util.Random pollJitter = new java.security.SecureRandom();
+
+    void setPollJitterForTesting(java.util.Random random) {
+        this.pollJitter = random;
+    }
+
+    /**
+     * The pace of a poll's &sect;16 retry. With a clock and a deadline (a device or CIBA loop,
+     * &sect;14.2 rule 4, &sect;34.2 P10) a retry whose full wait (jittered backoff floored at
+     * {@code Retry-After}) reaches the deadline is not sent, and waits are slept on the clock;
+     * a bare poll admits every retry and sleeps for real.
+     */
+    private io.axiam.sdk.internal.Retry.Pacer pollPacer(io.axiam.sdk.oidc.@Nullable CibaClock clock,
+                                                         java.time.@Nullable Instant deadline) {
+        if (clock == null || deadline == null) {
+            return new io.axiam.sdk.internal.Retry.Pacer() {
+                @Override
+                public boolean admits(long delayMillis) {
+                    return true;
+                }
+
+                @Override
+                public void sleep(long delayMillis) throws InterruptedException {
+                    Thread.sleep(delayMillis);
+                }
+
+                @Override
+                public java.util.Random random() {
+                    return pollJitter;
+                }
+            };
+        }
+        return new io.axiam.sdk.internal.Retry.Pacer() {
+            @Override
+            public boolean admits(long delayMillis) {
+                // No request follows the deadline, so a retry whose full wait would reach it is not
+                // sent; the error surfaces and the loop reports expired_token.
+                return clock.now().plusMillis(delayMillis).isBefore(deadline);
+            }
+
+            @Override
+            public void sleep(long delayMillis) throws InterruptedException {
+                clock.sleep(Duration.ofMillis(delayMillis));
+            }
+
+            @Override
+            public java.util.Random random() {
+                return pollJitter;
+            }
+        };
+    }
+
     @Override
     public OidcTokenSet devicePoll(Sensitive deviceCode, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration) {
+        return devicePoll(deviceCode, tenantId, configuration, null, null);
+    }
+
+    /**
+     * {@link #devicePoll(Sensitive, UUID, OidcConfiguration)} as {@code deviceLogin} calls it: the
+     * &sect;16 retry inside the poll never waits past {@code deadline} (&sect;14.2 rule 4) and
+     * sleeps on {@code clock}. A bare poll ({@code null}, {@code null}) keeps the unbounded
+     * &sect;16 behaviour.
+     */
+    OidcTokenSet devicePoll(Sensitive deviceCode, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration, io.axiam.sdk.oidc.@Nullable CibaClock clock,
+            java.time.@Nullable Instant deadline) {
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         // §14.1 rule 3: the poll names its client on EVERY poll (the server reads the client
         // before it looks at the device code), and rule 2: it sends the client's credential by
@@ -3442,7 +3511,34 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         // not touch the session) and is not retried -- deviceLogin treats it as terminal.
         // This SDK implements the §21.7 verifier half only and generates no DPoP proof, so a
         // client registered for DPoP cannot be driven from here and meets that 401 (§21.7.3).
-        JsonNode wire = postToken(config, builder.build(), tenantId);
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::token_endpoint, config.token_endpoint()),
+                tenantId);
+        FormBody form = builder.build();
+        // §14.2 rule 6, §16.2: a 5xx or a transport failure is retried within the poll under §16
+        // (at most three attempts) and then surfaced; a 429 is never retried here -- it is rule 9's
+        // wait, which belongs to the loop (C164-25).
+        io.axiam.sdk.internal.Retry.Pacer pacer = pollPacer(clock, deadline);
+        JsonNode wire = io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "device_poll", pacer, n -> {
+            Response response;
+            try {
+                response = executeFormPost(pollHttpClient, url, form);
+            } catch (NetworkError e) {
+                throw new io.axiam.sdk.internal.StatusRetry.Transient(e, 0);
+            }
+            try (response) {
+                if (!response.isSuccessful()) {
+                    int code = response.code();
+                    RuntimeException err = ErrorMapper.fromDevicePollResponse(code, response, "token request failed");
+                    if (code >= 500 && err instanceof NetworkError) {
+                        throw new io.axiam.sdk.internal.StatusRetry.Transient(err,
+                                io.axiam.sdk.internal.StatusRetry.retryAfterMillis(response));
+                    }
+                    throw err;
+                }
+                return readJson(response);
+            }
+        });
         // No nonce: the device grant has no authorization request to carry one.
         return buildTokenSet(wire, config, null);
     }
@@ -3450,31 +3546,45 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     @Override
     public OidcTokenSet deviceLogin(@Nullable String scope, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration, Consumer<DeviceAuthorization> onUserCode) {
+        return deviceLogin(scope, tenantId, configuration, onUserCode, io.axiam.sdk.oidc.CibaClock.system());
+    }
+
+    /**
+     * {@link #deviceLogin(String, UUID, OidcConfiguration, Consumer)} on a caller-supplied clock:
+     * the deadline is measured on it (request time counts, §14.2 rule 4) and every wait is slept
+     * on it, which is how the &sect;14.6 tests record the waits without a wall clock.
+     */
+    OidcTokenSet deviceLogin(@Nullable String scope, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration, Consumer<DeviceAuthorization> onUserCode,
+            io.axiam.sdk.oidc.CibaClock clock) {
         Objects.requireNonNull(onUserCode, "onUserCode");
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         DeviceAuthorization authorization = deviceAuthorize(scope, tenantId, config);
+        java.time.Instant deadline = clock.now().plusSeconds(authorization.expiresIn());
 
         // §14.3 rule 2 — before any polling.
         onUserCode.accept(authorization);
 
         int intervalSeconds = authorization.interval();
-        long remainingSeconds = authorization.expiresIn();
+        // §14.2 rule 9 (contract 1.64): a 429's Retry-After, a minimum for the next wait.
+        long retryAfterSeconds = 0;
 
         while (true) {
-            // §14.2 rule 4: the deadline is authoritative. Checking before
-            // sleeping keeps the SDK from issuing a request that can only be
-            // refused, and reports it under the same expired_token code the
-            // server would have used — so a caller's branch does not care
-            // which side noticed first.
-            if (intervalSeconds >= remainingSeconds) {
+            // The 429's wait counts as the interval, not on top of it, and never raises it.
+            Duration wait = Duration.ofSeconds(Math.max(intervalSeconds, retryAfterSeconds));
+            retryAfterSeconds = 0;
+            // §14.2 rule 4: the deadline is authoritative and measured on the clock, so the time
+            // a poll took counts. Checking before sleeping keeps the SDK from issuing a request
+            // that can only be refused, and reports it under the same expired_token code the
+            // server would have used — so a caller's branch does not care which side noticed first.
+            if (!clock.now().plus(wait).isBefore(deadline)) {
                 throw new OAuthProtocolError("expired_token",
                         "the device authorization expired before the user completed it "
                                 + "(client-side deadline from expires_in; CONTRACT.md §14.2 rule 4)");
             }
-            remainingSeconds -= intervalSeconds;
 
             try {
-                Thread.sleep(Duration.ofSeconds(intervalSeconds));
+                clock.sleep(wait);
             } catch (InterruptedException e) {
                 // Restore the flag rather than swallowing it: a caller
                 // shutting the device down must be able to observe the
@@ -3485,15 +3595,22 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             }
 
             try {
-                return devicePoll(authorization.deviceCode(), tenantId, config);
+                return devicePoll(authorization.deviceCode(), tenantId, config, clock, deadline);
             } catch (OAuthProtocolError e) {
                 switch (e.error()) {
                     case "authorization_pending" -> {
                         continue;
                     }
                     case "slow_down" -> {
-                        // §14.2 rule 1: cumulative, never reset.
+                        // §14.2 rule 1: cumulative, never reset. Only the 400 gets here: a 429 is
+                        // mapped to rate_limit_exceeded whatever its body names (rule 9).
                         intervalSeconds += SLOW_DOWN_INCREMENT_SECONDS;
+                        continue;
+                    }
+                    case "rate_limit_exceeded" -> {
+                        // §14.2 rule 9 (contract 1.64): not terminal, and not a slow_down --
+                        // the interval is unchanged; Retry-After is a minimum for the next wait.
+                        retryAfterSeconds = e.retryAfterSeconds();
                         continue;
                     }
                     // expired_token / access_denied / invalid_grant — terminal.
@@ -3983,9 +4100,13 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     private Response executeFormPost(String url, RequestBody form) {
+        return executeFormPost(httpClient, url, form);
+    }
+
+    private Response executeFormPost(OkHttpClient client, String url, RequestBody form) {
         Request request = new Request.Builder().url(url).post(form).build();
         try {
-            return httpClient.newCall(request).execute();
+            return client.newCall(request).execute();
         } catch (IOException e) {
             throw new NetworkError("request failed: " + e.getMessage(), e);
         }
@@ -4605,7 +4726,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         JsonNode wire;
         try {
-            wire = cibaRedeem(authReqId, tenantId, config);
+            wire = cibaRedeem(authReqId, tenantId, config, pollPacer(null, null));
         } catch (CibaTransientFailure t) {
             throw t.error;
         }
@@ -4641,7 +4762,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * leaves as {@link CibaTransientFailure}; everything else, including a
      * {@code 200} whose body does not parse, leaves as itself.
      */
-    private JsonNode cibaRedeem(Sensitive authReqId, @Nullable UUID tenantId, OidcConfiguration config) {
+    private JsonNode cibaRedeem(Sensitive authReqId, @Nullable UUID tenantId, OidcConfiguration config,
+                                io.axiam.sdk.internal.Retry.Pacer pacer) {
         FormBody.Builder form = new FormBody.Builder()
                 .add("grant_type", CIBA_GRANT_TYPE)
                 .add("auth_req_id", authReqId.expose());
@@ -4649,11 +4771,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         FormBody body = form.build();
         String url = oauth2Url(preferredEndpoint(config, MtlsEndpointAliases::token_endpoint,
                 config.token_endpoint()), tenantId);
-        return io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "ciba_poll", n -> {
+        return io.axiam.sdk.internal.StatusRetry.run(retryEnabled, telemetry, "ciba_poll", pacer, n -> {
             Request request = new Request.Builder().url(url).post(body).build();
             Response response;
             try {
-                response = httpClient.newCall(request).execute();
+                response = pollHttpClient.newCall(request).execute();
             } catch (IOException e) {
                 throw new io.axiam.sdk.internal.StatusRetry.Transient(new CibaTransientFailure(
                         new NetworkError("cibaPoll request failed: " + e.getMessage(), e)), 0);
@@ -4767,7 +4889,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             ensureOpen();
             JsonNode wire;
             try {
-                wire = cibaRedeem(initiated.authReqId(), tenantId, config);
+                // §34.2 P10: the in-poll §16 retry never waits past the deadline, and sleeps on the clock.
+                wire = cibaRedeem(initiated.authReqId(), tenantId, config, pollPacer(waitOn, deadline));
             } catch (OAuthProtocolError e) {
                 switch (e.error()) {
                     case "authorization_pending", "rate_limit_exceeded" -> {

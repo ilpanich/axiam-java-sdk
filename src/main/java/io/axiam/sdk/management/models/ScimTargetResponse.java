@@ -28,8 +28,8 @@ import java.util.UUID;
  * @param state the server's state field
  * @param tenantId The owning tenant.
  * @param updatedAtRaw When it was last written: the version an update is conditional on. -- the
- *     server's own string, exactly as sent (CONTRACT.md §32.2, contract 1.62); {@code updatedAt()} is
- *     the parsed instant, and a body built from this read sends this string
+ *     server's own string, exactly as sent (CONTRACT.md §31.3 rule 4, contract 1.63); {@code
+ *     updatedAt()} is the parsed instant, and a body built from this read sends this string
  * @param userNameFrom Which attribute becomes {@code userName}.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -52,7 +52,7 @@ public record ScimTargetResponse(
 
     /**
      * updated_at as an instant. Parsed from updatedAtRaw(), which is what the server sent and what
-     * a body built from this read must carry (CONTRACT.md §32.2, contract 1.62).
+     * a body built from this read must carry (CONTRACT.md §31.3 rule 4, contract 1.63).
      *
      * @return the parsed updated_at, or {@code null} when the server sent none
      */

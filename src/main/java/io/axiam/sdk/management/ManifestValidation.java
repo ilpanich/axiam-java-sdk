@@ -1,6 +1,8 @@
 package io.axiam.sdk.management;
 
 import io.axiam.sdk.errors.NetworkError;
+import io.axiam.sdk.management.models.RadiusServiceType;
+import io.axiam.sdk.management.models.RadiusTerminationAction;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -142,6 +144,19 @@ final class ManifestValidation {
             } else if (!profiled.add(profile.segment())) {
                 problems.add("network segment '" + profile.segment()
                         + "' has more than one profile; a profile is identified by its segment");
+            }
+            // §27.13: an UNKNOWN is a decoded value, never a sendable one. Stated, it would fail
+            // at apply; refused here it fails before any request, as a stated unknown `kind` does.
+            if (profile.terminationAction() == RadiusTerminationAction.UNKNOWN) {
+                problems.add("network profile of segment '" + profile.segment()
+                        + "' states an unknown termination_action: state one of the wire "
+                        + "spellings the enumeration lists");
+            }
+            if (profile.serviceType() != null
+                    && profile.serviceType().get() == RadiusServiceType.UNKNOWN) {
+                problems.add("network profile of segment '" + profile.segment()
+                        + "' states an unknown service_type: state one of the wire spellings "
+                        + "the enumeration lists, or null");
             }
         }
     }

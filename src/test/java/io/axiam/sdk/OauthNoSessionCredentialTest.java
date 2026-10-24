@@ -1,5 +1,6 @@
 package io.axiam.sdk;
 
+import io.axiam.sdk.management.models.CreateUserRequest;
 import io.axiam.sdk.testutil.OidcTestSupport;
 import io.axiam.sdk.testutil.TestCerts;
 import io.axiam.sdk.testutil.TestCerts.Identity;
@@ -20,6 +21,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * CONTRACT.md &sect;12.1 rule 3 (last paragraph), &sect;6.1 rule 11 and &sect;14.6 (contract 1.62,
@@ -37,6 +39,7 @@ class OauthNoSessionCredentialTest {
     private static final String TENANT_ID = "33333333-3333-3333-3333-333333333333";
     private static final String CLIENT_ID = "my-device";
     private static final String SECRET = "s3cr3t-value";
+    private static final String CSRF = "csrf-token-value";
 
     @TempDir
     Path tempDir;
@@ -61,6 +64,8 @@ class OauthNoSessionCredentialTest {
                             .setHeader("Content-Type", "application/json")
                             .addHeader("Set-Cookie", "axiam_access=" + sessionAccess
                                     + "; Path=/; HttpOnly")
+                            .addHeader("Set-Cookie", "axiam_csrf=" + CSRF + "; Path=/")
+                            .setHeader("X-CSRF-Token", CSRF)
                             .setBody("{\"mfa_required\":false,\"user\":{\"id\":\"11111111-1111-4111-8111-"
                                     + "111111111111\",\"email\":\"a@b.test\",\"username\":\"a\"}}");
                     case "/api/v1/auth/device" -> new MockResponse().setResponseCode(200)
@@ -107,9 +112,13 @@ class OauthNoSessionCredentialTest {
         assertEquals(3, tokens.size(), "device_poll, the refresh and the client-credentials grant");
         for (RecordedRequest r : deviceAuthorize) {
             assertNull(r.getHeader("Authorization"), "device_authorize carries no Authorization header");
+            assertNull(r.getHeader("Cookie"), "device_authorize carries no session cookie (§6.1 rule 11)");
+            assertNull(r.getHeader("X-CSRF-Token"), "device_authorize carries no CSRF token (§12.1 rule 3)");
         }
         for (RecordedRequest r : tokens) {
             assertNull(r.getHeader("Authorization"), "a token request carries no Authorization header");
+            assertNull(r.getHeader("Cookie"), "a token request carries no session cookie (§6.1 rule 11)");
+            assertNull(r.getHeader("X-CSRF-Token"), "a token request carries no CSRF token (§12.1 rule 3)");
         }
     }
 
@@ -141,6 +150,22 @@ class OauthNoSessionCredentialTest {
             RecordedRequest control = seen.get(seen.size() - 1);
             assertNotNull(control.getHeader("Authorization"), "the session bearer rides the control call");
             assertEquals("Bearer " + sessionAccess, control.getHeader("Authorization"));
+
+            // Control (C163-08): a management write of the same client carries both the session
+            // cookie jar (axiam_csrf among it) and the echoed CSRF token, so the absences above
+            // cannot be for want of either. The reply's shape is not the point; the request is.
+            try {
+                client.management().users().create(new CreateUserRequest(
+                        "a@b.test", null, null, Sensitive.of("hunter2hunter2"), "bob"));
+            } catch (RuntimeException ignored) {
+                // the mock's body is not a user
+            }
+            RecordedRequest create = to("/api/v1/users").get(0);
+            assertEquals(CSRF, create.getHeader("X-CSRF-Token"), "the management write echoes the CSRF token");
+            assertTrue(create.getHeader("Cookie").contains("axiam_csrf=" + CSRF),
+                    "the management write carries the axiam_csrf cookie");
+            assertTrue(create.getHeader("Cookie").contains("axiam_access=" + sessionAccess),
+                    "the management write carries the session cookie");
         }
     }
 

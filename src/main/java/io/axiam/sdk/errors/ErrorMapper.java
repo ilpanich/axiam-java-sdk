@@ -171,6 +171,46 @@ public final class ErrorMapper {
     }
 
     /**
+     * Maps a failed device-grant poll (CONTRACT.md &sect;14.2): as {@link #fromOAuth2Response}
+     * &mdash; so a {@code 5xx} is a transport failure whatever its body (rule 6) &mdash; except
+     * that <em>any</em> {@code 429} is the rule-9 wait, decided by the status and not by the body
+     * (contract 1.64, amended): an {@link OAuthProtocolError} {@code rate_limit_exceeded} holding
+     * its delta-seconds {@code Retry-After}, even when the body names another code
+     * ({@code slow_down}) or has none.
+     *
+     * @param status   the HTTP response status code
+     * @param response the live response, or {@code null}
+     * @param message  a human-readable description, used only on fall-through
+     * @return the mapped exception, ready to throw
+     */
+    public static RuntimeException fromDevicePollResponse(int status, @Nullable Response response,
+                                                          String message) {
+        if (status == 429) {
+            OAuthProtocolError body = oauth2ErrorBody(response);
+            return new OAuthProtocolError("rate_limit_exceeded",
+                    body == null ? null : body.errorDescription(), retryAfterSeconds(response));
+        }
+        return fromOAuth2Response(status, response, message);
+    }
+
+    /** Largest {@code Retry-After}, in seconds, a device poll keeps. */
+    private static final long MAX_RETRY_AFTER_SECONDS = 86_400L;
+
+    private static long retryAfterSeconds(@Nullable Response response) {
+        String value = response == null ? null : response.header("Retry-After");
+        if (value == null) {
+            return 0;
+        }
+        try {
+            // Clamped to a day: the loop adds it to an Instant, and a hostile value must reach the
+            // deadline check (the typed expired_token) rather than overflow (C164-30).
+            return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(0, Long.parseLong(value.trim())));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
      * Reads an {@code OAuth2ErrorResponse} body without consuming it: a JSON
      * object whose {@code error} is a non-empty string, with an optional
      * string {@code error_description}. {@code null} for anything else,

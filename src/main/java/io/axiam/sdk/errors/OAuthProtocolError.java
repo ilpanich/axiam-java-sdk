@@ -34,6 +34,9 @@ public final class OAuthProtocolError extends AuthError {
     /** The server's human-readable {@code error_description}, or {@code null} when it sent none. Never contains token material. */
     private final @Nullable String errorDescription;
 
+    /** The delta-seconds {@code Retry-After} the response carried, or {@code 0}. */
+    private final long retryAfterSeconds;
+
     /**
      * Creates an {@code OAuthProtocolError} from an {@code OAuth2ErrorResponse} body.
      *
@@ -42,9 +45,31 @@ public final class OAuthProtocolError extends AuthError {
      *                         or {@code null} when the server sent none
      */
     public OAuthProtocolError(String error, @Nullable String errorDescription) {
+        this(error, errorDescription, 0);
+    }
+
+    /**
+     * Creates the error with the delta-seconds {@code Retry-After} the response carried.
+     *
+     * @param error             the RFC 6749 {@code error} code
+     * @param errorDescription  the optional {@code error_description}
+     * @param retryAfterSeconds the {@code Retry-After} hint in seconds, or {@code 0} when absent
+     */
+    public OAuthProtocolError(String error, @Nullable String errorDescription, long retryAfterSeconds) {
         super(errorDescription == null ? error : error + ": " + errorDescription);
         this.error = error;
         this.errorDescription = errorDescription;
+        this.retryAfterSeconds = Math.max(0, retryAfterSeconds);
+    }
+
+    /**
+     * The delta-seconds {@code Retry-After} the response carried (CONTRACT.md &sect;14.2 rule 9,
+     * contract 1.64: the device-poll loop waits it out on a {@code 429}).
+     *
+     * @return the hint in seconds, or {@code 0} when the response carried none
+     */
+    public long retryAfterSeconds() {
+        return retryAfterSeconds;
     }
 
     /**

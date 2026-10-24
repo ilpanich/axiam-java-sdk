@@ -52,6 +52,7 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -146,6 +147,10 @@ public final class ManifestApi {
         private @Nullable NetworkPolicyResponse networkPolicy;
         private List<NetworkSegmentResponse> networkSegments = List.of();
         private final Map<UUID, NetworkReplyProfile> networkProfiles = new HashMap<>();
+        // The spellings the list-profiles JSON carried, by segment id (§27.6.2 item 4, contract
+        // 1.64): the decoded enumeration cannot hold an unrecognised one, the refusal quotes it.
+        private final Map<UUID, String> rawTerminationActions = new HashMap<>();
+        private final Map<UUID, String> rawServiceTypes = new HashMap<>();
     }
 
     /** Manifest keys resolved to server identifiers. */
@@ -239,10 +244,63 @@ public final class ManifestApi {
             snapshot.networkSegments = api.network().listSegmentsAll(null, PLAN_PAGE);
         }
         if (!network.profiles().isEmpty()) {
-            for (NetworkReplyProfile profile : api.network().listProfilesAll(PLAN_PAGE)) {
-                snapshot.networkProfiles.put(profile.segmentId(), profile);
-            }
+            readProfiles(snapshot);
         }
+    }
+
+    /**
+     * Walks {@code network.list_profiles} as {@code listProfilesAll} does, keeping each item's raw
+     * {@code termination_action} and {@code service_type} beside the decoded profile (the
+     * non-breaking internal addition contract 1.64 allows: C163-10).
+     */
+    private void readProfiles(Snapshot snapshot) {
+        PageRequest request = PLAN_PAGE;
+        while (true) {
+            Map<String, @Nullable String> query = new LinkedHashMap<>();
+            ManagementSupport.pageQuery(query, request);
+            JsonNode node = api.transport().send("network.list_profiles", "GET",
+                    "/api/v1/network/profiles", "/api/v1/network/profiles", query, null);
+            Page<NetworkReplyProfile> page = ManagementSupport.convertPage(
+                    node, NetworkReplyProfile.class, "network.list_profiles");
+            JsonNode items = node == null ? null : node.get("items");
+            for (int i = 0; i < page.items().size(); i++) {
+                NetworkReplyProfile profile = page.items().get(i);
+                snapshot.networkProfiles.put(profile.segmentId(), profile);
+                JsonNode raw = items != null && items.isArray() ? items.get(i) : null;
+                if (raw != null) {
+                    putRaw(snapshot.rawTerminationActions, profile.segmentId(), raw.get("termination_action"));
+                    putRaw(snapshot.rawServiceTypes, profile.segmentId(), raw.get("service_type"));
+                }
+            }
+            int next = page.offset() + page.items().size();
+            if (page.items().isEmpty() || next >= page.total()) {
+                return;
+            }
+            request = request.atOffset(next);
+        }
+    }
+
+    private static void putRaw(Map<UUID, String> into, UUID segmentId, @Nullable JsonNode value) {
+        if (value != null && value.isTextual()) {
+            into.put(segmentId, value.asText());
+        }
+    }
+
+    /** Longest raw value a refusal quotes. */
+    private static final int RAW_QUOTE_CAP = 64;
+
+    /** The raw value quoted for a message: control characters replaced, length-capped. */
+    private static String quote(String raw) {
+        StringBuilder out = new StringBuilder("'");
+        int i = 0;
+        for (; i < raw.length() && i < RAW_QUOTE_CAP; i++) {
+            char c = raw.charAt(i);
+            out.append(Character.isISOControl(c) ? '?' : c);
+        }
+        if (i < raw.length()) {
+            out.append("...");
+        }
+        return out.append('\'').toString();
     }
 
     // ------------------------------------------------------------------
@@ -590,13 +648,15 @@ public final class ManifestApi {
                     || (spec.serviceType() != null
                         && spec.serviceType().get() != found.serviceType());
             if (drifted) {
-                // §27.6.2 item 4 (contract 1.62): an update carries every unstated member from the
+                // §27.6.2 item 4 (contract 1.62, refusal at plan by 1.63): an update carries every unstated member from the
                 // read, and a value decoded as unknown is never re-sent (§27.13). So the refusal
                 // is here, at plan, before any write, and not half-way through apply.
                 refuseUnknownCarried("termination_action", spec.terminationAction() == null
-                        && found.terminationAction() == RadiusTerminationAction.UNKNOWN, segment.key());
+                        && found.terminationAction() == RadiusTerminationAction.UNKNOWN, segment.key(),
+                        snap.rawTerminationActions.get(segmentId));
                 refuseUnknownCarried("service_type", spec.serviceType() == null
-                        && found.serviceType() == RadiusServiceType.UNKNOWN, segment.key());
+                        && found.serviceType() == RadiusServiceType.UNKNOWN, segment.key(),
+                        snap.rawServiceTypes.get(segmentId));
             }
             out.add(step(drifted ? ManagementPlan.Change.UPDATE : ManagementPlan.Change.NO_CHANGE,
                     ManagementPlan.Target.NETWORK_PROFILE, segment.key(), summary,
@@ -608,14 +668,18 @@ public final class ManifestApi {
     /**
      * Refuses a profile update that would carry a member this SDK decoded as unknown.
      *
-     * <p>A Java enum constant cannot hold the spelling it was decoded from, so the message names
-     * the member and says the value is one this SDK does not know.
+     * <p>A Java enum constant cannot hold the spelling it was decoded from, so the raw value the
+     * read captured is quoted (length-capped) when there is one, and otherwise the message says
+     * the value is one this SDK does not know (§27.6.2 item 4, contract 1.64).
      */
-    private static void refuseUnknownCarried(String member, boolean carriesUnknown, String segmentKey) {
+    private static void refuseUnknownCarried(String member, boolean carriesUnknown, String segmentKey,
+                                             @Nullable String raw) {
         if (carriesUnknown) {
             throw LocalRefusal.of("manifest.plan", "network.profiles[" + segmentKey + "]." + member,
-                    "the stored value is one this SDK does not know and the manifest does not state "
-                            + "it; it is not re-sent (CONTRACT.md §27.6.2 item 4, §27.13). State "
+                    "the stored value " + (raw == null ? "is one this SDK does not know" : quote(raw)
+                            + " is one this SDK does not know")
+                            + " and the manifest does not state it; it is not re-sent "
+                            + "(CONTRACT.md §27.6.2 item 4, §27.13). State "
                             + member + " to update this profile");
         }
     }
