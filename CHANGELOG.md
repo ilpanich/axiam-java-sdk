@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#120).
 `CONTRACT.md`, `openapi.json` and `management-registry.json` are re-vendored byte for byte from
-`ilpanich/axiam` commit `fb92ec4` (`CONTRACT.md` alone from `b3f8687`, the 1.64 amendments of
+`ilpanich/axiam` commit `356a6da` (platform PR #793 merge; `CONTRACT.md` is byte-identical to `b3f8687`, the 1.64 amendments of
 2026-10-23); `proto/` is unchanged and no operation is added (202 across 29
 namespaces; the generator's output is unchanged but for one doc line). **Patch bump:** nothing here
 is source-breaking (the only API additions are `OAuthProtocolError.retryAfterSeconds()`, a
