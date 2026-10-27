@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **JDK 27 is now a CI-run runtime, and `SupportedVersions.NEWEST_TESTED_JAVA` is `27`** (was `25`).
+  JDK 27 has been GA since 2026-09-15 (Eclipse Temurin 27 since 2026-10-01). The gating matrix is
+  now JDK 21, 25 and 27: the floor, the newest LTS and the newest GA release. `maven.compiler.release`
+  stays 21 on every leg. `VersionPolicyTest` now accepts a newest-LTS leg between the two ends,
+  and only an LTS there.
+- **The Java floor stays at 21.** It is an LTS with years of vendor support left, and no dependency
+  requires more. Nothing changes for consumers on 21.
+- **Dependencies and build plugins:** protoc `3.25.8` -> `3.25.9`, aligned with the `protobuf-java`
+  that `grpc-protobuf` 1.85.1 resolves; `protoc-gen-grpc-java` `1.82.0` -> `1.85.1`, aligned with
+  the grpc-java runtime; `jacoco-maven-plugin` `0.8.15` -> `0.8.16`. Every other dependency and plugin
+  is already on its newest release in its line.
+
 ## [1.1.2] - 2026-10-23
 
 Contract 1.64 (the AXIAM 1.1.2 release) and the 1.63 conformance follow-ups (#120).

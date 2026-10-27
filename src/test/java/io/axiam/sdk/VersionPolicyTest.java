@@ -41,9 +41,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * whether or not anyone ever ran them there, and a removed internal or a
  * strengthened module boundary surfaces only at execution.</p>
  *
- * <p>The policy pinned here is floor + newest, and the newest leg is the one
- * that carries the claim: it compiles to release 21 with JDK 25's compiler and
- * then runs the result on JDK 25.</p>
+ * <p>The policy pinned here is floor + newest LTS + newest GA, and the newest
+ * legs are the ones that carry the claim: they compile to release 21 with the
+ * newer JDK's compiler (25, 27) and then run the result on that JDK.</p>
  */
 class VersionPolicyTest {
 
@@ -51,7 +51,7 @@ class VersionPolicyTest {
     private static final Pattern RELEASE =
             Pattern.compile("<maven\\.compiler\\.release>(\\d+)</maven\\.compiler\\.release>");
 
-    /** {@code java: ['21', '25']} in the CI test matrix. */
+    /** {@code java: ['21', '25', '27']} in the CI test matrix. */
     private static final Pattern CI_MATRIX =
             Pattern.compile("(?m)^\\s*java:\\s*\\[([^\\]]*)\\]\\s*$");
 
@@ -145,21 +145,39 @@ class VersionPolicyTest {
     }
 
     /**
-     * The gating matrix is exactly the two ends of the range.
+     * The gating matrix is the floor, the newest LTS and the newest GA release.
      *
      * <p>Dropping the newest leg is the failure this whole class exists to
      * prevent: it is the only thing proving the SDK's bytecode actually runs on
-     * a current JVM, and nothing else in the build would notice its absence.</p>
+     * a current JVM, and nothing else in the build would notice its absence.
+     * Between the two ends only an LTS may sit (the newest LTS, while a
+     * six-month release is newer); a non-LTS feature release in the middle is a
+     * leg that should have been replaced rather than added to. When the newest
+     * GA is itself an LTS the matrix is just the two ends.</p>
      */
     @Test
-    void ciMatrixIsFloorAndNewest() throws IOException {
+    void ciMatrixIsFloorNewestLtsAndNewest() throws IOException {
         List<Integer> matrix = ciMatrix();
-        assertEquals(2, matrix.size(),
-                "expected exactly 2 CI legs (floor + newest), got " + matrix);
+        assertTrue(matrix.size() == 2 || matrix.size() == 3,
+                "expected 2 or 3 CI legs (floor [+ newest LTS] + newest), got " + matrix);
         assertEquals(declaredRelease(), (int) matrix.get(0),
                 "the lowest CI leg is not the declared release level");
-        assertTrue(matrix.get(1) > matrix.get(0),
-                "the newest CI leg must be newer than the floor, got " + matrix);
+        for (int i = 1; i < matrix.size(); i++) {
+            assertTrue(matrix.get(i) > matrix.get(i - 1),
+                    "CI legs must be distinct and ascending, got " + matrix);
+        }
+        for (int i = 1; i < matrix.size() - 1; i++) {
+            assertTrue(isLts(matrix.get(i)),
+                    "the middle CI leg must be an LTS (21, 25, 29, ...), got " + matrix);
+        }
+    }
+
+    /**
+     * Whether a feature version is an LTS: from 21 on, every fourth release
+     * (the two-year cadence, every September in odd years).
+     */
+    private static boolean isLts(int feature) {
+        return feature >= 21 && (feature - 21) % 4 == 0;
     }
 
     /** No CI leg runs a JVM too old to load the SDK's class files. */
