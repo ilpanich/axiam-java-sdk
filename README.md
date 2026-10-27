@@ -285,27 +285,28 @@ rather than once each.
 | | Version | Why this one |
 |---|---|---|
 | **Floor** | 21 | LTS. `maven.compiler.release` in `pom.xml`, so it is the bytecode level written into every class file. Exported as `SupportedVersions.MIN_JAVA_RELEASE`. |
-| **Newest** | 25 | The current LTS (2025-09). Exported as `SupportedVersions.NEWEST_TESTED_JAVA`. |
+| **Newest LTS** | 25 | The current LTS (2025-09). Gated so the LTS most production images ship stays proven. |
+| **Newest** | 27 | The newest GA feature release (2026-09). Exported as `SupportedVersions.NEWEST_TESTED_JAVA`. |
 
 **The SDK is compiled against the floor, and run against the newest.** Those
 are two different claims, and one JDK cannot make both — which is why the
-gating matrix in `sdk-ci-java.yml` runs `mvn test` on **JDK 21 and JDK 25**.
-`maven.compiler.release` stays at **21 on both legs**: the JDK 25 leg compiles
-to Java 21 bytecode with JDK 25's compiler and then *runs* it on a JDK 25
-runtime. That is exactly the situation a consumer is in when a jar built in CI
-lands on whatever JDK the production base image ships.
+gating matrix in `sdk-ci-java.yml` runs `mvn test` on **JDK 21, JDK 25 and
+JDK 27**. `maven.compiler.release` stays at **21 on every leg**: the JDK 25 and
+JDK 27 legs compile to Java 21 bytecode with the newer compiler and then *run*
+it on that JDK's runtime. That is exactly the situation a consumer is in when a
+jar built in CI lands on whatever JDK the production base image ships.
 
 The bytecode level takes care of the lower bound by itself — a JVM older than
 21 refuses to load the class files at all, with `UnsupportedClassVersionError`,
 and nobody is left guessing. There is no equivalent for the upper bound:
 release-21 class files load happily on any later JVM whether or not anyone ever
 ran them there, and a removed internal, a changed default, or a strengthened
-module boundary shows up only at execution. The JDK 25 leg is what turns that
-into something proven rather than assumed.
+module boundary shows up only at execution. The JDK 25 and 27 legs are what
+turn that into something proven rather than assumed.
 
-Java 22, 23, 24 and 26 are six-month feature releases and are not gated; the
-SDK is expected to run on them, and `SupportedVersions` reports honestly that
-they are untested. See
+Java 22, 23, 24 and 26 are superseded six-month feature releases and are not
+gated; the SDK is expected to run on them, and `SupportedVersions` reports
+honestly that they are untested. See
 [`examples/version-compatibility`](./examples/version-compatibility) for a
 runnable preflight.
 

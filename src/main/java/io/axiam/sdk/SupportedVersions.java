@@ -8,7 +8,7 @@ package io.axiam.sdk;
  * bytecode level and the API surface {@code javac} will allow — and
  * additionally <em>run</em> against {@link #NEWEST_TESTED_JAVA}. Those are two
  * different claims, and one JDK cannot make both: compiling to release 21
- * proves nothing about how the result behaves on a JDK 25 runtime, where a
+ * proves nothing about how the result behaves on a JDK 27 runtime, where a
  * removed internal, a changed default, or a strengthened module boundary shows
  * up only at execution.</p>
  *
@@ -38,10 +38,11 @@ public final class SupportedVersions {
      * The newest Java feature version this SDK has a green build against.
      *
      * <p>Mirrors the upper leg of the CI matrix, where the release-21 bytecode
-     * is executed on a JDK 25 runtime. A newer JVM than this is expected to
+     * is executed on a JDK 27 runtime (the newest GA; the newest LTS, 25, is
+     * gated too). A newer JVM than this is expected to
      * work, but is not yet proven by a build.</p>
      */
-    public static final int NEWEST_TESTED_JAVA = 25;
+    public static final int NEWEST_TESTED_JAVA = 27;
 
     private SupportedVersions() {
         throw new AssertionError("no instances");
