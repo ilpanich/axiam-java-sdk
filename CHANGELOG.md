@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-10-29
+
 ### Changed
 
 - **JDK 27 is now a CI-run runtime, and `SupportedVersions.NEWEST_TESTED_JAVA` is `27`** (was `25`).
@@ -20,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that `grpc-protobuf` 1.85.1 resolves; `protoc-gen-grpc-java` `1.82.0` -> `1.85.1`, aligned with
   the grpc-java runtime; `jacoco-maven-plugin` `0.8.15` -> `0.8.16`. Every other dependency and plugin
   is already on its newest release in its line.
+
+- Run the suite on JDK 27, the newest GA release
+
+- Bump protoc, protoc-gen-grpc-java and jacoco
+
+- Bump the minor-patch group with 14 updates
+
+- Bump the minor-patch group
+
+- Bump actions/setup-python from 7.0.0 to 7.1.0
+
+- Bump dev.sigstore:sigstore-maven-plugin
+
+### Fixed
+
+- Pin guava 33.7.2-android for CVE-2026-102554
 
 ## [1.1.2] - 2026-10-23
 
