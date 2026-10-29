@@ -56,6 +56,20 @@
     <protobuf.version>3.25.9</protobuf.version>
   </properties>
 
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <!-- CVE-2026-102554 (Dependabot #14): grpc-java 1.85.x still pulls
+             guava 33.6.0-android transitively; pin the patched release until
+             a grpc-java version ships it. Declared here so Dependabot can
+             keep it current — it cannot bump undeclared transitive deps. -->
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>33.7.2-android</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>com.squareup.okhttp3</groupId>
