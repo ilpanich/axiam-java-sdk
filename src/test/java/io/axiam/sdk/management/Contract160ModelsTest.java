@@ -161,7 +161,7 @@ class Contract160ModelsTest extends ManagementTestBase {
 
     private static CreateFederationConfigRequest createConfig(String secret, Boolean allowSha1, String metadataPem) {
         return new CreateFederationConfigRequest(allowSha1, null, null, null, null, null, null, null, null,
-                "axiam", Sensitive.of(secret), metadataPem, null, "https://idp.example.test/metadata", "Saml",
+                "axiam", Sensitive.of(secret), metadataPem, null, "https://idp.example.test/metadata", null, "Saml",
                 "corp-idp", null, null, null, null, null, null, null);
     }
 

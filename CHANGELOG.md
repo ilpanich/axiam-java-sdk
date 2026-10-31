@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Contract 1.65** (CONTRACT.md, `openapi.json` 1.2.0 and `management-registry.json` re-vendored byte for
+  byte from `ilpanich/axiam` `76d35d9`; `proto/` unchanged).
+- **Native sign-in with a provider ID token (§37).**
+  `AxiamClient.loginWithProviderIdToken(provider, idToken, nonce, scopes, resource, tenantId, configuration)`
+  (plus shorter overloads and `loginWithProviderIdTokenAsync`): one `POST /oauth2/token` with
+  `grant_type=urn:axiam:params:oauth:grant-type:provider-id-token`, returning the ordinary `OidcTokenSet`.
+  The raw nonce is sent byte for byte, `provider` verbatim, no `openid` is added, the call is never
+  retried, and neither the provider ID token nor the raw nonce is logged or kept. The result is not adopted
+  as the client's credential (as `loginClientCredentials`).
+- **`AxiamClient.nativeNonce()` and `io.axiam.sdk.oidc.ProviderNonce`** (§37.4): a network-free pair of a
+  wrapped raw nonce (32 CSPRNG bytes, unpadded base64url) and its lower-case-hex SHA-256 for the provider's SDK.
+- **`idp_hint`** on `oidcBegin` (new five-argument overload, emitted once as `axiam_idp_hint`) and on
+  `oidcPar` (new seven-argument overload and async twin, pushed in the body and never in the redirect)
+  (§12.1, §26.2 rule 8). Empty and over-256-byte values are refused with a `ValidationError`.
+- Tests: all thirteen of §37.9, the five `idp_hint` tests, and the §9 confirmation that `400 invalid_grant`
+  on `oidcRefresh` is one wire call shared by every waiter of a burst.
+
+### Changed
+
+- **Regenerated management members:** `default_idp` on `CreateOAuth2ClientRequest`,
+  `UpdateOAuth2ClientRequest` and `OAuth2ClientResponse`; `refresh_reuse_response` on `SecuritySettings`,
+  `SetOrgSettings` and `TenantSettingsOverride` (with the new `OAuth2Policy` and `RefreshReuseResponse`);
+  `native_login` on the federation-config bodies (with the new `NativeLoginTrustRequest` and
+  `NativeLoginTrustResponse`). These are record components, so a caller using a record's canonical
+  constructor (rather than its builder) must add the new argument.
+- A `429` with a well-formed OAuth2 error body now carries the server's `Retry-After` in
+  `OAuthProtocolError.retryAfterSeconds()` wherever `ErrorMapper.fromOAuth2ErrorAtAnyStatus` is used.
+- **Behaviour note (server side):** a replayed refresh token now ends the session by default
+  (`oauth2.refresh_reuse_response = revoke_session`): the replay is still `400 invalid_grant`, and the session
+  and every refresh token under it are revoked, the successor included. `invalid_grant` on `oidcRefresh`
+  means the session is over; `oidcRefresh`'s single-flight guard is what keeps this SDK from causing it, and
+  refreshing the same token from two places is a defect.
+
 ## [1.1.3] - 2026-10-29
 
 ### Changed

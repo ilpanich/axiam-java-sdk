@@ -41,6 +41,7 @@ import io.axiam.sdk.oidc.OidcConfiguration;
 import io.axiam.sdk.oidc.OidcOperations;
 import io.axiam.sdk.oidc.OidcPkce;
 import io.axiam.sdk.oidc.OidcTokenSet;
+import io.axiam.sdk.oidc.ProviderNonce;
 import io.axiam.sdk.oidc.PushedAuthorizationRequest;
 import io.axiam.sdk.oidc.SsoCompleteResult;
 import io.axiam.sdk.oidc.SsoStartResult;
@@ -188,6 +189,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private static final Set<String> RESERVED_AUTHORIZE_PARAMS = Set.of(
             "response_type", "client_id", "redirect_uri", "scope", "state", "nonce",
             "code_challenge", "code_challenge_method");
+    /** The query / form parameter carrying {@code idp_hint} (§12.1, contract 1.65); there is no {@code kc_idp_hint} alias. */
+    private static final String IDP_HINT_PARAM = "axiam_idp_hint";
+    /** §12.1 {@code idp_hint} rule 2: the longest hint, in UTF-8 bytes. */
+    private static final int MAX_IDP_HINT_BYTES = 256;
+    /** §37: the grant type of a native sign-in with a provider ID token. */
+    private static final String PROVIDER_ID_TOKEN_GRANT = "urn:axiam:params:oauth:grant-type:provider-id-token";
     private static final Pattern UUID_PATTERN = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
@@ -2369,6 +2376,37 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     @Override
     public AuthorizationRequest oidcBegin(OidcConfiguration configuration, String redirectUri,
             @Nullable String scope, @Nullable Map<String, String> extraParams) {
+        return oidcBegin(configuration, redirectUri, scope, extraParams, null);
+    }
+
+    /**
+     * {@link #oidcBegin(OidcConfiguration, String, String, Map)} with the optional {@code idp_hint}
+     * (CONTRACT.md &sect;12.1, contract 1.65): sends the browser straight to a provider the
+     * relying party already knows its user should use.
+     *
+     * <p>The hint is emitted as the query parameter {@code axiam_idp_hint} &mdash; the ninth
+     * parameter after the eight of &sect;12.1 rule 5, present only when set &mdash; exactly once.
+     * It is a provider's UUID, its {@code provider_slug} or a branded kind name ({@code google},
+     * {@code github}, {@code facebook}, {@code apple}, {@code microsoft}). The SDK validates
+     * emptiness and length only; it does not trim, fold, parse or look the value up, and the
+     * server ignores a hint it cannot resolve. There is no {@code kc_idp_hint} alias.
+     *
+     * <p>When {@code idpHint} is set, an {@code axiam_idp_hint} entry in {@code extraParams} is
+     * dropped and not emitted, so the option is the single source; when it is unset such an entry
+     * passes through, still once. Under PAR the hint rides the pushed body instead
+     * ({@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID, String, String)}).
+     *
+     * @param configuration the discovery document, as returned by {@link #oidcDiscover()}
+     * @param redirectUri   the relying party's redirect URI
+     * @param scope         requested scope; {@code openid} is added when absent
+     * @param extraParams   additional query parameters, or {@code null}
+     * @param idpHint       the provider hint, or {@code null} for none; empty or over 256 UTF-8 bytes is refused
+     * @return the built authorization request
+     * @throws io.axiam.sdk.errors.ValidationError if {@code idpHint} is empty or longer than 256 bytes (no URL is built)
+     */
+    public AuthorizationRequest oidcBegin(OidcConfiguration configuration, String redirectUri,
+            @Nullable String scope, @Nullable Map<String, String> extraParams, @Nullable String idpHint) {
+        checkIdpHint("oidc_begin", idpHint);
         requireOidcClientId();
         String state = OidcPkce.randomUrlSafeToken();
         String nonce = OidcPkce.randomUrlSafeToken();
@@ -2388,6 +2426,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                     throw new IllegalArgumentException("oidcBegin: extraParams may not override the SDK-owned "
                             + "authorization parameter \"" + entry.getKey() + "\" (CONTRACT.md §12.1 rule 5).");
                 }
+                if (idpHint != null && IDP_HINT_PARAM.equals(entry.getKey())) {
+                    // §12.1 idp_hint rule 3: the option is the single source; a repeated
+                    // axiam_idp_hint is refused by the server.
+                    continue;
+                }
                 urlBuilder.addQueryParameter(entry.getKey(), entry.getValue());
             }
         }
@@ -2400,8 +2443,29 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 .addQueryParameter("nonce", nonce)
                 .addQueryParameter("code_challenge", codeChallenge)
                 .addQueryParameter("code_challenge_method", OidcPkce.CODE_CHALLENGE_METHOD_S256);
+        if (idpHint != null) {
+            urlBuilder.addQueryParameter(IDP_HINT_PARAM, idpHint);
+        }
 
         return new AuthorizationRequest(urlBuilder.build().toString(), state, nonce, Sensitive.of(codeVerifierRaw));
+    }
+
+    /**
+     * §12.1 {@code idp_hint} rule 2: emptiness and length (256 UTF-8 bytes) only. Nothing else —
+     * no trim, no case fold, no UUID parse, no lookup — and the value is never quoted back.
+     */
+    private static void checkIdpHint(String operation, @Nullable String idpHint) {
+        if (idpHint == null) {
+            return;
+        }
+        if (idpHint.isEmpty()) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "idp_hint",
+                    "must not be empty; omit it (null) to send no hint (CONTRACT.md §12.1)");
+        }
+        if (idpHint.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_IDP_HINT_BYTES) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(operation, "idp_hint",
+                    "must be at most " + MAX_IDP_HINT_BYTES + " bytes (UTF-8) (CONTRACT.md §12.1)");
+        }
     }
 
     @Override
@@ -2536,6 +2600,174 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     public CompletableFuture<OidcTokenSet> loginClientCredentialsAsync() {
         return CompletableFuture.supplyAsync(this::loginClientCredentials);
+    }
+
+    // -----------------------------------------------------------------------
+    // §37 Native sign-in with a provider ID token (contract 1.65)
+    // -----------------------------------------------------------------------
+
+    /**
+     * {@code POST /oauth2/token} with
+     * {@code grant_type=urn:axiam:params:oauth:grant-type:provider-id-token} (CONTRACT.md &sect;37):
+     * signs a user in with the ID token a provider's <em>native</em> SDK (Google, Apple, Facebook
+     * Limited Login) produced for the app, and returns the client's ordinary {@link OidcTokenSet}.
+     * This is the helper a mobile or desktop app uses; a public client (no secret) is its primary
+     * persona, and a backend relaying the token and the raw nonce as a confidential client is
+     * equally conformant.
+     *
+     * <p><strong>The nonce is the raw one.</strong> Generate it with {@link #nativeNonce()}, give the
+     * provider's SDK {@link ProviderNonce#hashed()}, and pass {@link ProviderNonce#raw()} here. It is
+     * sent byte for byte: never hashed, never replaced by the token's own {@code nonce} claim, and
+     * never generated here.
+     *
+     * <p><strong>The ID token is single-use across the whole deployment, so this call is never
+     * retried</strong> &mdash; on any status or transport failure, here or by a wrapper. Every refusal
+     * of the provider token is the one generic {@code invalid_grant}, which is not refined; recover
+     * with a <em>fresh</em> provider ID token and a <em>fresh</em> nonce. A transport failure after
+     * the request left is a {@link NetworkError} and indeterminate (the token may be spent). A
+     * {@code consent_required} answer has spent the token too; the SDK does not turn it into a
+     * browser flow. Not a token exchange (&sect;15) and never routed through one.
+     *
+     * <p>Neither the ID token nor the raw nonce is logged, stored, cached or echoed into an error;
+     * hold both only for the length of the attempt. The request carries none of this client's
+     * session: no cookie, no CSRF header, no {@code Authorization} header, no redirect followed, and
+     * a {@code 401} never enters the &sect;9 refresh guard. Like {@link #loginClientCredentials()}, the
+     * result is returned and <strong>not adopted</strong> as the client's own credential.
+     *
+     * <p>Scopes are sent only when named: an omitted list is the empty set, which adds no
+     * {@code openid} (so the response carries no ID token). Pass {@code openid} to get
+     * {@link OidcTokenSet#idClaims()}, validated under &sect;12.4 against the raw nonce.
+     *
+     * @param provider      the provider's UUID or its {@code provider_slug}, sent verbatim (a kind name such as
+     *                      {@code google} is not accepted by the server unless the operator chose it as the slug)
+     * @param idToken       the ID token the provider's SDK produced (a credential)
+     * @param nonce         the <em>raw</em> nonce whose SHA-256 hex was given to the provider's SDK (a credential)
+     * @param scopes        scopes to request, or {@code null}/empty to send none
+     * @param resource      an RFC 8707 resource indicator, or {@code null} to send none
+     * @param tenantId      tenant UUID for the {@code tenant_id} query parameter, or {@code null} to use the client's
+     * @param configuration the discovery document, or {@code null} to discover
+     * @return the issued token set
+     * @throws io.axiam.sdk.errors.ValidationError if {@code provider}, {@code idToken} or {@code nonce} is empty (no request sent)
+     * @throws io.axiam.sdk.errors.AuthError if the client has no usable tenant UUID (no request sent), or an ID token
+     *         in the response fails &sect;12.4 validation
+     * @throws OAuthProtocolError on any answer carrying an {@code error} member, at any status
+     * @throws NetworkError on a transport failure, or a {@code 5xx} without a well-formed error body
+     */
+    public OidcTokenSet loginWithProviderIdToken(String provider, Sensitive idToken, Sensitive nonce,
+            @Nullable List<String> scopes, @Nullable String resource, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        final String op = "login_with_provider_id_token";
+        ensureOpen();
+        // §37.2 rule 4: the three required inputs, refused locally with the field named and no value.
+        if (provider == null || provider.isEmpty()) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(op, "provider", "must not be empty (CONTRACT.md §37.2 rule 4)");
+        }
+        if (idToken == null || idToken.expose().isEmpty()) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(op, "id_token", "must not be empty (CONTRACT.md §37.2 rule 4)");
+        }
+        if (nonce == null || nonce.expose().isEmpty()) {
+            throw io.axiam.sdk.internal.LocalRefusal.of(op, "nonce", "must not be empty (CONTRACT.md §37.2 rule 4)");
+        }
+        String clientId = requireOidcClientId();
+        // §12.3 rule 4 before any wire call, discovery included: a slug-only client is refused here.
+        UUID tenant = resolveOauth2TenantId(tenantId);
+        OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
+
+        FormBody.Builder form = new FormBody.Builder()
+                .add("grant_type", PROVIDER_ID_TOKEN_GRANT)
+                .add("client_id", clientId)
+                .add("provider", provider)
+                .add("id_token", idToken.expose())
+                .add("nonce", nonce.expose());
+        // §37.2 rule 7: only what the caller named; never `openid`, never an empty `scope=`.
+        if (scopes != null && !scopes.isEmpty()) {
+            form.add("scope", String.join(" ", scopes));
+        }
+        if (resource != null && !resource.isEmpty()) {
+            form.add("resource", resource);
+        }
+        appendOidcClientSecret(form);
+
+        String url = oauth2Url(
+                preferredEndpoint(config, MtlsEndpointAliases::token_endpoint, config.token_endpoint()),
+                tenant);
+        // The session-free transport: no cookie, no SDK access token, no CSRF header, no §9 refresh on
+        // a 401, no redirect, and no silent connection retry -- the provider's token is spent once.
+        Request request = new Request.Builder().url(url).post(form.build())
+                .header("X-Tenant-ID", this.tenantId)
+                .build();
+        JsonNode wire;
+        try (Response response = sessionlessHttpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                // Built from the response alone: the error never embeds the request.
+                throw ErrorMapper.fromOAuth2ErrorAtAnyStatus(response.code(), response, "token request failed");
+            }
+            wire = readJson(response);
+        } catch (IOException e) {
+            throw new NetworkError("request failed: " + e.getClass().getSimpleName());
+        }
+        // §37.2 rule 8: validated under §12.4 against the RAW nonce, which is what the AXIAM ID token carries.
+        return buildTokenSet(wire, config, nonce.expose());
+    }
+
+    /** {@link #loginWithProviderIdToken(String, Sensitive, Sensitive, List, String, UUID, OidcConfiguration)}
+     * with no scopes, no resource, the client's tenant and discovery.
+     *
+     * @param provider the provider's UUID or slug, sent verbatim
+     * @param idToken  the ID token the provider's SDK produced
+     * @param nonce    the raw nonce (see {@link #nativeNonce()})
+     * @return the issued token set
+     */
+    public OidcTokenSet loginWithProviderIdToken(String provider, Sensitive idToken, Sensitive nonce) {
+        return loginWithProviderIdToken(provider, idToken, nonce, null, null, null, null);
+    }
+
+    /** Bare-string convenience for
+     * {@link #loginWithProviderIdToken(String, Sensitive, Sensitive, List, String, UUID, OidcConfiguration)}
+     * (wrapped on entry, as {@code tokenExchange} takes its {@code subject_token}).
+     *
+     * @param provider the provider's UUID or slug, sent verbatim
+     * @param idToken  the ID token the provider's SDK produced
+     * @param nonce    the raw nonce (see {@link #nativeNonce()})
+     * @param scopes   scopes to request, or {@code null} for none
+     * @return the issued token set
+     */
+    public OidcTokenSet loginWithProviderIdToken(String provider, String idToken, String nonce,
+            @Nullable List<String> scopes) {
+        return loginWithProviderIdToken(provider, Sensitive.of(idToken == null ? "" : idToken),
+                Sensitive.of(nonce == null ? "" : nonce), scopes, null, null, null);
+    }
+
+    /** {@code CompletableFuture} async twin of
+     * {@link #loginWithProviderIdToken(String, Sensitive, Sensitive, List, String, UUID, OidcConfiguration)}.
+     * Never retried, like its twin.
+     *
+     * @param provider      the provider's UUID or slug, sent verbatim
+     * @param idToken       the ID token the provider's SDK produced
+     * @param nonce         the raw nonce
+     * @param scopes        scopes to request, or {@code null}
+     * @param resource      a resource indicator, or {@code null}
+     * @param tenantId      a tenant override, or {@code null}
+     * @param configuration the discovery document, or {@code null} to discover
+     * @return a future resolving to the issued token set
+     */
+    public CompletableFuture<OidcTokenSet> loginWithProviderIdTokenAsync(String provider, Sensitive idToken,
+            Sensitive nonce, @Nullable List<String> scopes, @Nullable String resource, @Nullable UUID tenantId,
+            @Nullable OidcConfiguration configuration) {
+        return CompletableFuture.supplyAsync(() ->
+                loginWithProviderIdToken(provider, idToken, nonce, scopes, resource, tenantId, configuration));
+    }
+
+    /**
+     * Generates the nonce pair for a native sign-in (CONTRACT.md &sect;37.4) &mdash; pure local
+     * computation, no network I/O, nothing stored. Give the provider's SDK
+     * {@link ProviderNonce#hashed()} and pass {@link ProviderNonce#raw()} to
+     * {@link #loginWithProviderIdToken(String, Sensitive, Sensitive)}.
+     *
+     * @return a fresh pair: 32 CSPRNG bytes as unpadded base64url, wrapped, and its SHA-256 as lower-case hex
+     */
+    public static ProviderNonce nativeNonce() {
+        return ProviderNonce.generate();
     }
 
     @Override
@@ -5089,7 +5321,34 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
             AuthorizationRequest request, String redirectUri, @Nullable String scope,
             @Nullable UUID tenantId, @Nullable String dpopJkt) {
+        return oidcPar(configuration, request, redirectUri, scope, tenantId, dpopJkt, null);
+    }
+
+    /**
+     * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID, String)} carrying
+     * the optional {@code idp_hint} (CONTRACT.md &sect;26.2 rule 8, contract 1.65): pushed as
+     * {@code axiam_idp_hint} in the form body, exactly once, and absent when {@code null}.
+     *
+     * <p>The pushed hint is the authoritative one (RFC 9126 &sect;4), so the redirect URL stays
+     * exactly {@code client_id} and {@code request_uri} and never carries it. Validation is
+     * &sect;12.1's &mdash; emptiness and 256 UTF-8 bytes, nothing else &mdash; and there is no
+     * {@code kc_idp_hint}.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope; {@code openid} is added when absent
+     * @param tenantId      a tenant override for the {@code ?tenant_id=} query parameter
+     * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or {@code null}
+     * @param idpHint       the provider hint, or {@code null} for none
+     * @return the opaque handle and the URL to redirect the browser to
+     * @throws io.axiam.sdk.errors.ValidationError if {@code idpHint} is empty or longer than 256 bytes (nothing is pushed)
+     */
+    public PushedAuthorizationRequest oidcPar(@Nullable OidcConfiguration configuration,
+            AuthorizationRequest request, String redirectUri, @Nullable String scope,
+            @Nullable UUID tenantId, @Nullable String dpopJkt, @Nullable String idpHint) {
         ensureOpen();
+        checkIdpHint("oidc_par", idpHint);
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         String endpoint = preferredEndpointOrNull(config, MtlsEndpointAliases::pushed_authorization_request_endpoint,
                 config.pushed_authorization_request_endpoint());
@@ -5120,6 +5379,10 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         // than sent blank.
         if (dpopJkt != null && !dpopJkt.isEmpty()) {
             form.add("dpop_jkt", dpopJkt);
+        }
+        // §26.2 rule 8: the hint rides the pushed body, once, and never the redirect below.
+        if (idpHint != null) {
+            form.add(IDP_HINT_PARAM, idpHint);
         }
 
         String url = oauth2Url(endpoint, tenantId);
@@ -5194,8 +5457,27 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             @Nullable OidcConfiguration configuration, AuthorizationRequest request,
             String redirectUri, @Nullable String scope, @Nullable UUID tenantId,
             @Nullable String dpopJkt) {
+        return oidcParAsync(configuration, request, redirectUri, scope, tenantId, dpopJkt, null);
+    }
+
+    /** {@code CompletableFuture} async twin of
+     * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID, String, String)}.
+     *
+     * @param configuration the discovery document, or {@code null} to discover
+     * @param request       what {@code oidcBegin} returned
+     * @param redirectUri   the same redirect URI that will be sent at exchange
+     * @param scope         the requested scope
+     * @param tenantId      a tenant override for the query parameter
+     * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or {@code null}
+     * @param idpHint       the provider hint, or {@code null}
+     * @return a future resolving to the pushed request
+     */
+    public CompletableFuture<PushedAuthorizationRequest> oidcParAsync(
+            @Nullable OidcConfiguration configuration, AuthorizationRequest request,
+            String redirectUri, @Nullable String scope, @Nullable UUID tenantId,
+            @Nullable String dpopJkt, @Nullable String idpHint) {
         return CompletableFuture.supplyAsync(
-                () -> oidcPar(configuration, request, redirectUri, scope, tenantId, dpopJkt));
+                () -> oidcPar(configuration, request, redirectUri, scope, tenantId, dpopJkt, idpHint));
     }
 
     // ------------------------------------------------------------------

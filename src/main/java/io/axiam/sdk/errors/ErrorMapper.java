@@ -165,6 +165,12 @@ public final class ErrorMapper {
                                                               String message) {
         OAuthProtocolError protocolError = oauth2ErrorBody(response);
         if (protocolError != null) {
+            if (status == 429 && retryAfterSeconds(response) > 0) {
+                // The server's own Retry-After, kept where the SDK exposes it on this error
+                // (contract 1.65 §37.3: the 429 row exposes it).
+                return new OAuthProtocolError(protocolError.error(), protocolError.errorDescription(),
+                        retryAfterSeconds(response));
+            }
             return protocolError;
         }
         return fromHttpStatus(status, message, response);
