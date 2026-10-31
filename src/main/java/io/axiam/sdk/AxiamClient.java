@@ -5324,6 +5324,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         return oidcPar(configuration, request, redirectUri, scope, tenantId, dpopJkt, null);
     }
 
+    /** The first {@code axiam_idp_hint} the begin URL carries, or {@code null} (§26.2 rule 8). */
+    private static @Nullable String idpHintFromBeginUrl(@Nullable String url) {
+        HttpUrl parsed = url == null ? null : HttpUrl.parse(url);
+        return parsed == null ? null : parsed.queryParameter(IDP_HINT_PARAM);
+    }
+
     /**
      * {@link #oidcPar(OidcConfiguration, AuthorizationRequest, String, String, UUID, String)} carrying
      * the optional {@code idp_hint} (CONTRACT.md &sect;26.2 rule 8, contract 1.65): pushed as
@@ -5340,7 +5346,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @param scope         the requested scope; {@code openid} is added when absent
      * @param tenantId      a tenant override for the {@code ?tenant_id=} query parameter
      * @param dpopJkt       the RFC 7638 thumbprint of the client's DPoP public key, or {@code null}
-     * @param idpHint       the provider hint, or {@code null} for none
+     * @param idpHint       the provider hint; when {@code null}, the {@code axiam_idp_hint} the
+     *                      {@code oidcBegin} URL carries is pushed (if any); the argument wins when both are set
      * @return the opaque handle and the URL to redirect the browser to
      * @throws io.axiam.sdk.errors.ValidationError if {@code idpHint} is empty or longer than 256 bytes (nothing is pushed)
      */
@@ -5348,6 +5355,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             AuthorizationRequest request, String redirectUri, @Nullable String scope,
             @Nullable UUID tenantId, @Nullable String dpopJkt, @Nullable String idpHint) {
         ensureOpen();
+        // §26.2 rule 8 (C165-11, D-N36): an unset argument falls back to the hint the begin URL
+        // carries; a set argument wins, so exactly one value is pushed.
+        if (idpHint == null) {
+            idpHint = idpHintFromBeginUrl(request.url());
+        }
         checkIdpHint("oidc_par", idpHint);
         OidcConfiguration config = configuration != null ? configuration : oidcDiscover();
         String endpoint = preferredEndpointOrNull(config, MtlsEndpointAliases::pushed_authorization_request_endpoint,

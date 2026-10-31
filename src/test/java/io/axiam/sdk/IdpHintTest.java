@@ -177,9 +177,67 @@ class IdpHintTest {
                 // Without one the field is absent.
                 server.enqueue(new MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json")
                         .setBody("{\"request_uri\":\"" + requestUri + "\",\"expires_in\":90}"));
-                client.oidcPar(config, begun, REDIRECT_URI, null, null);
+                // (a begin without a hint: a begin URL that carries one is pushed, D-N36)
+                AuthorizationRequest plain = client.oidcBegin(config, REDIRECT_URI, null, null);
+                client.oidcPar(config, plain, REDIRECT_URI, null, null);
                 String bare = server.takeRequest().getBody().readUtf8();
                 assertFalse(bare.contains("idp_hint"));
+            }
+        }
+    }
+
+    private static List<String> pushedHints(RecordedRequest request) {
+        List<String> hints = new ArrayList<>();
+        for (String pair : request.getBody().readUtf8().split("&")) {
+            int eq = pair.indexOf('=');
+            if (URLDecoder.decode(pair.substring(0, eq), StandardCharsets.UTF_8).equals("axiam_idp_hint")) {
+                hints.add(URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8));
+            }
+        }
+        return hints;
+    }
+
+    private static void enqueuePar(MockWebServer server) {
+        server.enqueue(new MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json")
+                .setBody("{\"request_uri\":\"urn:ietf:params:oauth:request_uri:abc\",\"expires_in\":90}"));
+    }
+
+    /** §26.6 par_idp_hint_from_begin_url_pushed (D-N36): an unset argument pushes the begin URL's hint. */
+    @Test
+    void parIdpHintFromBeginUrlPushed() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), TENANT_ID)
+                    .oidcClientId("app").build()) {
+                OidcConfiguration config = discover(server, client);
+                AuthorizationRequest begun = client.oidcBegin(config, REDIRECT_URI, null, null, "corp-okta");
+
+                enqueuePar(server);
+                PushedAuthorizationRequest pushed = client.oidcPar(config, begun, REDIRECT_URI, null, null);
+                assertEquals(List.of("corp-okta"), pushedHints(server.takeRequest()));
+                assertFalse(pushed.url().contains("idp_hint"));
+
+                // The async twin shares the path.
+                enqueuePar(server);
+                client.oidcParAsync(config, begun, REDIRECT_URI, null, null).get();
+                assertEquals(List.of("corp-okta"), pushedHints(server.takeRequest()));
+            }
+        }
+    }
+
+    /** §26.6 par_idp_hint_argument_wins (D-N36): a set argument is the single pushed value. */
+    @Test
+    void parIdpHintArgumentWins() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), TENANT_ID)
+                    .oidcClientId("app").build()) {
+                OidcConfiguration config = discover(server, client);
+                AuthorizationRequest begun = client.oidcBegin(config, REDIRECT_URI, null, null, "from-url");
+
+                enqueuePar(server);
+                client.oidcPar(config, begun, REDIRECT_URI, null, null, null, "from-arg");
+                assertEquals(List.of("from-arg"), pushedHints(server.takeRequest()));
             }
         }
     }

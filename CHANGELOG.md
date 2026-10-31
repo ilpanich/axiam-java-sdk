@@ -25,9 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (§12.1, §26.2 rule 8). Empty and over-256-byte values are refused with a `ValidationError`.
 - Tests: all thirteen of §37.9, the five `idp_hint` tests, and the §9 confirmation that `400 invalid_grant`
   on `oidcRefresh` is one wire call shared by every waiter of a burst.
+- Tests `parIdpHintFromBeginUrlPushed` and `parIdpHintArgumentWins` (§26.6).
 
 ### Changed
 
+- **Server floor:** federation-config admin calls (`federation.create_config`, `get_config`, `list_configs`, `update_config`) of this 1.2-line SDK need an AXIAM server **1.2.0 or later**: `FederationConfigResponse.native_login` is required from 1.2.0, and a response from an older server fails to decode (a Jackson `MismatchedInputException`).
+- **Contract 1.65 amendments (CONTRACT.md re-vendored from `ilpanich/axiam` `d93976b`):** `oidcPar` and `oidcParAsync` now push the `axiam_idp_hint` the `oidcBegin` URL carries when their own `idpHint` is `null`; a set `idpHint` wins and exactly one value is pushed (§26.2 rule 8, D-N36). Previously `oidcBegin(…, "x")` followed by `oidcPar(…)` pushed no hint.
 - **Regenerated management members:** `default_idp` on `CreateOAuth2ClientRequest`,
   `UpdateOAuth2ClientRequest` and `OAuth2ClientResponse`; `refresh_reuse_response` on `SecuritySettings`,
   `SetOrgSettings` and `TenantSettingsOverride` (with the new `OAuth2Policy` and `RefreshReuseResponse`);
