@@ -46,6 +46,7 @@ import java.util.List;
  * @param opaqueMode the server's opaque_mode field
  * @param opaqueSuite the server's opaque_suite field
  * @param passwordHistoryCount the server's password_history_count field
+ * @param refreshReuseResponse the server's refresh_reuse_response field
  * @param refreshTokenLifetimeSecs the server's refresh_token_lifetime_secs field
  * @param requireDigits the server's require_digits field
  * @param requireLowercase the server's require_lowercase field
@@ -91,6 +92,7 @@ public record TenantSettingsOverride(
         @JsonProperty("opaque_mode") @Nullable String opaqueMode,
         @JsonProperty("opaque_suite") @Nullable String opaqueSuite,
         @JsonProperty("password_history_count") @Nullable Integer passwordHistoryCount,
+        @JsonProperty("refresh_reuse_response") @Nullable RefreshReuseResponse refreshReuseResponse,
         @JsonProperty("refresh_token_lifetime_secs") @Nullable Long refreshTokenLifetimeSecs,
         @JsonProperty("require_digits") @Nullable Boolean requireDigits,
         @JsonProperty("require_lowercase") @Nullable Boolean requireLowercase,
@@ -153,6 +155,7 @@ public record TenantSettingsOverride(
         private @Nullable String opaqueMode;
         private @Nullable String opaqueSuite;
         private @Nullable Integer passwordHistoryCount;
+        private @Nullable RefreshReuseResponse refreshReuseResponse;
         private @Nullable Long refreshTokenLifetimeSecs;
         private @Nullable Boolean requireDigits;
         private @Nullable Boolean requireLowercase;
@@ -462,6 +465,17 @@ public record TenantSettingsOverride(
         }
 
         /**
+         * Sets refresh_reuse_response.
+         *
+         * @param refreshReuseResponse the value to send
+         * @return this builder
+         */
+        public Builder refreshReuseResponse(RefreshReuseResponse refreshReuseResponse) {
+            this.refreshReuseResponse = refreshReuseResponse;
+            return this;
+        }
+
+        /**
          * Sets refresh_token_lifetime_secs.
          *
          * @param refreshTokenLifetimeSecs the value to send
@@ -577,7 +591,7 @@ public record TenantSettingsOverride(
          * @return a TenantSettingsOverride carrying exactly the fields that were set
          */
         public TenantSettingsOverride build() {
-            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, samlIdpEnabled, sensitiveScopesEnabled, serverCertAllowedNames, ssfEnabled, webauthnUserVerification);
+            return new TenantSettingsOverride(accessTokenLifetimeSecs, adminNotificationsEnabled, cimd, dcrAllowedRedirectHosts, dcrAllowedScopes, dcrMaxClients, dcrUnusedClientTtlDays, defaultCertValidityDays, defaultLocale, deletionGracePeriodDays, dynamicRegistration, emailVerificationGracePeriodHours, emailVerificationRequired, externalClientAllowedResources, hibpCheckEnabled, lockoutBackoffMultiplier, lockoutDurationSecs, maxCertValidityDays, maxFailedLoginAttempts, maxLockoutDurationSecs, mfaChallengeLifetimeSecs, mfaEnforced, minLength, opaqueKsf, opaqueMode, opaqueSuite, passwordHistoryCount, refreshReuseResponse, refreshTokenLifetimeSecs, requireDigits, requireLowercase, requireSymbols, requireUppercase, samlIdpEnabled, sensitiveScopesEnabled, serverCertAllowedNames, ssfEnabled, webauthnUserVerification);
         }
     }
 }

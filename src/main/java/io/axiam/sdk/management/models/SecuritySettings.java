@@ -6,6 +6,7 @@ package io.axiam.sdk.management.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -20,6 +21,8 @@ import java.util.UUID;
  * @param lockout the server's lockout field
  * @param mfa the server's mfa field
  * @param notification the server's notification field
+ * @param oauth2 G-C (#818) — {@code oauth2.refresh_reuse_response}. Defaulted so a document
+ *     written before the field reads as the default.
  * @param oidc the server's oidc field
  * @param opaque the server's opaque field
  * @param password the server's password field
@@ -40,6 +43,7 @@ public record SecuritySettings(
         @JsonProperty("lockout") LockoutPolicy lockout,
         @JsonProperty("mfa") MfaPolicy mfa,
         @JsonProperty("notification") NotificationPolicy notification,
+        @JsonProperty("oauth2") @Nullable OAuth2Policy oauth2,
         @JsonProperty("oidc") OidcPolicy oidc,
         @JsonProperty("opaque") OpaquePolicy opaque,
         @JsonProperty("password") PasswordPolicy password,

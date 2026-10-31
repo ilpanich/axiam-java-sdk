@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * The CreateOAuth2ClientRequest schema from the server's OpenAPI document.
@@ -55,6 +56,13 @@ import java.util.List;
  *     Accepted and stored, but **nothing reads it yet**: the login hop it gates is a later wave.
  *     Unlike {@code authn_request_params} it is permitted on a {@code fapi2} client, because it
  *     relaxes nothing — it decides only how an anonymous browser is answered.
+ * @param defaultIdp G-B (#817) — the federation provider (a federation config {@code id}) this
+ *     client's sign-in page starts with when an authorization request carries no {@code
+ *     axiam_idp_hint}; a hint that names a provider overrides it. Must name a provider this tenant can
+ *     sign in with — its own enabled configs, or the organization's enabled ones it inherits — or the
+ *     registration is refused with {@code 400}. If that provider is later disabled or deleted the
+ *     default is ignored at the authorization endpoint (the provider chooser is shown), never an
+ *     error. Omit for none.
  * @param dpopBoundAccessTokens RFC 9449 §5.2 — issue DPoP-bound (sender-constrained) access tokens
  *     to this client. Independent of both the authentication method and {@code
  *     tls_client_certificate_bound_access_tokens}; a client may ask for both constraints, and a token
@@ -116,6 +124,7 @@ public record CreateOAuth2ClientRequest(
         @JsonProperty("backchannel_token_delivery_mode") @Nullable String backchannelTokenDeliveryMode,
         @JsonProperty("backchannel_user_code_parameter") @Nullable Boolean backchannelUserCodeParameter,
         @JsonProperty("browser_sso") @Nullable Boolean browserSso,
+        @JsonProperty("default_idp") @Nullable UUID defaultIdp,
         @JsonProperty("dpop_bound_access_tokens") @Nullable Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") @Nullable Boolean dpopRequireNonce,
         @JsonProperty("grant_types") List<String> grantTypes,

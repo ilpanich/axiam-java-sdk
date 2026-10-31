@@ -46,6 +46,7 @@ import io.axiam.sdk.Sensitive;
  * @param idpSigningCertPem PEM-encoded X.509 certificate for verifying SAML assertions or OIDC
  *     signatures (CQ-B40/REQ-14 AC-5). Required for SAML configs.
  * @param metadataUrl OIDC discovery URL or SAML metadata URL.
+ * @param nativeLogin the server's native_login field
  * @param protocol Federation protocol: "OidcConnect" or "Saml".
  * @param provider Display name for the identity provider (e.g., "Google", "Okta").
  * @param providerKind Which provider this is: {@code google}, {@code github}, {@code facebook},
@@ -78,6 +79,7 @@ public record CreateFederationConfigRequest(
         @JsonProperty("idp_metadata_signing_cert_pem") @Nullable String idpMetadataSigningCertPem,
         @JsonProperty("idp_signing_cert_pem") @Nullable String idpSigningCertPem,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
+        @JsonProperty("native_login") @Nullable NativeLoginTrustRequest nativeLogin,
         @JsonProperty("protocol") String protocol,
         @JsonProperty("provider") String provider,
         @JsonProperty("provider_kind") @Nullable String providerKind,

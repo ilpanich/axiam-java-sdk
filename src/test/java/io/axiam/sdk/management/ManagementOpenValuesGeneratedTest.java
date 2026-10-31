@@ -34,6 +34,7 @@ import io.axiam.sdk.management.models.PgpKeyStatus;
 import io.axiam.sdk.management.models.RadiusServiceType;
 import io.axiam.sdk.management.models.RadiusTerminationAction;
 import io.axiam.sdk.management.models.ReactorMode;
+import io.axiam.sdk.management.models.RefreshReuseResponse;
 import io.axiam.sdk.management.models.SamlBinding;
 import io.axiam.sdk.management.models.SamlIdpCredentialStatus;
 import io.axiam.sdk.management.models.SamlIdpSlot;
@@ -267,6 +268,13 @@ class ManagementOpenValuesGeneratedTest {
     void reactorModeIsOpen() throws Exception {
         assertEquals(ReactorMode.INTERCEPT, JSON.readValue("\"intercept\"", ReactorMode.class));
         assertEquals(ReactorMode.UNKNOWN, JSON.readValue(UNLISTED, ReactorMode.class));
+    }
+
+    /** §27.11 rule 1 for RefreshReuseResponse. */
+    @Test
+    void refreshReuseResponseIsOpen() throws Exception {
+        assertEquals(RefreshReuseResponse.REVOKE_SESSION, JSON.readValue("\"revoke_session\"", RefreshReuseResponse.class));
+        assertEquals(RefreshReuseResponse.UNKNOWN, JSON.readValue(UNLISTED, RefreshReuseResponse.class));
     }
 
     /** §27.11 rule 1 for SamlBinding. */
