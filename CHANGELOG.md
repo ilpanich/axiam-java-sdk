@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means the session is over; `oidcRefresh`'s single-flight guard is what keeps this SDK from causing it, and
   refreshing the same token from two places is a defect.
 
+### Fixed
+
+- **No redirect from an `/oauth2/*` POST (C165-23, C165-25; §12.1 rule 3).** Every `/oauth2/*` form POST (`oidcExchange`, `oidcRefresh`, client credentials, PAR, introspect, revoke, token exchange, device authorization, and the device and CIBA polls) now rides a redirect-free client, so a `307`/`308` can no longer replay a `refresh_token` or `client_secret` to another host; a `3xx` is a `NetworkError`, and it is decided by the status before the body, so a `3xx` carrying `{"error":…}` is no longer an `OAuthProtocolError`.
+
 ## [1.1.3] - 2026-10-29
 
 ### Changed

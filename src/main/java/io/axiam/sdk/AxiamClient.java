@@ -275,6 +275,12 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private final OkHttpClient sendOnceHttpClient;
     /** The client the device and CIBA polls use: OkHttp's silent replay of a POST is off, so the §16 runner alone counts attempts (§16.1: three in total). */
     private final OkHttpClient pollHttpClient;
+    /**
+     * The client every {@code /oauth2/*} form POST rides: {@link #httpClient} with redirects off
+     * (CONTRACT.md &sect;12.1 rule 3 -- a {@code 3xx} is a {@link NetworkError}, never followed, so a
+     * {@code refresh_token} or {@code client_secret} in the body cannot be replayed to another host).
+     */
+    private final OkHttpClient oauth2HttpClient;
 
     /** §18 shutdown flag, read on every operation. */
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -736,7 +742,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.httpClient = clientBuilder.build();
         this.session.attachHttpClient(this.httpClient);
         this.sessionlessHttpClient = io.axiam.sdk.internal.Sessionless.of(this.httpClient);
-        this.pollHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false).build();
+        this.oauth2HttpClient = this.httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build();
+        this.pollHttpClient = this.oauth2HttpClient.newBuilder().retryOnConnectionFailure(false).build();
         this.sendOnceHttpClient = this.httpClient.newBuilder().retryOnConnectionFailure(false)
                 .authenticator(okhttp3.Authenticator.NONE).followRedirects(false).followSslRedirects(false)
                 .build();
@@ -762,6 +769,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.sessionlessHttpClient = other.sessionlessHttpClient;
         this.sendOnceHttpClient = other.sendOnceHttpClient;
         this.pollHttpClient = other.pollHttpClient;
+        this.oauth2HttpClient = other.oauth2HttpClient;
         this.refreshGuard = other.refreshGuard;
         this.jwksVerifier = other.jwksVerifier;
         this.session = other.session;
@@ -4332,7 +4340,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     }
 
     private Response executeFormPost(String url, RequestBody form) {
-        return executeFormPost(httpClient, url, form);
+        return executeFormPost(oauth2HttpClient, url, form);
     }
 
     private Response executeFormPost(OkHttpClient client, String url, RequestBody form) {

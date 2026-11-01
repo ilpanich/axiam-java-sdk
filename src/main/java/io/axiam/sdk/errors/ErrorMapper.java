@@ -133,6 +133,9 @@ public final class ErrorMapper {
      * @return the mapped exception, ready to throw
      */
     public static RuntimeException fromOAuth2Response(int status, @Nullable Response response, String message) {
+        if (isRedirect(status)) {
+            return fromHttpResponse(status, message, response);
+        }
         if (status == 400 || status == 401) {
             OAuthProtocolError protocolError = oauth2ErrorBody(response);
             if (protocolError != null) {
@@ -163,6 +166,10 @@ public final class ErrorMapper {
      */
     public static RuntimeException fromOAuth2ErrorAtAnyStatus(int status, @Nullable Response response,
                                                               String message) {
+        if (isRedirect(status)) {
+            // CONTRACT.md §12.1 rule 3: a 3xx is a NetworkError whatever its body carries.
+            return fromHttpResponse(status, message, response);
+        }
         OAuthProtocolError protocolError = oauth2ErrorBody(response);
         if (protocolError != null) {
             if (status == 429 && retryAfterSeconds(response) > 0) {
@@ -174,6 +181,10 @@ public final class ErrorMapper {
             return protocolError;
         }
         return fromHttpStatus(status, message, response);
+    }
+
+    private static boolean isRedirect(int status) {
+        return status >= 300 && status <= 399;
     }
 
     /**
