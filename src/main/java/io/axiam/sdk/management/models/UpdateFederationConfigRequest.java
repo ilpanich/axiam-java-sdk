@@ -55,6 +55,7 @@ import io.axiam.sdk.management.JsonNullable;
  * @param metadataUrl OIDC discovery or SAML metadata URL. Explicit {@code null} clears it; omitted
  *     leaves it. -- null is NOT absent here (§27.4 rule 5): a Java null means the member is absent,
  *     JsonNullable.ofNull() means it is JSON null
+ * @param nativeLogin the server's native_login field
  * @param provider the server's provider field
  * @param providerSlug Operator-chosen identifier for a {@code generic_*} kind. Explicit {@code
  *     null} clears it. -- null is NOT absent here (§27.4 rule 5): a Java null means the member is
@@ -87,6 +88,7 @@ public record UpdateFederationConfigRequest(
         @JsonProperty("idp_metadata_signing_cert_pem") @Nullable JsonNullable<String> idpMetadataSigningCertPem,
         @JsonProperty("idp_signing_cert_pem") @Nullable JsonNullable<String> idpSigningCertPem,
         @JsonProperty("metadata_url") @Nullable JsonNullable<String> metadataUrl,
+        @JsonProperty("native_login") @Nullable NativeLoginTrustRequest nativeLogin,
         @JsonProperty("provider") @Nullable String provider,
         @JsonProperty("provider_slug") @Nullable JsonNullable<String> providerSlug,
         @JsonProperty("require_pkce") @Nullable Boolean requirePkce,
@@ -134,6 +136,7 @@ public record UpdateFederationConfigRequest(
         private @Nullable JsonNullable<String> idpMetadataSigningCertPem;
         private @Nullable JsonNullable<String> idpSigningCertPem;
         private @Nullable JsonNullable<String> metadataUrl;
+        private @Nullable NativeLoginTrustRequest nativeLogin;
         private @Nullable String provider;
         private @Nullable JsonNullable<String> providerSlug;
         private @Nullable Boolean requirePkce;
@@ -322,6 +325,17 @@ public record UpdateFederationConfigRequest(
         }
 
         /**
+         * Sets native_login.
+         *
+         * @param nativeLogin the value to send
+         * @return this builder
+         */
+        public Builder nativeLogin(NativeLoginTrustRequest nativeLogin) {
+            this.nativeLogin = nativeLogin;
+            return this;
+        }
+
+        /**
          * Sets provider.
          *
          * @param provider the value to send
@@ -410,7 +424,7 @@ public record UpdateFederationConfigRequest(
          * @return a UpdateFederationConfigRequest carrying exactly the fields that were set
          */
         public UpdateFederationConfigRequest build() {
-            return new UpdateFederationConfigRequest(allowSha1Signatures, allowTenantInheritance, allowedAlgorithms, allowedIssuerTenants, appleKeyId, appleTeamId, attributeMap, authorizationEndpoint, buttonIcon, clientId, clientSecret, enabled, idpMetadataSigningCertPem, idpSigningCertPem, metadataUrl, provider, providerSlug, requirePkce, scopes, tokenEndpoint, tokenExchange, userinfoEndpoint);
+            return new UpdateFederationConfigRequest(allowSha1Signatures, allowTenantInheritance, allowedAlgorithms, allowedIssuerTenants, appleKeyId, appleTeamId, attributeMap, authorizationEndpoint, buttonIcon, clientId, clientSecret, enabled, idpMetadataSigningCertPem, idpSigningCertPem, metadataUrl, nativeLogin, provider, providerSlug, requirePkce, scopes, tokenEndpoint, tokenExchange, userinfoEndpoint);
         }
     }
 }

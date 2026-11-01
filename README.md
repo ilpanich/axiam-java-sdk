@@ -24,8 +24,8 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.64**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
-§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33, §34 and §36, with
+This SDK conforms to **contract 1.65**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+§20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33, §34, §36 and §37, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
 gRPC-only `getUserInfo` operation and the §1.1.1 gRPC-only `validateToken`/
@@ -86,7 +86,7 @@ offered in any namespace (§27.10). Contract 1.63 (released as **1.1.1**) is met
 `expected_updated_at` (§31.3 rule 4), and the refusal of an unknown profile enumeration at `plan`
 (§27.6.2 item 4). This SDK ships no helper that builds or signs an `AuditEventMessage` (it is a consumer
 only), so the §8 local refusal of reserved actions does not apply; it generates no DPoP proof. The vendored `CONTRACT.md`, `openapi.json` and
-`management-registry.json` (and `proto/`) are `ilpanich/axiam` commit `356a6da` (platform PR #793 merge; contract 1.64; 202 operations in 29 namespaces, none added); `CONTRACT.md` is byte-identical to the `b3f8687` copy, the 1.64 amendments of 2026-10-23. Contract 1.64 (released as **1.1.2**) adds one rule, met here: a `429 rate_limit_exceeded` on a device-code poll is not terminal — `deviceLogin` waits `Retry-After` (a minimum, capped at the `expires_in` deadline), counts it as one interval, does not raise the interval for it, and polls again (§14.2 rule 9, §14.6). The status decides, not the body: any `429` is that wait, a `429 slow_down` included, and a `5xx` is a transport failure whatever its body (rule 6). The refusal at `plan` of an unknown profile enumeration now quotes the raw value the read carried (length-capped), as §27.6.2 item 4 asks of an SDK that keeps the value.
+`management-registry.json` (and `proto/`) are `ilpanich/axiam` commit `76d35d9` (contract 1.65, `openapi.json` 1.2.0; 202 operations in 29 namespaces, none added). Contract 1.65 adds the §37 native sign-in with a provider ID token (`loginWithProviderIdToken`, `AxiamClient.nativeNonce()` and `ProviderNonce`) and the optional `idp_hint` of `oidcBegin` and `oidcPar` (§12.1, §26.2 rule 8); the regenerated management members are `default_idp` on the OAuth2 client bodies, `refresh_reuse_response` on the settings bodies (with the new `OAuth2Policy` and `RefreshReuseResponse`), and `native_login` on the federation-config bodies; a replayed refresh token now ends the session server-side by default (§9), which §9's single-flight guard already keeps this SDK from causing. **Server floor:** federation-config admin calls (`federation.create_config`, `get_config`, `list_configs`, `update_config`) of this 1.2-line SDK need an AXIAM server **1.2.0 or later**: `FederationConfigResponse.native_login` is required from 1.2.0, and a response from an older server fails to decode (a Jackson `MismatchedInputException`). `oidcPar` pushes the begin URL's `axiam_idp_hint` when its own `idpHint` is unset (the argument wins). The 1.64 text that follows is what the previous vendoring met:  Contract 1.64 (released as **1.1.2**) adds one rule, met here: a `429 rate_limit_exceeded` on a device-code poll is not terminal — `deviceLogin` waits `Retry-After` (a minimum, capped at the `expires_in` deadline), counts it as one interval, does not raise the interval for it, and polls again (§14.2 rule 9, §14.6). The status decides, not the body: any `429` is that wait, a `429 slow_down` included, and a `5xx` is a transport failure whatever its body (rule 6). The refusal at `plan` of an unknown profile enumeration now quotes the raw value the read carried (length-capped), as §27.6.2 item 4 asks of an SDK that keeps the value.
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a
@@ -744,6 +744,20 @@ strings (not secrets). An `OAuth2ErrorResponse` body from `/oauth2/*` surfaces
 as `OAuthProtocolError`, a sub-type of `AuthError` — existing
 `catch (AuthError e)` code keeps working unchanged.
 
+### Choosing the provider — `idp_hint` (§12.1, §26.2 rule 8)
+
+```java
+// Sends the browser straight to the provider instead of the chooser: axiam_idp_hint=corp-okta, once.
+AuthorizationRequest request = client.oidcBegin(config, redirectUri, "openid", null, "corp-okta");
+
+// Under PAR the hint rides the pushed body, never the redirect URL.
+PushedAuthorizationRequest pushed = client.oidcPar(config, request, redirectUri, "openid", null, null, "corp-okta");
+```
+
+The value is a provider UUID, a `provider_slug` or a branded kind name (`google`, `github`, `facebook`,
+`apple`, `microsoft`). The SDK refuses an empty value and one over 256 UTF-8 bytes and validates nothing
+else; the server ignores a hint it cannot resolve. There is no `kc_idp_hint`.
+
 ### Spring MVC login routes (`io.axiam.sdk.spring.AxiamOidcLoginRoutes`)
 
 A ready-made login-redirect + callback `RouterFunction<ServerResponse>` pair
@@ -817,6 +831,42 @@ the double redemption to avoid. On failure, obtain a *new* ticket.
 
 Both halves run in [`examples/uma-resource-server`](examples/uma-resource-server)
 and [`examples/uma-client`](examples/uma-client).
+
+## Native sign-in with a provider ID token (§37)
+
+A mobile or desktop app that uses Google, Apple or Facebook's *native* SDK holds an ID token the
+provider signed for that app. `loginWithProviderIdToken` presents it to AXIAM's token endpoint
+(`grant_type=urn:axiam:params:oauth:grant-type:provider-id-token`) and returns the client's ordinary
+`OidcTokenSet`. It is not a token exchange (§15) and never falls back to one.
+
+```java
+// A public client (the normal registration of an app) sends client_id and nothing else.
+AxiamClient client = AxiamClient.builder("https://axiam.example.com", "33333333-3333-3333-3333-333333333333")
+        .oidcClientId("my-mobile-app")
+        .build();
+
+// 1. A fresh pair per attempt. Give the provider's SDK `hashed`; keep `raw` for step 2 only.
+ProviderNonce nonce = AxiamClient.nativeNonce();          // raw is Sensitive; hashed is lower-case hex
+String providerIdToken = googleSignIn(nonce.hashed());    // the provider's own SDK, not ours
+
+// 2. Send AXIAM the RAW nonce (never the hash). `provider` is a UUID or provider_slug, sent verbatim.
+OidcTokenSet tokens = client.loginWithProviderIdToken(
+        "corp-google", Sensitive.of(providerIdToken), nonce.raw(),
+        List.of("openid", "profile"), null, null, null);   // scopes: none are added for you
+```
+
+What to know:
+
+- **Never retried.** The provider's token is single-use across the deployment. Every refusal of it is
+  the one generic `invalid_grant` (not refined, not retried); recover with a *fresh* provider token
+  and a *fresh* nonce. A transport failure after the request left is a `NetworkError` and
+  indeterminate. `consent_required` has spent the token as well.
+- **No scopes means no `openid`** and so no ID token in the response; pass `openid` for `idClaims`,
+  validated under §12.4 against the raw nonce.
+- **Secrets.** Neither the provider ID token nor the raw nonce is logged, stored or placed in an
+  error; hold the raw nonce for the length of the attempt only. The result is returned, not adopted as
+  the client's credential (as `loginClientCredentials`); refresh it with `oidcRefresh`.
+- `loginWithProviderIdTokenAsync` is the `CompletableFuture` twin.
 
 ## Device authorization grant (§14)
 

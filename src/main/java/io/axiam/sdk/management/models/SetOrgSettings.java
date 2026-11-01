@@ -49,6 +49,11 @@ import java.util.List;
  * @param opaqueMode the server's opaque_mode field
  * @param opaqueSuite the server's opaque_suite field
  * @param passwordHistoryCount the server's password_history_count field
+ * @param refreshReuseResponse G-C (#818) — defaulted to {@code revoke_session} (D-N2): an API
+ *     client written before the field lands on the new default. {@code refuse} restores the 1.1.x
+ *     behaviour. Because it is defaulted, a {@code PUT} from a client written before 1.2.0 (which
+ *     omits it) sets an organization on {@code refuse} back to {@code revoke_session} — the stricter
+ *     direction (F4-W1-06).
  * @param refreshTokenLifetimeSecs the server's refresh_token_lifetime_secs field
  * @param requireDigits the server's require_digits field
  * @param requireLowercase the server's require_lowercase field
@@ -93,6 +98,7 @@ public record SetOrgSettings(
         @JsonProperty("opaque_mode") @Nullable String opaqueMode,
         @JsonProperty("opaque_suite") @Nullable String opaqueSuite,
         @JsonProperty("password_history_count") Integer passwordHistoryCount,
+        @JsonProperty("refresh_reuse_response") @Nullable RefreshReuseResponse refreshReuseResponse,
         @JsonProperty("refresh_token_lifetime_secs") Long refreshTokenLifetimeSecs,
         @JsonProperty("require_digits") Boolean requireDigits,
         @JsonProperty("require_lowercase") Boolean requireLowercase,
@@ -137,6 +143,7 @@ public record SetOrgSettings(
      * @param opaqueMode see the record component
      * @param opaqueSuite see the record component
      * @param passwordHistoryCount see the record component
+     * @param refreshReuseResponse see the record component
      * @param refreshTokenLifetimeSecs see the record component
      * @param requireDigits see the record component
      * @param requireLowercase see the record component

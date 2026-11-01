@@ -42,6 +42,7 @@ import java.util.UUID;
  * @param metadataUrl the server's metadata_url field
  * @param mintsClientSecret Whether AXIAM mints this provider's client secret itself, per exchange,
  *     rather than sending a stored one. True only for an Apple config with both identifiers set.
+ * @param nativeLogin Native sign-in trust (G-A).
  * @param pkceRequired Whether PKCE is sent on the authorization request. Always true for the
  *     OAuth2 variant regardless of the stored flag.
  * @param protocol the server's protocol field
@@ -78,6 +79,7 @@ public record FederationConfigResponse(
         @JsonProperty("idp_metadata_signing_cert_pem") @Nullable String idpMetadataSigningCertPem,
         @JsonProperty("metadata_url") @Nullable String metadataUrl,
         @JsonProperty("mints_client_secret") Boolean mintsClientSecret,
+        @JsonProperty("native_login") NativeLoginTrustResponse nativeLogin,
         @JsonProperty("pkce_required") Boolean pkceRequired,
         @JsonProperty("protocol") String protocol,
         @JsonProperty("provider") String provider,

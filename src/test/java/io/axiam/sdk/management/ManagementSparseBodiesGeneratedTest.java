@@ -16,9 +16,12 @@ import io.axiam.sdk.management.models.ClientProfile;
 import io.axiam.sdk.management.models.DirectoryKind;
 import io.axiam.sdk.management.models.EmailConfigOverride;
 import io.axiam.sdk.management.models.FailurePolicy;
+import io.axiam.sdk.management.models.NativeLoginTrustRequest;
+import io.axiam.sdk.management.models.OAuth2Policy;
 import io.axiam.sdk.management.models.ParseSamlSpMetadata;
 import io.axiam.sdk.management.models.ProviderConfigSmtp;
 import io.axiam.sdk.management.models.ReactorMode;
+import io.axiam.sdk.management.models.RefreshReuseResponse;
 import io.axiam.sdk.management.models.RetryPolicy;
 import io.axiam.sdk.management.models.TenantSettingsOverride;
 import io.axiam.sdk.management.models.TenantStatus;
@@ -143,6 +146,36 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(EmailConfigOverride.builder().build());
     }
 
+    /** §27.4 rule 5 for NativeLoginTrustRequest: each setter sets exactly its own key. */
+    @Test
+    void nativeLoginTrustRequestSendsOnlyWhatWasSet() throws Exception {
+        assertKeys(NativeLoginTrustRequest.builder()
+                .clientIds(java.util.List.of()).build(), "client_ids");
+        assertKeys(NativeLoginTrustRequest.builder()
+                .enabled(true).build(), "enabled");
+        assertKeys(NativeLoginTrustRequest.builder()
+                .maxTokenAgeSecs(1L).build(), "max_token_age_secs");
+        assertKeys(NativeLoginTrustRequest.builder()
+                .clientIds(java.util.List.of())
+                .enabled(true)
+                .maxTokenAgeSecs(1L)
+                .build(),
+                "client_ids", "enabled", "max_token_age_secs");
+        assertKeys(NativeLoginTrustRequest.builder().build());
+    }
+
+    /** §27.4 rule 5 for OAuth2Policy: each setter sets exactly its own key. */
+    @Test
+    void oAuth2PolicySendsOnlyWhatWasSet() throws Exception {
+        assertKeys(OAuth2Policy.builder()
+                .refreshReuseResponse(RefreshReuseResponse.REVOKE_SESSION).build(), "refresh_reuse_response");
+        assertKeys(OAuth2Policy.builder()
+                .refreshReuseResponse(RefreshReuseResponse.REVOKE_SESSION)
+                .build(),
+                "refresh_reuse_response");
+        assertKeys(OAuth2Policy.builder().build());
+    }
+
     /** §27.4 rule 5 for ParseSamlSpMetadata: each setter sets exactly its own key. */
     @Test
     void parseSamlSpMetadataSendsOnlyWhatWasSet() throws Exception {
@@ -216,6 +249,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(TenantSettingsOverride.builder()
                 .passwordHistoryCount(1).build(), "password_history_count");
         assertKeys(TenantSettingsOverride.builder()
+                .refreshReuseResponse(RefreshReuseResponse.REVOKE_SESSION).build(), "refresh_reuse_response");
+        assertKeys(TenantSettingsOverride.builder()
                 .refreshTokenLifetimeSecs(1L).build(), "refresh_token_lifetime_secs");
         assertKeys(TenantSettingsOverride.builder()
                 .requireDigits(true).build(), "require_digits");
@@ -263,6 +298,7 @@ class ManagementSparseBodiesGeneratedTest {
                 .opaqueMode("example")
                 .opaqueSuite("example")
                 .passwordHistoryCount(1)
+                .refreshReuseResponse(RefreshReuseResponse.REVOKE_SESSION)
                 .refreshTokenLifetimeSecs(1L)
                 .requireDigits(true)
                 .requireLowercase(true)
@@ -282,10 +318,10 @@ class ManagementSparseBodiesGeneratedTest {
                 "hibp_check_enabled", "lockout_backoff_multiplier", "lockout_duration_secs",
                 "max_cert_validity_days", "max_failed_login_attempts", "max_lockout_duration_secs",
                 "mfa_challenge_lifetime_secs", "mfa_enforced", "min_length", "opaque_ksf",
-                "opaque_mode", "opaque_suite", "password_history_count", "refresh_token_lifetime_secs",
-                "require_digits", "require_lowercase", "require_symbols", "require_uppercase",
-                "saml_idp_enabled", "sensitive_scopes_enabled", "server_cert_allowed_names",
-                "ssf_enabled", "webauthn_user_verification");
+                "opaque_mode", "opaque_suite", "password_history_count", "refresh_reuse_response",
+                "refresh_token_lifetime_secs", "require_digits", "require_lowercase",
+                "require_symbols", "require_uppercase", "saml_idp_enabled", "sensitive_scopes_enabled",
+                "server_cert_allowed_names", "ssf_enabled", "webauthn_user_verification");
         assertKeys(TenantSettingsOverride.builder().build());
     }
 
@@ -416,6 +452,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateFederationConfigRequest.builder()
                 .metadataUrl("example").build(), "metadata_url");
         assertKeys(UpdateFederationConfigRequest.builder()
+                .nativeLogin(new NativeLoginTrustRequest(null, null, null)).build(), "native_login");
+        assertKeys(UpdateFederationConfigRequest.builder()
                 .provider("example").build(), "provider");
         assertKeys(UpdateFederationConfigRequest.builder()
                 .providerSlug("example").build(), "provider_slug");
@@ -445,6 +483,7 @@ class ManagementSparseBodiesGeneratedTest {
                 .idpMetadataSigningCertPem("example")
                 .idpSigningCertPem("example")
                 .metadataUrl("example")
+                .nativeLogin(new NativeLoginTrustRequest(null, null, null))
                 .provider("example")
                 .providerSlug("example")
                 .requirePkce(true)
@@ -457,8 +496,8 @@ class ManagementSparseBodiesGeneratedTest {
                 "allowed_issuer_tenants", "apple_key_id", "apple_team_id", "attribute_map",
                 "authorization_endpoint", "button_icon", "client_id", "client_secret",
                 "enabled", "idp_metadata_signing_cert_pem", "idp_signing_cert_pem",
-                "metadata_url", "provider", "provider_slug", "require_pkce", "scopes",
-                "token_endpoint", "token_exchange", "userinfo_endpoint");
+                "metadata_url", "native_login", "provider", "provider_slug", "require_pkce",
+                "scopes", "token_endpoint", "token_exchange", "userinfo_endpoint");
         assertKeys(UpdateFederationConfigRequest.builder().build());
         assertExplicitNull(UpdateFederationConfigRequest.builder().appleKeyId(null).build(), "apple_key_id");
         assertExplicitNull(UpdateFederationConfigRequest.builder().appleTeamId(null).build(), "apple_team_id");
@@ -538,6 +577,8 @@ class ManagementSparseBodiesGeneratedTest {
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .browserSso(true).build(), "browser_sso");
         assertKeys(UpdateOAuth2ClientRequest.builder()
+                .defaultIdp(EXAMPLE_ID).build(), "default_idp");
+        assertKeys(UpdateOAuth2ClientRequest.builder()
                 .dpopBoundAccessTokens(true).build(), "dpop_bound_access_tokens");
         assertKeys(UpdateOAuth2ClientRequest.builder()
                 .dpopRequireNonce(true).build(), "dpop_require_nonce");
@@ -580,6 +621,7 @@ class ManagementSparseBodiesGeneratedTest {
                 .backchannelTokenDeliveryMode("example")
                 .backchannelUserCodeParameter(true)
                 .browserSso(true)
+                .defaultIdp(EXAMPLE_ID)
                 .dpopBoundAccessTokens(true)
                 .dpopRequireNonce(true)
                 .grantTypes(java.util.List.of())
@@ -601,7 +643,7 @@ class ManagementSparseBodiesGeneratedTest {
                 "allowed_resources", "authn_request_params", "backchannel_authentication_request_signing_alg",
                 "backchannel_client_notification_endpoint", "backchannel_logout_uri",
                 "backchannel_token_delivery_mode", "backchannel_user_code_parameter",
-                "browser_sso", "dpop_bound_access_tokens", "dpop_require_nonce",
+                "browser_sso", "default_idp", "dpop_bound_access_tokens", "dpop_require_nonce",
                 "grant_types", "jwks", "jwks_uri", "name", "post_logout_redirect_uris",
                 "profile", "redirect_uris", "require_par", "scopes", "self_signed_tls_client_auth_thumbprints",
                 "tls_client_auth_san_dns", "tls_client_auth_san_uri", "tls_client_auth_subject_dn",
@@ -824,7 +866,7 @@ class ManagementSparseBodiesGeneratedTest {
     void everySparseBodyIsCovered() {
         long cases = java.util.Arrays.stream(ManagementSparseBodiesGeneratedTest.class.getDeclaredMethods())
                 .filter(m -> m.getName().endsWith("SendsOnlyWhatWasSet")).count();
-        assertEquals(21L, cases,
+        assertEquals(23L, cases,
                 "one case per sparse body the schema closure declares");
     }
 

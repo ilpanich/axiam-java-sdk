@@ -27,6 +27,9 @@ import java.util.UUID;
  * @param browserSso X7.3 — echoed for the same reason.
  * @param clientId the server's client_id field
  * @param createdAt the server's created_at field
+ * @param defaultIdp G-B (#817) — the provider this client's sign-in page starts with when a
+ *     request carries no hint; absent for none. Echoed as stored: a value whose provider has since
+ *     been disabled is shown, and ignored at the authorization endpoint.
  * @param dpopBoundAccessTokens the server's dpop_bound_access_tokens field
  * @param dpopRequireNonce the server's dpop_require_nonce field
  * @param grantTypes the server's grant_types field
@@ -76,6 +79,7 @@ public record OAuth2ClientResponse(
         @JsonProperty("browser_sso") Boolean browserSso,
         @JsonProperty("client_id") String clientId,
         @JsonProperty("created_at") OffsetDateTime createdAt,
+        @JsonProperty("default_idp") @Nullable UUID defaultIdp,
         @JsonProperty("dpop_bound_access_tokens") Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") Boolean dpopRequireNonce,
         @JsonProperty("grant_types") List<String> grantTypes,

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * The UpdateOAuth2ClientRequest schema from the server's OpenAPI document.
@@ -28,6 +29,9 @@ import java.util.List;
  * @param backchannelTokenDeliveryMode G-7 — see the create DTO. {@code ""} clears.
  * @param backchannelUserCodeParameter G-7 — {@code true} refused, as on create.
  * @param browserSso X7.3 — see [{@code CreateOAuth2ClientRequest::browser_sso}].
+ * @param defaultIdp G-B (#817) — see [{@code CreateOAuth2ClientRequest::default_idp}]. Omitted
+ *     leaves it; {@code null} clears it; an id is held to the create rule ({@code 400} unless it names
+ *     a provider this tenant can sign in with).
  * @param dpopBoundAccessTokens the server's dpop_bound_access_tokens field
  * @param dpopRequireNonce the server's dpop_require_nonce field
  * @param grantTypes the server's grant_types field
@@ -63,6 +67,7 @@ public record UpdateOAuth2ClientRequest(
         @JsonProperty("backchannel_token_delivery_mode") @Nullable String backchannelTokenDeliveryMode,
         @JsonProperty("backchannel_user_code_parameter") @Nullable Boolean backchannelUserCodeParameter,
         @JsonProperty("browser_sso") @Nullable Boolean browserSso,
+        @JsonProperty("default_idp") @Nullable UUID defaultIdp,
         @JsonProperty("dpop_bound_access_tokens") @Nullable Boolean dpopBoundAccessTokens,
         @JsonProperty("dpop_require_nonce") @Nullable Boolean dpopRequireNonce,
         @JsonProperty("grant_types") @Nullable List<String> grantTypes,
@@ -113,6 +118,7 @@ public record UpdateOAuth2ClientRequest(
         private @Nullable String backchannelTokenDeliveryMode;
         private @Nullable Boolean backchannelUserCodeParameter;
         private @Nullable Boolean browserSso;
+        private @Nullable UUID defaultIdp;
         private @Nullable Boolean dpopBoundAccessTokens;
         private @Nullable Boolean dpopRequireNonce;
         private @Nullable List<String> grantTypes;
@@ -216,6 +222,17 @@ public record UpdateOAuth2ClientRequest(
          */
         public Builder browserSso(Boolean browserSso) {
             this.browserSso = browserSso;
+            return this;
+        }
+
+        /**
+         * Sets default_idp.
+         *
+         * @param defaultIdp the value to send
+         * @return this builder
+         */
+        public Builder defaultIdp(UUID defaultIdp) {
+            this.defaultIdp = defaultIdp;
             return this;
         }
 
@@ -412,7 +429,7 @@ public record UpdateOAuth2ClientRequest(
          * @return a UpdateOAuth2ClientRequest carrying exactly the fields that were set
          */
         public UpdateOAuth2ClientRequest build() {
-            return new UpdateOAuth2ClientRequest(allowedResources, authnRequestParams, backchannelAuthenticationRequestSigningAlg, backchannelClientNotificationEndpoint, backchannelLogoutUri, backchannelTokenDeliveryMode, backchannelUserCodeParameter, browserSso, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
+            return new UpdateOAuth2ClientRequest(allowedResources, authnRequestParams, backchannelAuthenticationRequestSigningAlg, backchannelClientNotificationEndpoint, backchannelLogoutUri, backchannelTokenDeliveryMode, backchannelUserCodeParameter, browserSso, defaultIdp, dpopBoundAccessTokens, dpopRequireNonce, grantTypes, jwks, jwksUri, name, postLogoutRedirectUris, profile, redirectUris, requirePar, scopes, selfSignedTlsClientAuthThumbprints, tlsClientAuthSanDns, tlsClientAuthSanUri, tlsClientAuthSubjectDn, tlsClientCertificateBoundAccessTokens, tokenEndpointAuthMethod);
         }
     }
 }
