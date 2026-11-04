@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Contract 1.66** (CONTRACT.md, `openapi.json` 1.2.0 and `management-registry.json` re-vendored byte for
-  byte from `ilpanich/axiam` `a916544`; `proto/` unchanged; spec digest
+  byte from `ilpanich/axiam` `5f9d079`; `proto/` unchanged; spec digest
   `sha256:09419a6e…4656e`). **No API change**: the regenerated management surface is identical. Contract
   1.66 binds a federated sign-in to the client that started it (§12.1 rule 12b): `ssoStart`,
   `ssoStartOauth2` and the SAML login answer with the `__Host-axiam_fed_bind` cookie and the completions refuse
