@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-04
+
 ### Added
 
 - **Contract 1.66** (CONTRACT.md, `openapi.json` 1.2.0 and `management-registry.json` re-vendored byte for
@@ -38,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `oidcRefresh` is one wire call shared by every waiter of a burst.
 - Tests `parIdpHintFromBeginUrlPushed` and `parIdpHintArgumentWins` (§26.6).
 
+- Native sign-in with a provider ID token and idp_hint (contract 1.65 §37)
+
 ### Changed
 
 - **Server floor:** federation-config admin calls (`federation.create_config`, `get_config`, `list_configs`, `update_config`) of this 1.2-line SDK need an AXIAM server **1.2.0 or later**: `FederationConfigResponse.native_login` is required from 1.2.0, and a response from an older server fails to decode (a Jackson `MismatchedInputException`).
@@ -56,9 +60,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means the session is over; `oidcRefresh`'s single-flight guard is what keeps this SDK from causing it, and
   refreshing the same token from two places is a defect.
 
+- re-vendor CONTRACT.md 1.66 as amended at ilpanich/axiam 5f9d079
+
+- re-sync contract 1.66 and openapi.json; confirm the federated sign-in cookie binding (§12.1 rule 12b)
+
+- re-vendor openapi.json and the management registry (logout/reset-mfa 500, D-N44)
+
+- re-vendor openapi.json and the management registry (end_session 500, D-N42)
+
+- re-vendor contract 1.65, openapi 1.2.0 and the management registry
+
 ### Fixed
 
 - **No redirect from an `/oauth2/*` POST (C165-23, C165-25; §12.1 rule 3).** Every `/oauth2/*` form POST (`oidcExchange`, `oidcRefresh`, client credentials, PAR, introspect, revoke, token exchange, device authorization, and the device and CIBA polls) now rides a redirect-free client, so a `307`/`308` can no longer replay a `refresh_token` or `client_secret` to another host; a `3xx` is a `NetworkError`, and it is decided by the status before the body, so a `3xx` carrying `{"error":…}` is no longer an `OAuthProtocolError`.
+
+- Contract 1.65 review sweep 2 (C165-23, C165-25)
+
+- Contract 1.65 review findings (C165-04, C165-11)
 
 ## [1.1.3] - 2026-10-29
 
