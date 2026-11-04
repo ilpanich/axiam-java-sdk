@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Contract 1.66** (CONTRACT.md, `openapi.json` 1.2.0 and `management-registry.json` re-vendored byte for
+  byte from `ilpanich/axiam` `a916544`; `proto/` unchanged; spec digest
+  `sha256:09419a6e…4656e`). **No API change**: the regenerated management surface is identical. Contract
+  1.66 binds a federated sign-in to the client that started it (§12.1 rule 12b): `ssoStart`,
+  `ssoStartOauth2` and the SAML login answer with the `__Host-axiam_fed_bind` cookie and the completions refuse
+  with `401` without it, so the start and the completion of one sign-in must go through the same
+  `AxiamClient` (one §4 cookie jar). The optional `reauthenticate` input (§12.1 rule 12c) is not exposed.
+- Test `ssoStartBindingCookieIsPresentedOnCompleteFromSameClientOnly` (§12.1 rule 12b): the
+  `Set-Cookie: axiam_fed_bind=…` of an `ssoStart` response is presented on the following `ssoComplete`
+  from the same client and absent from a second client's. It passes against the existing §4 jar; no code
+  change was needed.
 - **Contract 1.65** (CONTRACT.md, `openapi.json` 1.2.0 and `management-registry.json` re-vendored byte for
   byte from `ilpanich/axiam` `76d35d9`; `proto/` unchanged).
 - **Native sign-in with a provider ID token (§37).**
