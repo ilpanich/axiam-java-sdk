@@ -153,6 +153,62 @@ class AxiamClientSsoTest {
         }
     }
 
+    /**
+     * CONTRACT.md &sect;12.1 rule 12b (contract 1.66): the browser-binding cookie an
+     * {@code ssoStart} response sets is presented on the following {@code ssoComplete}
+     * from the SAME client (one &sect;4 jar), and never on a second client's.
+     */
+    @Test
+    void ssoStartBindingCookieIsPresentedOnCompleteFromSameClientOnly() throws Exception {
+        String binding = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 43 chars, unpadded base64url
+        assertEquals(43, binding.length());
+        String completeBody = "{\"user_id\":\"11111111-1111-1111-1111-111111111111\","
+                + "\"session_id\":\"22222222-2222-2222-2222-222222222222\","
+                + "\"expires_in\":900,\"redirect_uri\":\"https://app.example.com/dashboard\"}";
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Set-Cookie", "axiam_fed_bind=" + binding + "; Path=/; HttpOnly; SameSite=Strict")
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"authorize_url\":\"https://idp.example.com/authorize\",\"state\":\"state-abc\",\"expires_in_secs\":600}"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody(completeBody));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody(completeBody));
+            server.start();
+
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), TENANT_ID)
+                    .orgId(UUID.fromString(ORG_ID))
+                    .build();
+                 AxiamClient other = AxiamClient.builder(server.url("/").toString(), TENANT_ID)
+                    .orgId(UUID.fromString(ORG_ID))
+                    .build()) {
+                client.ssoStart("55555555-5555-5555-5555-555555555555", "https://app.example.com/sso-cb");
+                client.ssoComplete("state-abc", "code-abc");
+                other.ssoComplete("state-abc", "code-abc");
+            }
+
+            RecordedRequest start = server.takeRequest();
+            assertEquals("/api/v1/auth/federation/oidc/start", start.getPath());
+
+            RecordedRequest sameClient = server.takeRequest();
+            assertEquals("/api/v1/auth/federation/oidc/callback", sameClient.getPath());
+            String cookie = sameClient.getHeader("Cookie");
+            assertTrue(cookie != null && cookie.contains("axiam_fed_bind=" + binding),
+                    "the completion from the starting client must present the binding cookie, got: " + cookie);
+
+            RecordedRequest secondClient = server.takeRequest();
+            assertEquals("/api/v1/auth/federation/oidc/callback", secondClient.getPath());
+            String otherCookie = secondClient.getHeader("Cookie");
+            assertTrue(otherCookie == null || !otherCookie.contains("axiam_fed_bind"),
+                    "a second client must not present another client's binding cookie, got: " + otherCookie);
+        }
+    }
+
     private static String fakeAccessToken() {
         String header = base64Url("{\"alg\":\"EdDSA\"}");
         String payload = base64Url("{\"sub\":\"11111111-1111-1111-1111-111111111111\","
