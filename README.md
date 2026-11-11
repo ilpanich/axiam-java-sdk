@@ -321,7 +321,7 @@ and the two `SupportedVersions` constants ever stop agreeing.
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>1.3.0</version>
+  <version>1.3.1</version>
 </dependency>
 ```
 
@@ -335,7 +335,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>1.3.0</version>
+      <version>1.3.1</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -347,7 +347,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:1.3.0")
+    implementation("io.github.ilpanich:axiam-sdk:1.3.1")
 }
 ```
 
@@ -355,7 +355,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:1.3.0"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.3.1"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```
@@ -1671,8 +1671,8 @@ dependency**:
 ```kotlin
 // build.gradle.kts
 implementation("io.github.ilpanich:axiam-sdk:<version>")
-implementation("androidx.credentials:credentials:1.3.0")
-implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+implementation("androidx.credentials:credentials:1.3.1")
+implementation("androidx.credentials:credentials-play-services-auth:1.3.1")
 
 val challenge = client.webauthnRegisterStart()
 
