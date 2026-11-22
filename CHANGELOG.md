@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Monthly dependency refresh (2026-11): `amqp-client` 5.38.0; the optional/provided Spring integration now compiles against Spring Framework 7.1.0 and Spring Boot 4.2.0 (`spring-webmvc`, `spring-boot-starter-security`; `spring-test` in tests); the Spring Boot example moves to `spring-boot-starter-parent` 4.2.0. Java support unchanged (21 floor, 25 LTS, 27 newest).
+
 ## [1.3.1] - 2026-11-11
 
 ### Changed
