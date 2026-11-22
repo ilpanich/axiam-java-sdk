@@ -21,6 +21,14 @@ import java.util.UUID;
  * @param id the server's id field
  * @param ipAddress the server's ip_address field
  * @param metadata the server's metadata field
+ * @param organizationId The organization a **system-partition** row (nil {@code tenant_id})
+ *     concerns, recorded only where the server resolved it with certainty (SA-02, N1): a deleted
+ *     tenant's organization, a verified SCIM token's tenant's, or an organization or tenant the
+ *     request's path names and that exists. {@code GET /api/v1/audit-logs/system} returns a row only
+ *     to an organization principal of this organization, and a row without one to nobody. Always
+ *     {@code None} on a tenant's own rows, whose organization is their tenant's, and on every system
+ *     row written before the field existed. Omitted from the serialized form when {@code None}, so an
+ *     existing row's export line and dead-letter line are what they were.
  * @param outcome the server's outcome field
  * @param resourceId the server's resource_id field
  * @param tenantId the server's tenant_id field
@@ -35,6 +43,7 @@ public record AuditLogEntry(
         @JsonProperty("id") UUID id,
         @JsonProperty("ip_address") @Nullable String ipAddress,
         @JsonProperty("metadata") JsonNode metadata,
+        @JsonProperty("organization_id") @Nullable UUID organizationId,
         @JsonProperty("outcome") AuditOutcome outcome,
         @JsonProperty("resource_id") @Nullable UUID resourceId,
         @JsonProperty("tenant_id") UUID tenantId,

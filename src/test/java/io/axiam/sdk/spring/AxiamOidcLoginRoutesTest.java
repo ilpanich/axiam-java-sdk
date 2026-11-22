@@ -37,6 +37,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class AxiamOidcLoginRoutesTest {
 
+    /** The value the login glue would have set as the binding cookie for the entries these tests pre-store. */
+    private static final String BINDING = "binding-cookie-value-of-the-browser-that-started-the-login";
+
     private static final List<HttpMessageConverter<?>> CONVERTERS =
             List.of(new StringHttpMessageConverter(), new MappingJackson2HttpMessageConverter());
 
@@ -122,12 +125,13 @@ class AxiamOidcLoginRoutesTest {
                     .oidcClientId("my-app").build()) {
                 MemoryOidcStateStore store = new MemoryOidcStateStore();
                 store.save(new OidcStateEntry("state-1", "nonce-1", io.axiam.sdk.Sensitive.of("verifier-1"),
-                        "https://app.example.com/oidc/callback", "/dashboard"));
+                        "https://app.example.com/oidc/callback", "/dashboard", OidcLoginBinding.digest(BINDING)));
 
                 RouterFunction<ServerResponse> routes = AxiamOidcLoginRoutes.routes(client, store,
                         new AxiamOidcLoginRoutes.Options("/oidc/login", "/oidc/callback", "https://app.example.com/oidc/callback"));
 
-                MockHttpServletResponse response = dispatch(routes, "GET", "/oidc/callback?state=state-1&code=code-1");
+                MockHttpServletResponse response = dispatch(routes, "GET", "/oidc/callback?state=state-1&code=code-1",
+                        new jakarta.servlet.http.Cookie("__Host-axiam_oidc_bind", BINDING));
 
                 assertEquals(302, response.getStatus());
                 assertEquals("/dashboard", response.getHeader("Location"));
@@ -152,12 +156,13 @@ class AxiamOidcLoginRoutesTest {
                     .oidcClientId("my-app").build()) {
                 MemoryOidcStateStore store = new MemoryOidcStateStore();
                 store.save(new OidcStateEntry("state-1", "nonce-1", io.axiam.sdk.Sensitive.of("verifier-1"),
-                        "https://app.example.com/oidc/callback"));
+                        "https://app.example.com/oidc/callback", null, OidcLoginBinding.digest(BINDING)));
 
                 RouterFunction<ServerResponse> routes = AxiamOidcLoginRoutes.routes(client, store,
                         new AxiamOidcLoginRoutes.Options("/oidc/login", "/oidc/callback", "https://app.example.com/oidc/callback"));
 
-                MockHttpServletResponse response = dispatch(routes, "GET", "/oidc/callback?state=state-1&code=code-1");
+                MockHttpServletResponse response = dispatch(routes, "GET", "/oidc/callback?state=state-1&code=code-1",
+                        new jakarta.servlet.http.Cookie("__Host-axiam_oidc_bind", BINDING));
 
                 assertEquals(200, response.getStatus());
                 String body = response.getContentAsString();
@@ -186,6 +191,11 @@ class AxiamOidcLoginRoutesTest {
     }
 
     private static MockHttpServletResponse dispatch(RouterFunction<ServerResponse> routes, String method, String uri) throws Exception {
+        return dispatch(routes, method, uri, null);
+    }
+
+    private static MockHttpServletResponse dispatch(RouterFunction<ServerResponse> routes, String method, String uri,
+            jakarta.servlet.http.Cookie cookie) throws Exception {
         String path = uri.contains("?") ? uri.substring(0, uri.indexOf('?')) : uri;
         MockHttpServletRequest request = new MockHttpServletRequest(method, path);
         if (uri.contains("?")) {
@@ -194,6 +204,9 @@ class AxiamOidcLoginRoutesTest {
                 String[] kv = pair.split("=", 2);
                 request.addParameter(kv[0], java.net.URLDecoder.decode(kv.length > 1 ? kv[1] : "", "UTF-8"));
             }
+        }
+        if (cookie != null) {
+            request.setCookies(cookie);
         }
         ServerRequest serverRequest = ServerRequest.create(request, CONVERTERS);
         HandlerFunction<ServerResponse> handler = routes.route(serverRequest).orElseThrow();

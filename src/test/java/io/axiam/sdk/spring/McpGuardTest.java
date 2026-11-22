@@ -108,7 +108,7 @@ class McpGuardTest {
     }
 
     private static String signEdDsa(OctetKeyPair keyPair, JWTClaimsSet claims) throws Exception {
-        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA).type(JOSEObjectType.JWT).keyID(keyPair.getKeyID()).build();
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA).type(new JOSEObjectType("at+jwt")).keyID(keyPair.getKeyID()).build();
         SignedJWT jwt = new SignedJWT(header, claims);
         jwt.sign(new Ed25519Signer(keyPair));
         return jwt.serialize();

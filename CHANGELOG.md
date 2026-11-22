@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-22
+
+Security release (security audit 2026-11-14; contract 1.68). **Three behaviour changes need
+attention before you upgrade: the login glue's browser binding and `returnTo` rule (C7, C6), and
+`@AxiamRequireRole` (N15). See "Migration" below.** CONTRACT.md, openapi.json and
+management-registry.json are re-vendored from contract 1.68, and the generated management models
+are regenerated (`AuditLogEntry`).
+
+### Security
+
+- **C7: the "Login with AXIAM" Spring glue binds the callback to the browser that started the login
+  (CONTRACT §12.8 rule 1).** `AxiamOidcLoginRoutes` sets a random `__Host-axiam_oidc_bind` cookie at
+  login and stores its SHA-256 on the state entry; the callback consumes the entry, then refuses
+  (the uniform `401`, no code exchange, no success hook) unless the presented cookie matches, and
+  clears the cookie on every response. Before this, an attacker who began a login and stopped before
+  the callback could have a victim's browser complete it (login CSRF).
+- **C6: `returnTo` is honoured only as a same-origin relative path** (§12.8 rule 3), checked when
+  stored and again before redirecting. An absolute URL, `//host`, a backslash form and a control
+  character are never followed.
+- **N15: `@AxiamRequireRole` no longer authorizes on OAuth2 scopes.** It reads only the token's
+  `roles` claim and answers 403 when the claim is absent (CONTRACT §11.2 rule 11). Before this a
+  user whose token carried a scope named like a role passed that role's guard, and a real role
+  holder whose token lacked the scope was refused.
+- **N14: the access-token guard refuses tokens that are not access tokens** (§10.1 rules 10-12):
+  a `typ` header other than `at+jwt`, any `purpose` claim, and a token with no `kid` (the
+  single-key fallback in the JWKS lookup is gone). Found in the Rust SDK; all three were
+  reproduced here against the previous code.
+- **C2 (parity): the AMQP consumer's handler receives the bytes the HMAC covered.** The handler used to
+  get the received body, which can say something the signature does not: a body with a repeated key,
+  or with content after the JSON object, verified while a first-wins reader of the delivered bytes saw
+  an unsigned value. Such bodies are now nacked, and the handler gets the verified canonical bytes.
+  (The Go regression test, forged keys followed by the signed values under case-variant keys, is
+  ported and passes on the previous code too: this SDK's HMAC covers keys case-sensitively, so that
+  exact forgery was not possible here.)
+- **Unknown-`kid` JWKS refetch cooldown (C5):** `JwksVerifier` now allows at most one JWKS refetch
+  per 60 seconds per verifier for an unknown `kid`; the previous code refetched for every forged
+  token.
+
+### Added
+
+- `io.axiam.sdk.amqp.AuthzRequester` (N2, D-9): an AMQP authorization requester. It publishes a
+  signed `AuthzRequest` with a private exclusive reply queue and accepts only the server's signed
+  response (CONTRACT §8 "Signed authorization responses"): verified with the tenant subkey over the
+  received bytes, bound to its own `tenant_id`, `correlation_id` and `nonce`, unsigned refused
+  unless the explicit `allowUnsignedResponses` opt-out is set. All four contract test vectors pass.
+- `@AxiamRequireScope` (§11.1 `require_scope`): a local check of the token's `scope` claim.
+- `AxiamAuthentication`: the identity the filter sets, exposing `roles()` (`null` when the token has
+  no usable `roles` claim, empty when it is `[]`) and `scopes()`.
+- `AxiamOidcLoginRoutes.Options.withSuccessHandler(...)`: a success hook that also receives the
+  consumed state entry and the callback `ServerRequest` (§12.8 rule 2).
+  `Options.withAllowReturnTo(...)`: an optional predicate that may widen the `returnTo` rule.
+- `OidcStateEntry.bindingDigest()` and `withBindingDigest(...)`.
+- The login route reads an optional `returnTo` query parameter (it was documented but never read).
+
+### Changed
+
+- The Spring authentication filter publishes `ROLE_<name>` for each `roles` entry and
+  `SCOPE_<scope>` for each `scope` entry. The bare scope authorities (`users:read`) are gone.
+- The AMQP consumer passes the handler the verified canonical bytes (compact JSON in wire order,
+  `hmac_signature` removed), not the delivery body.
+- `Hmac.verify` is stricter: a repeated key or trailing content makes a body fail verification.
+
+### Migration
+
+1. **`@AxiamRequireRole` (N15).** Add the `roles` scope to every client that needs it: add `roles` to
+   the scope you request (`axiam.oidc.scope`, `oidcBegin`, device, CIBA, client credentials) and ask
+   an administrator to add `roles` to the client's registered scopes. This needs a server that issues
+   the `roles` claim (AXIAM 1.67 or later). Without it every `@AxiamRequireRole` answers 403.
+   Replace scope-based authority rules (`hasAuthority("users:read")`) with
+   `hasAuthority("SCOPE_users:read")` or `@AxiamRequireScope("users:read")`.
+2. **Login glue (C7, C6).** A custom `OidcStateStore` must persist `OidcStateEntry.bindingDigest()`
+   unchanged, or every sign-in is refused. Sign-ins in flight across the upgrade fail once and restart.
+   Your `redirect_uri` must be served over HTTPS (or be plain-HTTP loopback in development) or the
+   browser drops the `__Host-` cookie and every callback fails closed. An application that relied on
+   `returnTo` carrying an absolute URL must supply `Options.withAllowReturnTo(...)`.
+3. **Access tokens (N14).** The guard refuses a `typ: JWT` access token, which is what servers older than
+   1.67 issue; upgrade the server first (or let holders refresh). Tests that mint access tokens with
+   `typ: JWT` should use `at+jwt`.
+4. **AMQP handlers (C2).** Read the delivered bytes as JSON as before; they no longer include
+   `hmac_signature` and are no longer byte-identical to the delivery body.
+
 ## [1.3.1] - 2026-11-11
 
 ### Changed

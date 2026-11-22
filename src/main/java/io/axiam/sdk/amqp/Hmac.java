@@ -1,8 +1,12 @@
 package io.axiam.sdk.amqp;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.jspecify.annotations.Nullable;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -30,7 +34,15 @@ import java.util.HexFormat;
  */
 public final class Hmac {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    /**
+     * Strict reader for a delivery body (C2): a key repeated at any depth, or any content after the
+     * JSON object, is a parse failure. Both are ways for the received bytes to say one thing to this
+     * verifier and another to whatever reads them next, and a legitimate AXIAM message has neither.
+     */
+    private static final ObjectMapper MAPPER = JsonMapper.builder()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
     private static final String ALGO = "HmacSHA256";
 
     private Hmac() {
@@ -51,14 +63,33 @@ public final class Hmac {
      * @return {@code true} if the signature is valid, {@code false} otherwise
      */
     public static boolean verify(byte[] signingKey, byte[] body) {
+        return verifiedCanonical(signingKey, body) != null;
+    }
+
+    /**
+     * Verifies {@code body} and returns the canonical bytes the HMAC covered &mdash; the one byte
+     * sequence a caller may build its view of the message from (C2).
+     *
+     * <p>The received body is never what a handler should read: it can carry whitespace, a
+     * repeated key or trailing content that the verifier's tree resolved one way and a different
+     * reader resolves another. The returned bytes are exactly the {@code HMAC-SHA256} input
+     * (the body minus {@code hmac_signature}, compact, in wire order), so what is delivered is what
+     * was signed. A body with a repeated key at any depth, or with content after the JSON object,
+     * is refused.
+     *
+     * @param signingKey the per-tenant AMQP signing secret
+     * @param body       the raw AMQP delivery body bytes
+     * @return the verified canonical bytes, or {@code null} when the body does not verify
+     */
+    static byte @Nullable [] verifiedCanonical(byte[] signingKey, byte[] body) {
         try {
             JsonNode root = MAPPER.readTree(body);
             if (!(root instanceof ObjectNode node)) {
-                return false;
+                return null;
             }
             JsonNode sigNode = node.get("hmac_signature");
             if (sigNode == null || sigNode.isNull()) {
-                return false; // §8.3 strict mode: missing signature = reject
+                return null; // §8.3 strict mode: missing signature = reject
             }
             String sigHex = sigNode.asText();
 
@@ -74,9 +105,9 @@ public final class Hmac {
             mac.init(new SecretKeySpec(signingKey, ALGO));
             byte[] computed = mac.doFinal(canonical);
 
-            return MessageDigest.isEqual(computed, expected); // constant-time compare
+            return MessageDigest.isEqual(computed, expected) ? canonical : null; // constant-time compare
         } catch (Exception e) {
-            return false; // parse failure / bad hex / bad key length -> reject, never throw
+            return null; // parse failure / bad hex / bad key length -> reject, never throw
         }
     }
 }

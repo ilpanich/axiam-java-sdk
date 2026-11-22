@@ -275,12 +275,25 @@ class AxiamAuthorizationInterceptorTest {
     }
 
     @Test
-    void requireRoleAllowsUnprefixedAuthority() throws Exception {
+    void requireRoleRefusesAnUnprefixedAuthority() throws Exception {
+        // N15 (contract 1.68): an authority named like the role is not a role. The filter used to publish
+        // every scope verbatim, so this shape was the scope-as-role bypass; roles are ROLE_-prefixed only.
         try (MockWebServer server = new MockWebServer()) {
             server.start();
             try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), "acme").build()) {
                 authenticateAs("user-123", "admin");
-                mvc(client).perform(get("/adminonly")).andExpect(status().isOk());
+                mvc(client).perform(get("/adminonly")).andExpect(status().isForbidden());
+            }
+        }
+    }
+
+    @Test
+    void requireRoleRefusesAScopeAuthorityNamedLikeTheRole() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), "acme").build()) {
+                authenticateAs("user-123", "SCOPE_admin", "SCOPE_ROLE_admin");
+                mvc(client).perform(get("/adminonly")).andExpect(status().isForbidden());
             }
         }
     }
