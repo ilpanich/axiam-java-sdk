@@ -403,7 +403,7 @@ class AxiamAuthenticationFilterTest {
 
     private static String signEdDsa(OctetKeyPair keyPair, JWTClaimsSet claims) throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID(keyPair.getKeyID())
                 .build();
         SignedJWT jwt = new SignedJWT(header, claims);
@@ -418,7 +418,7 @@ class AxiamAuthenticationFilterTest {
     private static String signEdDsaRawPayload(OctetKeyPair keyPair, java.util.Map<String, Object> payload)
             throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID(keyPair.getKeyID())
                 .build();
         com.nimbusds.jose.JWSObject jws =
@@ -430,7 +430,7 @@ class AxiamAuthenticationFilterTest {
     /** An HS256 token whose {@code kid} names the published EdDSA key. */
     private static String signHs256WithEdDsaKid(JWTClaimsSet claims) throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.HS256)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID("key-1")
                 .build();
         SignedJWT jwt = new SignedJWT(header, claims);

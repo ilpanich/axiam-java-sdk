@@ -1,10 +1,12 @@
 /**
  * Framework-free declarative authorization annotations (CONTRACT.md &sect;11).
  *
- * <p>These three annotations &mdash;
+ * <p>These four annotations &mdash;
  * {@link io.axiam.sdk.annotations.AxiamRequireAuth},
- * {@link io.axiam.sdk.annotations.AxiamRequireAccess}, and
- * {@link io.axiam.sdk.annotations.AxiamRequireRole} &mdash; declare a
+ * {@link io.axiam.sdk.annotations.AxiamRequireAccess},
+ * {@link io.axiam.sdk.annotations.AxiamRequireRole} (the token's {@code roles}
+ * claim) and {@link io.axiam.sdk.annotations.AxiamRequireScope} (its
+ * {@code scope} claim) &mdash; declare a
  * per-endpoint authorization requirement directly on a controller method or
  * type. They carry no framework dependency and live in the core jar so any
  * integration (Spring today, others in future) can enforce them; the Spring

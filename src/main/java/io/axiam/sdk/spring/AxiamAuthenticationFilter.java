@@ -19,7 +19,6 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import org.jspecify.annotations.Nullable;
 
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -30,7 +29,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
-import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -67,7 +65,8 @@ import java.util.Set;
  * ({@link JwksVerifier#verifySignatureOnlyUnchecked(String)}) is deliberately
  * never called here: a guard that checks the signature and stops is not a
  * weaker guard, it is not a guard. On success, an {@code Authentication} is
- * built from the verified subject and scope-derived authorities and set on
+ * built from the verified subject, with roles from the {@code roles} claim and scopes
+ * (under {@code SCOPE_}) from the {@code scope} claim, and set on
  * {@code SecurityContextHolder}.
  *
  * <p>{@link AuthError} maps to HTTP 401, {@link AuthzError} maps to HTTP
@@ -224,9 +223,7 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
             JWTClaimsSet claims = jwksVerifier.verifySenderConstrained(
                     token, configuredTenantId, peerCertificateThumbprint(request));
 
-            List<GrantedAuthority> authorities = scopeToAuthorities(claims);
-            var authentication = new UsernamePasswordAuthenticationToken(claims.getSubject(), null, authorities);
-            SecurityContextHolder.getContext().setAuthentication(authentication);
+            SecurityContextHolder.getContext().setAuthentication(authenticationFor(claims));
             chain.doFilter(request, response);
         } catch (AuthzError e) {
             // §28.5 rule 5: this 403 is not a §11 no_grant scope denial — no header.
@@ -252,24 +249,57 @@ public final class AxiamAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
-    /** Maps the space-separated {@code scope} claim to Spring {@link GrantedAuthority} instances. */
-    private static List<GrantedAuthority> scopeToAuthorities(JWTClaimsSet claims) {
-        String scope;
-        try {
-            scope = claims.getStringClaim("scope");
-        } catch (ParseException e) {
-            scope = null;
-        }
-        if (scope == null || scope.isBlank()) {
-            return List.of();
-        }
+    /**
+     * Builds the identity from the verified claims (CONTRACT.md &sect;11.2 rule 11; N15).
+     *
+     * <p>Roles come from the {@code roles} claim alone and become {@code ROLE_<name>}; scopes
+     * come from the {@code scope} claim alone and become {@code SCOPE_<scope>}. Nothing is ever
+     * derived from {@code scope} into a role, and a {@code roles} claim that is not a JSON array
+     * of strings is treated as absent.
+     */
+    private static AxiamAuthentication authenticationFor(JWTClaimsSet claims) {
+        List<String> roles = rolesClaim(claims);
+        List<String> scopes = scopeClaim(claims);
         List<GrantedAuthority> authorities = new ArrayList<>();
-        for (String s : scope.split(" ")) {
-            if (!s.isBlank()) {
-                authorities.add(new SimpleGrantedAuthority(s));
+        if (roles != null) {
+            for (String role : roles) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
             }
         }
-        return authorities;
+        for (String scope : scopes) {
+            authorities.add(new SimpleGrantedAuthority("SCOPE_" + scope));
+        }
+        return new AxiamAuthentication(claims.getSubject(), authorities, roles, scopes);
+    }
+
+    /** The {@code roles} claim, or {@code null} when absent or not a JSON array of non-blank strings. */
+    private static @Nullable List<String> rolesClaim(JWTClaimsSet claims) {
+        Object raw = claims.getClaim("roles");
+        if (!(raw instanceof List<?> list)) {
+            return null;
+        }
+        List<String> roles = new ArrayList<>(list.size());
+        for (Object entry : list) {
+            if (!(entry instanceof String name) || name.isBlank()) {
+                return null;
+            }
+            roles.add(name);
+        }
+        return roles;
+    }
+
+    /** The space-separated {@code scope} claim (RFC 6749 &sect;3.3), split on single spaces. */
+    private static List<String> scopeClaim(JWTClaimsSet claims) {
+        if (!(claims.getClaim("scope") instanceof String scope) || scope.isBlank()) {
+            return List.of();
+        }
+        List<String> scopes = new ArrayList<>();
+        for (String s : scope.split(" ")) {
+            if (!s.isEmpty()) {
+                scopes.add(s);
+            }
+        }
+        return scopes;
     }
 
     /** Bearer header first, then the {@code axiam_access} cookie; {@code null} when neither is present. */

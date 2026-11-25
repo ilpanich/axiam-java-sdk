@@ -321,7 +321,7 @@ and the two `SupportedVersions` constants ever stop agreeing.
 <dependency>
   <groupId>io.github.ilpanich</groupId>
   <artifactId>axiam-sdk</artifactId>
-  <version>1.3.1</version>
+  <version>1.4.0</version>
 </dependency>
 ```
 
@@ -335,7 +335,7 @@ versions:
     <dependency>
       <groupId>io.github.ilpanich</groupId>
       <artifactId>axiam-bom</artifactId>
-      <version>1.3.1</version>
+      <version>1.4.0</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -347,7 +347,7 @@ versions:
 
 ```kotlin
 dependencies {
-    implementation("io.github.ilpanich:axiam-sdk:1.3.1")
+    implementation("io.github.ilpanich:axiam-sdk:1.4.0")
 }
 ```
 
@@ -355,7 +355,7 @@ Or via the BOM:
 
 ```kotlin
 dependencies {
-    implementation(platform("io.github.ilpanich:axiam-bom:1.3.1"))
+    implementation(platform("io.github.ilpanich:axiam-bom:1.4.0"))
     implementation("io.github.ilpanich:axiam-sdk")
 }
 ```
@@ -557,14 +557,58 @@ public class DocumentController {
 }
 ```
 
-Three annotations live in the framework-free `io.axiam.sdk.annotations`
+Four annotations live in the framework-free `io.axiam.sdk.annotations`
 package:
 
 | Annotation | Effect |
 |------------|--------|
 | `@AxiamRequireAuth` | Requires an authenticated identity (401 otherwise). |
 | `@AxiamRequireAccess(action, resourceParam / resourceId, scope)` | Requires the authenticated caller to pass an AXIAM authorization check for `action` on the resolved resource. |
-| `@AxiamRequireRole({"admin", ...})` | Local check that the caller holds at least one of the named roles (no server round-trip). Coarser than `@AxiamRequireAccess`; not a substitute for it. |
+| `@AxiamRequireRole({"admin", ...})` | Local check that the verified token's **`roles` claim** contains at least one of the named roles (no server round-trip; 403 otherwise, and 403 when the token has no `roles` claim). Coarser than `@AxiamRequireAccess`; not a substitute for it. |
+| `@AxiamRequireScope({"reports:read", ...})` | Local check that the verified token's **`scope` claim** contains at least one of the named scopes (403 otherwise). Added in 1.4.0. |
+
+**`@AxiamRequireRole` reads `roles` and nothing else (1.4.0; breaking).**
+Through 1.3.x the authentication filter turned every OAuth2 *scope* into a
+Spring authority and `@AxiamRequireRole("admin")` matched an authority named
+`admin` or `ROLE_admin`, so a user whose token carried the scope `admin` passed
+the role guard whether or not they held the role, and a real admin whose token
+lacked that scope was refused (N15). A scope is chosen by the *client* and
+bounded only by its registration; it says nothing about what the user holds.
+Now:
+
+- `AxiamAuthenticationFilter` publishes each entry of the token's `roles` claim
+  as `ROLE_<name>` and each entry of `scope` as `SCOPE_<scope>`. A scope named
+  `ROLE_admin` becomes `SCOPE_ROLE_admin` and can never satisfy
+  `hasRole("admin")`. The identity is an `AxiamAuthentication`, whose `roles()`
+  is `null` when the token has no usable `roles` claim and an empty list when
+  the claim is `[]`.
+- A token with **no** `roles` claim, or one that is not an array of strings,
+  fails every `@AxiamRequireRole` with **403**. Matching is exact and
+  case-sensitive.
+- **Your application must request the `roles` scope** for the guard to work:
+  add `roles` to the scope you pass to the login (`axiam.oidc.scope`,
+  `oidcBegin`, device, CIBA or client-credentials requests), and have an
+  administrator add `roles` to the client's registered scopes. The SDK never
+  adds it for you. Without it every `@AxiamRequireRole` answers 403.
+- The `roles` claim lists the subject's **global** role names in the token's
+  tenant as of the moment the token was minted, so it can lag by up to one
+  access-token lifetime (15 minutes by default). `@AxiamRequireAccess` evaluates
+  the engine live and remains the authoritative check.
+- If you used `hasAuthority("users:read")`-style rules on the old verbatim scope
+  authorities, change them to `hasAuthority("SCOPE_users:read")` or use
+  `@AxiamRequireScope("users:read")`.
+
+**The guard refuses tokens that are not access tokens (1.4.0).** AXIAM signs its
+MFA-challenge, MFA-setup and WebAuthn-state tokens with the same key as access
+tokens. `JwksVerifier.verifyAccessToken` / `verifySenderConstrained` (and so
+`AxiamAuthenticationFilter`) now refuse, per CONTRACT §10.1 rules 10–12: a token
+whose JOSE `typ` is present and is not `at+jwt` (ASCII case ignored, with or
+without the `application/` prefix; a header with no `typ` is not refused by this
+rule); a token whose claims contain a `purpose` member; and a token with no
+`kid`, which is no longer matched to "the only key in the JWKS". An unknown
+`kid` causes at most one JWKS refetch per 60 seconds per verifier. **A guard
+fed access tokens minted by a server older than AXIAM 1.67 refuses them**
+(they carry `typ: JWT`); the holders refresh.
 
 Enforcement is by `io.axiam.sdk.spring.AxiamAuthorizationInterceptor`, a Spring
 MVC `HandlerInterceptor` auto-registered by `AxiamAutoConfiguration` (via a
@@ -777,6 +821,39 @@ silently). Additional properties: `axiam.oidc.client-id` (required),
 `axiam.oidc.client-secret` (confidential clients only), `axiam.oidc.redirect-uri`
 (required), `axiam.oidc.login-path`/`axiam.oidc.callback-path` (default
 `/oidc/login`/`/oidc/callback`), `axiam.oidc.scope`, `axiam.oidc.success-redirect`.
+
+**The callback is bound to the browser that started the login (1.4.0;
+CONTRACT §12.8, C7).** The login route sets a fresh 32-byte random value as the
+`__Host-axiam_oidc_bind` cookie (`HttpOnly; Secure; SameSite=Lax; Path=/`, no
+`Domain`, `Max-Age=600`) and stores its SHA-256 on the state entry
+(`OidcStateEntry.bindingDigest()`). The callback consumes the entry first and
+then compares the presented cookie in constant time; a missing cookie, an entry
+with no digest, or a different value is the same `401 authentication_failed`
+("unknown, expired, or already-used login state") as an unknown state, with **no
+code exchange and no success hook**. Every callback response clears the cookie.
+On an `http:` `redirect_uri` for `localhost`, `127.0.0.1` or `[::1]` — and only
+there — the cookie is named `axiam_oidc_bind` and carries no `Secure`; on plain
+HTTP to any other host the browser drops the `__Host-` cookie and every callback
+fails closed. Two logins started at once in one browser share the cookie, so the
+earlier callback is refused and the user starts again.
+
+- **Custom `OidcStateStore`:** it must persist and return
+  `OidcStateEntry.bindingDigest()` unchanged. A store that rebuilds entries from
+  a fixed column list and drops it refuses every sign-in. Sign-ins in flight
+  across the upgrade fail once and restart.
+- **`returnTo`:** the login route reads an optional `returnTo` query parameter;
+  the callback follows it only when it is a same-origin relative path (a single
+  leading `/`, no `//` or `/\` prefix, no backslash, no control character). It is
+  checked when stored and again before redirecting; a failing value is dropped
+  and the glue falls back to `successRedirect` or the JSON summary. An absolute
+  URL is never followed. `Options.withAllowReturnTo(predicate)` may widen the
+  rule (for example an allowlist of your other origins); it is consulted only for
+  values the default rule refuses, and a predicate that throws accepts nothing.
+- **Creating your session:** `Options.withSuccessHandler((tokens, entry, request) -> ...)`
+  receives the callback's `ServerRequest` (the request that completed the
+  sign-in) beside the token set and the consumed entry, so you no longer need
+  `RequestContextHolder`. The existing `Consumer<OidcTokenSet>` hook still works
+  and runs first.
 
 ## UMA 2.0 — protecting resources whose owner isn't the caller (§20)
 
@@ -1177,6 +1254,57 @@ and a message sent there is confirmed by the broker and never read. This SDK nev
 confirm as evidence that AXIAM saw a message. Against a minimal-profile server use REST or
 gRPC; `GET /health` reports `profile: minimal` and lists `amqp_authz` and
 `amqp_audit_ingestion` under `unavailable`.
+
+**The consumer's handler receives the verified bytes (1.4.0; C2).**
+`AmqpConsumer.consume` passes the handler the *canonical bytes the HMAC covered*
+— compact JSON in wire order with `hmac_signature` removed — rather than the
+delivery body. A body with a repeated key at any depth, or with content after the
+JSON object, is nacked without requeue: such a body can verify while a different
+reader of the received bytes sees a value the signature never covered. A handler
+that parsed the body as JSON needs no change; one that read `hmac_signature` from
+the bytes, or compared the bytes to the delivery, no longer finds it.
+
+### Asking for an authorization decision over AMQP (`io.axiam.sdk.amqp.AuthzRequester`, 1.4.0)
+
+`AuthzRequester` publishes a signed `AuthzRequest` on `axiam.authz.request` and
+accepts only the server's signed answer to *that* request (CONTRACT §8 "Signed
+authorization responses"):
+
+```java
+try (AuthzRequester requester = AuthzRequester.create(channel, tenantId, tenantSubkey)) {
+    AuthzRequester.Decision d = requester.check(subjectId, "documents:read", resourceId, null);
+    if (d.allowed()) { /* ... */ }
+}
+```
+
+`tenantSubkey` is the tenant's AMQP subkey for `key_version` 2 (from the AXIAM
+management API, never hardcoded). The request names a private reply queue (an
+exclusive, auto-delete, broker-named `amq.gen-…` queue) in `reply_to`, with a
+fresh unpredictable `correlation_id` and `nonce`; a reply queue that is empty or
+starts with `axiam.` is refused. A response is a decision only when it parses
+strictly (a JSON-boolean `allowed`; `tenant_id`, `nonce` and `hmac_signature`
+present; no repeated or case-variant keys; the signature the trailing member),
+its HMAC-SHA256 under your tenant's subkey verifies **over the received bytes**
+with the trailing signature member cut out (it is never re-serialized, and the
+decision is decoded from those same bytes), and its `tenant_id`, `correlation_id`
+and `nonce` match a request you still have outstanding. Anything else is nacked
+without requeue, logged as a security event that never carries a signature, and
+is never an allow: `check` keeps waiting for the genuine answer until the timeout
+(`Options.withTimeout`, default 10 s, then a `NetworkError`).
+
+**What the signature proves.** The key is your tenant's own subkey, which every
+producer of that tenant holds. A valid signature proves the response came from a
+holder of it — the server or one of your tenant's own producers — and nothing
+narrower. Where more than one service of a tenant publishes authorization
+requests, each uses its own `AuthzRequester` (so its own private reply queue) and
+the broker should deny SDK principals read access on `axiam.authz.request`.
+
+**Against a server older than 1.68** (unsigned responses) every response is
+refused. `Options.defaults().withAllowUnsignedResponses()` is an explicit,
+off-by-default opt-out for one rolling upgrade: a response with *no*
+`hmac_signature` member is then accepted on its `correlation_id` alone, flagged
+`Decision.unsigned()` and logged as a warning; a response that carries a
+signature is verified in full whatever the option says.
 
 ## Reactors — AMQP extension actors (`io.axiam.sdk.reactor`, §22)
 

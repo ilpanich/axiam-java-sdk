@@ -481,7 +481,7 @@ class JwksVerifierLocalVerificationSetTest {
 
     private static String signEdDsa(OctetKeyPair keyPair, JWTClaimsSet claims) throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID(keyPair.getKeyID())
                 .build();
         SignedJWT jwt = new SignedJWT(header, claims);
@@ -495,7 +495,7 @@ class JwksVerifierLocalVerificationSetTest {
      */
     private static String signEdDsaRawPayload(OctetKeyPair keyPair, Map<String, Object> payload) throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID(keyPair.getKeyID())
                 .build();
         JWSObject jws = new JWSObject(header, new Payload(payload));
@@ -505,7 +505,7 @@ class JwksVerifierLocalVerificationSetTest {
 
     private static String signHs256(JWTClaimsSet claims) throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.HS256)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID(KID)
                 .build();
         SignedJWT jwt = new SignedJWT(header, claims);

@@ -1,6 +1,7 @@
 package io.axiam.sdk.internal;
 
 import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSVerifier;
@@ -48,9 +49,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * Local JWT verification against the organization-wide EdDSA JWKS (D-19,
  * CONTRACT.md &sect;9's local-verify companion). Sources keys from
  * {@code {baseUrl}/oauth2/jwks} via nimbus's {@link RemoteJWKSet}, cached
- * with {@link DefaultJWKSetCache} (TTL 300s / forced-refetch cooldown 60s,
- * matching the Rust/Go/Python reference SDKs' proven defaults) and rotated
- * on an unknown {@code kid} (built into {@link RemoteJWKSet#get}).
+ * with {@link DefaultJWKSetCache} (TTL 300s) and rotated on an unknown
+ * {@code kid} (built into {@link RemoteJWKSet#get}); the unknown-{@code kid}
+ * refetch is bounded by this class's own per-verifier 60s cooldown
+ * ({@link #UNKNOWN_KID_REFETCH_COOLDOWN}), because the library's cache does not
+ * bound it.
  *
  * <p><strong>Implementation note (Assumption A5 resolved against the
  * installed nimbus-jose-jwt 10.7 sources):</strong> the "obvious" nimbus
@@ -182,6 +185,23 @@ public final class JwksVerifier {
      * verification in {@link #verifySignatureOnlyUnchecked(String)} is unaffected.
      */
     private final ReentrantLock refreshLock = new ReentrantLock();
+
+    /**
+     * CONTRACT.md &sect;12.4 rule 2: the per-verifier window within which an unknown {@code kid}
+     * causes no further JWKS fetch. A named constant, not left to {@link DefaultJWKSetCache}.
+     */
+    static final Duration UNKNOWN_KID_REFETCH_COOLDOWN = Duration.ofSeconds(60);
+
+    /** Monotonic clock for the cooldown; replaceable by tests in this package. */
+    private volatile java.util.function.LongSupplier clock = System::nanoTime;
+
+    /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #refreshLock}. */
+    private long lastFetchNanos;
+
+    /** Test seam: replaces the monotonic clock behind the unknown-kid cooldown. */
+    void setClockForTesting(java.util.function.LongSupplier nanoClock) {
+        this.clock = nanoClock;
+    }
 
     /**
      * Creates a verifier sourcing its JWKS from {@code {baseUrl}/oauth2/jwks}.
@@ -343,7 +363,7 @@ public final class JwksVerifier {
      * the documented guard entry point; every SDK route guard and middleware
      * goes through it.
      *
-     * <p>The seven rules, in order:
+     * <p>The rules, in order (rules 10-12, contract 1.68, are listed after the seven):
      * <ol>
      *   <li>{@code alg} pinned to {@code EdDSA} and checked BEFORE any keyset
      *       lookup, so {@code alg: none} and HS-family confusion are rejected
@@ -364,6 +384,17 @@ public final class JwksVerifier {
      *   <li>Rules 2 and 3 allow the policy's bounded, named clock skew
      *       (default {@link #DEFAULT_CLOCK_SKEW_SECONDS}).</li>
      * </ol>
+     * plus, because AXIAM signs its MFA-challenge, MFA-setup and WebAuthn-state tokens with
+     * the access-token key (N14), the three that make the token an <em>access</em> token:
+     * <ul>
+     *   <li>rule 10: a present JOSE {@code typ} must be {@code at+jwt} (ASCII case-insensitive,
+     *       with or without {@code application/}); a header with no {@code typ} is not refused
+     *       by this rule;</li>
+     *   <li>rule 11: a claim set containing a {@code purpose} member is refused, whatever its
+     *       value;</li>
+     *   <li>rule 12: {@code kid} is REQUIRED and selects the key; there is no fallback to "the
+     *       only key in the set".</li>
+     * </ul>
      *
      * <p>Fail-closed throughout: a required claim that is absent,
      * unparseable, or of the wrong JSON type causes rejection.
@@ -419,8 +450,22 @@ public final class JwksVerifier {
             throw new AuthError("no configured tenant to assert the token's tenant_id against");
         }
 
-        // Rule 1 — signature, alg pinned to EdDSA before any key lookup.
-        JWTClaimsSet claims = verifySignatureOnlyUnchecked(token);
+        // Rule 1 — signature, alg pinned to EdDSA before any key lookup. Rule 12
+        // (kid REQUIRED) is enforced in the key lookup itself.
+        SignedJWT jwt = verifySignatureAndParse(token);
+
+        // Rules 10 and 11 (contract 1.68; N14) — the token must be an ACCESS token.
+        // Each alone refuses every purpose token AXIAM mints; neither may be skipped
+        // because the other is present.
+        requireAccessTokenTyp(jwt.getHeader());
+        requireNoPurposeClaim(jwt);
+
+        JWTClaimsSet claims;
+        try {
+            claims = jwt.getJWTClaimsSet();
+        } catch (ParseException e) {
+            throw new AuthError("malformed claims: " + e.getMessage());
+        }
 
         Instant now = Instant.now();
         Duration skew = Duration.ofSeconds(policy.clockSkewSeconds());
@@ -495,6 +540,20 @@ public final class JwksVerifier {
      *                    or the signature is invalid
      */
     public JWTClaimsSet verifySignatureOnlyUnchecked(String token) {
+        SignedJWT jwt = verifySignatureAndParse(token);
+        try {
+            return jwt.getJWTClaimsSet();
+        } catch (ParseException e) {
+            throw new AuthError("malformed claims: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Signature verification shared by {@link #verifySignatureOnlyUnchecked(String)} and the
+     * access-token path, which needs the verified JOSE header and the raw payload for rules 10
+     * and 11 as well as the parsed claims.
+     */
+    private SignedJWT verifySignatureAndParse(String token) {
         // Algorithm pinning FIRST, straight off the raw JOSE header and
         // before any JWS parsing or JWKS lookup (CONTRACT.md §10.1 rule 1,
         // T-20-06): `alg: none` is a header shape nimbus's own JWS parser
@@ -542,12 +601,7 @@ public final class JwksVerifier {
         if (!valid) {
             throw new AuthError("invalid token signature");
         }
-
-        try {
-            return jwt.getJWTClaimsSet();
-        } catch (ParseException e) {
-            throw new AuthError("malformed claims: " + e.getMessage());
-        }
+        return jwt;
     }
 
     /**
@@ -909,6 +963,47 @@ public final class JwksVerifier {
         }
     }
 
+    /**
+     * CONTRACT.md &sect;10.1 rule 10: when the JOSE header carries {@code typ} it MUST be
+     * {@code at+jwt} (RFC 9068 &sect;2.1), compared ASCII case-insensitively with or without the
+     * {@code application/} prefix (RFC 7515 &sect;4.1.9). A header with no {@code typ} is not
+     * refused by this rule.
+     */
+    private static void requireAccessTokenTyp(JWSHeader header) {
+        JOSEObjectType typ = header.getType();
+        if (typ == null) {
+            return;
+        }
+        String value = typ.getType().toLowerCase(java.util.Locale.ROOT);
+        if (value.startsWith("application/")) {
+            value = value.substring("application/".length());
+        }
+        if (!"at+jwt".equals(value)) {
+            throw new AuthError("token typ is not an access token type (CONTRACT.md §10.1 rule 10)");
+        }
+    }
+
+    /**
+     * CONTRACT.md &sect;10.1 rule 11: a token whose claim set contains a {@code purpose} member
+     * is refused whatever its value ({@code null} included). Read from the verified payload
+     * itself, not from the claims model, which would drop an unknown or null member.
+     */
+    private static void requireNoPurposeClaim(SignedJWT jwt) {
+        JsonNode payload;
+        try {
+            payload = MAPPER.readTree(jwt.getPayload().toBytes());
+        } catch (IOException e) {
+            throw new AuthError("malformed claims: payload is not JSON");
+        }
+        if (payload == null || !payload.isObject()) {
+            throw new AuthError("malformed claims: payload is not a JSON object");
+        }
+        if (payload.has("purpose")) {
+            throw new AuthError("token carries a purpose claim and is not an access token "
+                    + "(CONTRACT.md §10.1 rule 11)");
+        }
+    }
+
     private static AuthError oidcAuthError(String reason, String message) {
         return new AuthError("id_token validation failed (" + reason + "): " + message, reason);
     }
@@ -963,6 +1058,15 @@ public final class JwksVerifier {
      * still missing.
      */
     private OctetKeyPair selectKey(JWSHeader header) {
+        // CONTRACT.md §10.1 rule 12 (contract 1.68; N14): the key is selected by the
+        // header's kid and by nothing else. A JWKMatcher built with a null key id
+        // matches EVERY key, which is the "fall back to the only key in the set"
+        // behaviour the rule removes: the MFA-challenge and WebAuthn-state tokens
+        // AXIAM signs with the access-token key carry no kid.
+        if (header.getKeyID() == null || header.getKeyID().isEmpty()) {
+            throw new AuthError("token has no kid header; the signing key is selected by kid only "
+                    + "(CONTRACT.md §10.1 rule 12)");
+        }
         JWKMatcher matcher = new JWKMatcher.Builder()
                 .keyType(KeyType.OKP)
                 .keyID(header.getKeyID())
@@ -983,6 +1087,17 @@ public final class JwksVerifier {
             if (recheckKey != null) {
                 return recheckKey;
             }
+
+            // CONTRACT.md §12.4 rule 2 (C5): at most ONE refetch per cooldown window, however
+            // many tokens present an unknown kid. nimbus's DefaultJWKSetCache refetches on
+            // every kid miss (its cooldown does not bound this path), so the window is kept
+            // here. A cold or expired cache is a plain load, but it starts the window too.
+            long nowNanos = clock.getAsLong();
+            boolean cold = jwkSource.getCachedJWKSet() == null;
+            if (!cold && lastFetchNanos != 0L && nowNanos - lastFetchNanos < UNKNOWN_KID_REFETCH_COOLDOWN.toNanos()) {
+                throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
+            }
+            lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
 
             List<JWK> matches;
             try {

@@ -24,9 +24,11 @@ import java.util.function.Consumer;
  * automatic recovery (D-13).
  *
  * <p>{@link #consume} NEVER hands an unverified delivery to the caller's
- * {@code handler} &mdash; {@link Hmac#verify(byte[], byte[])} runs first, and
- * the handler call site is structurally unreachable until it returns
- * {@code true}. The remaining outcomes follow the exact &sect;8 decision
+ * {@code handler} &mdash; {@link Hmac} verifies first, and the handler call
+ * site is structurally unreachable until it has. The handler receives the
+ * <em>verified canonical bytes</em> (the exact bytes the HMAC covered: compact
+ * JSON in wire order with {@code hmac_signature} removed), never the received
+ * body (C2); a body with a repeated key or trailing content is refused. The remaining outcomes follow the exact &sect;8 decision
  * matrix:
  *
  * <ul>
@@ -185,9 +187,12 @@ public final class AmqpConsumer {
                                             Duration allowedClockSkew, Clock clock, NonceStore nonceStore) {
         return (consumerTag, delivery) -> {
             long deliveryTag = delivery.getEnvelope().getDeliveryTag();
-            byte[] body = delivery.getBody();
+            // C2: `verified` is the exact byte sequence the HMAC covered. Everything past this
+            // point — the replay checks and the handler — reads it and never the received body,
+            // so no value the signature does not cover can reach either.
+            byte[] verified = Hmac.verifiedCanonical(signingKey, delivery.getBody());
 
-            if (!Hmac.verify(signingKey, body)) {
+            if (verified == null) {
                 // §8.4 security event: fact of failure + routing context
                 // ONLY. NEVER the received or expected HMAC value.
                 logger.warn(
@@ -198,7 +203,7 @@ public final class AmqpConsumer {
                 return; // handler is structurally unreachable for an unverified message
             }
 
-            String replayRejectReason = replayProtectionFailureReason(body, allowedClockSkew, clock, nonceStore);
+            String replayRejectReason = replayProtectionFailureReason(verified, allowedClockSkew, clock, nonceStore);
             if (replayRejectReason != null) {
                 // NEW-4 §8.4-style security event: reason + routing context
                 // ONLY, never the HMAC value (this check runs strictly after
@@ -214,7 +219,7 @@ public final class AmqpConsumer {
             }
 
             try {
-                handler.accept(body); // handler NEVER sees an unverified/replayed message
+                handler.accept(verified); // handler NEVER sees an unverified/replayed message
                 channel.basicAck(deliveryTag, false);
             } catch (ErrDrop drop) {
                 channel.basicNack(deliveryTag, false, false); // poison message, no requeue
