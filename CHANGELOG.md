@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.4.0] - 2026-11-22
+### Changed
 
+- Monthly dependency refresh (2026-11): `amqp-client` 5.38.0; the optional/provided Spring integration now compiles against Spring Framework 7.1.0 and Spring Boot 4.2.0 (`spring-webmvc`, `spring-boot-starter-security`; `spring-test` in tests); the Spring Boot example moves to `spring-boot-starter-parent` 4.2.0. Java support unchanged (21 floor, 25 LTS, 27 newest).
+
+### Security
 Security release (security audit 2026-11-14; contract 1.68). **Three behaviour changes need
 attention before you upgrade: the login glue's browser binding and `returnTo` rule (C7, C6), and
 `@AxiamRequireRole` (N15). See "Migration" below.** CONTRACT.md, openapi.json and
