@@ -8,6 +8,7 @@ import io.axiam.sdk.Sensitive;
 import io.axiam.sdk.annotations.AxiamRequireAccess;
 import io.axiam.sdk.annotations.AxiamRequireAuth;
 import io.axiam.sdk.annotations.AxiamRequireRole;
+import io.axiam.sdk.annotations.AxiamRequireScope;
 import io.axiam.sdk.errors.AuthError;
 import io.axiam.sdk.errors.AuthzError;
 import io.axiam.sdk.errors.NetworkError;
@@ -61,8 +62,10 @@ import java.util.UUID;
  *   <li>The authenticated principal is read from {@code SecurityContextHolder};
  *       absent (or anonymous) &rarr; HTTP 401 ({@code authentication_failed}).
  *       Its name is the {@code subject_id} used for the check.</li>
- *   <li>{@link AxiamRequireRole}: a local check against the caller's granted
- *       authorities &mdash; none match &rarr; HTTP 403.</li>
+ *   <li>{@link AxiamRequireRole}: a local check against the {@code roles} claim
+ *       (the {@code ROLE_} authorities) &mdash; none match, or no {@code roles}
+ *       claim &rarr; HTTP 403. {@link AxiamRequireScope}: the same against the
+ *       {@code scope} claim (the {@code SCOPE_} authorities).</li>
  *   <li>{@link AxiamRequireAccess}: the resource UUID is resolved from the
  *       static {@code resourceId} literal, else the {@code resourceParam} path
  *       variable read from {@link HandlerMapping#URI_TEMPLATE_VARIABLES_ATTRIBUTE};
@@ -83,6 +86,7 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
     private static final Logger LOG = LoggerFactory.getLogger(AxiamAuthorizationInterceptor.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String ROLE_PREFIX = "ROLE_";
+    private static final String SCOPE_PREFIX = "SCOPE_";
 
     private final AxiamClient client;
     private final @Nullable UmaChallenger challenger;
@@ -172,9 +176,10 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
 
         AxiamRequireAuth requireAuth = resolve(handlerMethod, AxiamRequireAuth.class);
         AxiamRequireRole requireRole = resolve(handlerMethod, AxiamRequireRole.class);
+        AxiamRequireScope requireScope = resolve(handlerMethod, AxiamRequireScope.class);
         AxiamRequireAccess requireAccess = resolve(handlerMethod, AxiamRequireAccess.class);
 
-        if (requireAuth == null && requireRole == null && requireAccess == null) {
+        if (requireAuth == null && requireRole == null && requireScope == null && requireAccess == null) {
             return true; // no §11 annotation on this handler
         }
 
@@ -198,6 +203,12 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
         if (requireRole != null && !hasAnyRole(authentication, requireRole.value())) {
             writeError(response, HttpServletResponse.SC_FORBIDDEN,
                     "authorization_denied", "caller lacks a required role");
+            return false;
+        }
+
+        if (requireScope != null && !hasAnyScope(authentication, requireScope.value())) {
+            writeError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "authorization_denied", "caller lacks a required scope");
             return false;
         }
 
@@ -347,15 +358,29 @@ public final class AxiamAuthorizationInterceptor implements HandlerInterceptor {
     }
 
     /**
-     * Local role check: true when the caller holds at least one of {@code roles},
-     * matched against granted-authority names verbatim and with the {@code ROLE_}
-     * prefix.
+     * Local role check (CONTRACT.md &sect;11.2 rule 11): true when the caller holds at least one
+     * of {@code roles} as a {@code ROLE_}-prefixed authority, which is how
+     * {@link AxiamAuthenticationFilter} publishes the token's {@code roles} claim and nothing
+     * else. An authority is never matched verbatim, so a scope (published as {@code SCOPE_...})
+     * cannot satisfy a role.
      */
     private static boolean hasAnyRole(Authentication authentication, String[] roles) {
+        return hasAnyPrefixed(authentication, ROLE_PREFIX, roles);
+    }
+
+    /** Local scope check: true when the token carries at least one of {@code scopes} ({@code SCOPE_} authority). */
+    private static boolean hasAnyScope(Authentication authentication, String[] scopes) {
+        return hasAnyPrefixed(authentication, SCOPE_PREFIX, scopes);
+    }
+
+    private static boolean hasAnyPrefixed(Authentication authentication, String prefix, String[] names) {
         for (GrantedAuthority authority : authentication.getAuthorities()) {
-            String name = authority.getAuthority();
-            for (String role : roles) {
-                if (name.equals(role) || name.equals(ROLE_PREFIX + role)) {
+            String granted = authority.getAuthority();
+            if (granted == null) {
+                continue;
+            }
+            for (String name : names) {
+                if (granted.equals(prefix + name)) {
                     return true;
                 }
             }

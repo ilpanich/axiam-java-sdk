@@ -154,9 +154,17 @@ class CibaTest {
                 + (interval == null ? "" : ",\"interval\":" + interval) + "}");
     }
 
+    private OctetKeyPair idTokenKey;
+
     /** A 200 token response carrying a valid ID token, with the JWKS mounted. */
     private MockResponse tokensWithIdToken(OidcConfiguration config) throws Exception {
-        OctetKeyPair key = OidcTestSupport.generateEd25519KeyPair("ciba-" + UUID.randomUUID());
+        // One signing key per test: a real OP does not rotate its key between two polls, and the
+        // verifier (CONTRACT.md §12.4 rule 2, "one refetch per cooldown window") will not chase a
+        // different kid it has just been told about inside the window.
+        if (idTokenKey == null) {
+            idTokenKey = OidcTestSupport.generateEd25519KeyPair("ciba-" + UUID.randomUUID());
+        }
+        OctetKeyPair key = idTokenKey;
         server.on("GET", "/oauth2/jwks", OidcTestSupport.jwksResponse(key.toPublicJWK()));
         String idToken = OidcTestSupport.signEdDsa(key,
                 OidcTestSupport.validIdTokenClaims(config.issuer(), CLIENT_ID, null));

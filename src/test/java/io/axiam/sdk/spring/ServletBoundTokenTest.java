@@ -224,7 +224,7 @@ class ServletBoundTokenTest {
 
     private static String signEdDsa(OctetKeyPair keyPair, JWTClaimsSet claims) throws Exception {
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.EdDSA)
-                .type(JOSEObjectType.JWT)
+                .type(new JOSEObjectType("at+jwt"))
                 .keyID(keyPair.getKeyID())
                 .build();
         SignedJWT jwt = new SignedJWT(header, claims);
