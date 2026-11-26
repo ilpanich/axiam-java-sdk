@@ -115,9 +115,10 @@ class SessionStateTest {
     }
 
     @Test
-    void decodeExtractsAllClaimsAndSplitsScopeIntoRoles() {
+    void decodeExtractsAllClaimsAndTakesRolesFromTheRolesClaimOnly() {
         String json = "{\"sub\":\"user-1\",\"tenant_id\":\"" + TENANT_UUID + "\",\"org_id\":\"" + ORG_UUID
-                + "\",\"jti\":\"jti-9\",\"scope\":\"read  write   admin\",\"exp\":1234567890}";
+                + "\",\"jti\":\"jti-9\",\"scope\":\"read  write   admin\",\"roles\":[\"editor\",\"auditor\"],"
+                + "\"exp\":1234567890}";
         SessionState.Claims claims = SessionState.decodeUnverifiedClaims(tokenWith(json));
 
         assertEquals("user-1", claims.sub());
@@ -125,17 +126,25 @@ class SessionStateTest {
         assertEquals(ORG_UUID.toString(), claims.orgId());
         assertEquals("jti-9", claims.jti());
         assertEquals(1234567890L, claims.exp());
-        assertEquals(List.of("read", "write", "admin"), claims.roles(),
-                "scope must split on whitespace runs into individual roles");
+        assertEquals(List.of("editor", "auditor"), claims.roles(),
+                "roles come from the roles claim, never from scope (CONTRACT.md §10, JAV-R1-1)");
     }
 
     @Test
-    void decodeYieldsEmptyRolesWhenScopeAbsentOrBlank() {
-        SessionState.Claims absent = SessionState.decodeUnverifiedClaims(tokenWith("{\"sub\":\"u\"}"));
-        assertTrue(absent.roles().isEmpty(), "absent scope -> empty roles");
+    void decodeNeverFillsRolesFromTheScopeClaim() {
+        SessionState.Claims scopeOnly = SessionState.decodeUnverifiedClaims(
+                tokenWith("{\"sub\":\"u\",\"scope\":\"openid admin\"}"));
+        assertTrue(scopeOnly.roles().isEmpty(), "a scope named admin is not the admin role: " + scopeOnly.roles());
+    }
 
-        SessionState.Claims blank = SessionState.decodeUnverifiedClaims(tokenWith("{\"scope\":\"   \"}"));
-        assertTrue(blank.roles().isEmpty(), "blank scope -> empty roles");
+    @Test
+    void decodeYieldsEmptyRolesWhenTheRolesClaimIsAbsentOrNotAnArrayOfStrings() {
+        assertTrue(SessionState.decodeUnverifiedClaims(tokenWith("{\"sub\":\"u\"}")).roles().isEmpty());
+        assertTrue(SessionState.decodeUnverifiedClaims(tokenWith("{\"roles\":\"admin\"}")).roles().isEmpty(),
+                "a roles claim that is a string, not an array, yields no roles");
+        assertTrue(SessionState.decodeUnverifiedClaims(tokenWith("{\"roles\":[\"a\",1]}")).roles().isEmpty(),
+                "a roles array with a non-string member yields no roles (fail closed)");
+        assertTrue(SessionState.decodeUnverifiedClaims(tokenWith("{\"roles\":[]}")).roles().isEmpty());
     }
 
     // ---- doHttpRefresh() validation guards ----------------------------------

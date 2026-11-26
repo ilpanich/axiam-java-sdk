@@ -71,7 +71,10 @@ import java.util.function.Predicate;
  * {@code returnTo} query parameter; the callback follows a stored {@code returnTo} only when it is
  * a same-origin relative path (a single leading {@code /}, no {@code //} or {@code /\} prefix, no
  * backslash, no control character). It is checked when stored and again before redirecting; one
- * that fails is dropped and the glue falls back to {@code successRedirect} or the JSON summary. An
+ * that fails is dropped and the glue falls back to {@code successRedirect} or the JSON summary. The
+ * {@code Location} header carries the percent-encoded form of the destination (existing {@code %XX}
+ * kept, any other {@code %} becomes {@code %25}, pure ASCII), so a value with a space or a
+ * non-ASCII character is followed rather than failing the callback. An
  * {@link Options#allowReturnTo()} predicate may widen the rule, for values the default rule
  * refuses.
  */
@@ -214,8 +217,23 @@ public final class AxiamOidcLoginRoutes {
 
     private static ServerResponse completeLogin(AxiamClient client, OidcStateStore store, Options options,
             ServerRequest request) {
-        // §12.8 rule 1 (d): every callback response clears the binding cookie.
+        // §12.8 rule 1 (d): every callback response clears the binding cookie, an unexpected
+        // failure (the store, an application hook) included (GLUE-R1-5). The cookie clear wins over
+        // propagating the exception to the application's handlers; the failure is logged, and the
+        // browser gets a generic 500 that echoes nothing from it.
         String clear = OidcLoginBinding.clearCookie(options.redirectUri());
+        try {
+            return completeLogin(client, store, options, request, clear);
+        } catch (RuntimeException e) {
+            LOG.warn("axiam_sdk.oidc: the login callback failed unexpectedly: {}", e.getClass().getName());
+            LOG.debug("axiam_sdk.oidc: callback failure detail", e);
+            return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "server_error",
+                    "the login could not be completed", clear);
+        }
+    }
+
+    private static ServerResponse completeLogin(AxiamClient client, OidcStateStore store, Options options,
+            ServerRequest request, String clear) {
 
         String idpError = request.param("error").orElse(null);
         if (idpError != null) {
@@ -267,7 +285,12 @@ public final class AxiamOidcLoginRoutes {
         String returnTo = entry.returnTo() != null && returnToAllowed(options, entry.returnTo()) ? entry.returnTo() : null;
         String destination = options.successRedirect() != null ? options.successRedirect() : returnTo;
         if (destination != null) {
-            return ServerResponse.status(HttpStatus.FOUND).location(URI.create(destination))
+            // Decision 7 (JAV-R1-2, GLUE-R1-1): the Location header is the percent-encoded form of
+            // the destination, written here and nowhere else. java.net.URI is not involved, so a
+            // value it would reject (a space, a malformed %) neither fails the request after the
+            // success hook has run nor skips the cookie clear.
+            return ServerResponse.status(HttpStatus.FOUND)
+                    .header(HttpHeaders.LOCATION, OidcLoginBinding.encodeRedirectLocation(destination))
                     .header(HttpHeaders.SET_COOKIE, clear).build();
         }
 
@@ -301,7 +324,10 @@ public final class AxiamOidcLoginRoutes {
         }
         try {
             return widen.test(returnTo);
-        } catch (RuntimeException e) {
+        } catch (VirtualMachineError e) {
+            throw e;
+        } catch (Throwable t) {
+            // A predicate that throws, an Error included (N4), accepts nothing.
             return false;
         }
     }

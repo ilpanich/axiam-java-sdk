@@ -180,6 +180,78 @@ class AmqpConsumerC2Test {
         assertFalse(new String(delivered, StandardCharsets.UTF_8).contains("hmac_signature"));
     }
 
+    // --- #882 pins: genuine server-shaped bodies verify and are delivered byte for byte -------------
+
+    /**
+     * A genuine message is the compact form serde_json wrote, signed as written. The consumer
+     * rebuilds nothing from a tree that could disagree with the signer's encoder, so a body whose
+     * fields hold {@code < > &}, non-ASCII text, escapes, a float, an integer above 2^53 or
+     * integer-like keys must verify, reach the handler, and arrive exactly as signed.
+     */
+    private static void assertGenuineBodyVerifiesAndIsDeliveredAsSigned(String name, String metadataJson)
+            throws Exception {
+        String base = canonical("documents:read");
+        String canonical = base.substring(0, base.length() - 1) + ",\"metadata\":" + metadataJson + "}";
+        String sig = sign(canonical);
+        String wire = canonical.substring(0, canonical.length() - 1) + ",\"hmac_signature\":\"" + sig + "\"}";
+
+        Outcome o = run(wire.getBytes(StandardCharsets.UTF_8));
+
+        assertTrue(o.handlerRan(), name + ": a genuine body must verify and reach the handler");
+        assertEquals("ack", o.calls().get(0).type(), name);
+        assertEquals(canonical, new String(o.seen().get(0), StandardCharsets.UTF_8),
+                name + ": the handler gets exactly the signed bytes");
+    }
+
+    @Test
+    void pin882_htmlSensitiveAndNonAsciiCharactersVerify() throws Exception {
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("angle brackets and ampersand",
+                "{\"q\":\"a<b>c&d\"}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("non-ASCII", "{\"q\":\"caf\u00e9 \u65e5\u672c \ud83d\ude00\"}");
+    }
+
+    @Test
+    void pin882_escapesAsServerSerdeWritesThemVerify() throws Exception {
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("quote, backslash, short escapes",
+                "{\"q\":\"a\\\"b\\\\c\\n\\t\\r\\b\\f\"}");
+        // serde_json writes the other control characters as a backslash-u-00 escape with LOWER-case hex.
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("lower-case control escape",
+                "{\"q\":\"x\\u001fy\\u001bz\"}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("DEL is raw", "{\"q\":\"x\u007fy\"}");
+    }
+
+    @Test
+    void pin882_numbersAndKeyOrderVerify() throws Exception {
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("float 1.0", "{\"n\":1.0}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("float 0.1 and -2.5", "{\"a\":0.1,\"b\":-2.5}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("large exponent float", "{\"n\":1e21}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("integer above 2^53", "{\"n\":9007199254740993}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("u64 maximum", "{\"n\":18446744073709551615}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("integer-like keys in wire order",
+                "{\"10\":1,\"9\":2,\"b\":3,\"a\":4}");
+    }
+
+    @Test
+    void pin882_aSignatureThatIsNotTheLastMemberOrIsNullIsNackedAndTheHandlerNeverRuns() throws Exception {
+        String canonical = canonical("documents:read");
+        String sig = sign(canonical);
+        // The signature in the middle (the vendored reference vectors' `message` shape is key-sorted
+        // with the signature inside it; a delivery is not).
+        String middle = canonical.replace("\"action\"", "\"hmac_signature\":\"" + sig + "\",\"action\"");
+        assertNackedAndHandlerNeverRan(run(middle.getBytes(StandardCharsets.UTF_8)));
+        String nul = canonical.replaceAll("}$", ",\"hmac_signature\":null}");
+        assertNackedAndHandlerNeverRan(run(nul.getBytes(StandardCharsets.UTF_8)));
+        String number = canonical.replaceAll("}$", ",\"hmac_signature\":1}");
+        assertNackedAndHandlerNeverRan(run(number.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void pin882_aNestedDuplicateMemberIsNackedAndTheHandlerNeverRuns() throws Exception {
+        String canonical = canonical("documents:read").replaceAll("}$", ",\"metadata\":{\"a\":1,\"a\":2}}");
+        String wire = canonical.replaceAll("}$", ",\"hmac_signature\":\"" + sign(canonical) + "\"}");
+        assertNackedAndHandlerNeverRan(run(wire.getBytes(StandardCharsets.UTF_8)));
+    }
+
     private static String hmacHex(byte[] bytes) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(KEY, "HmacSHA256"));

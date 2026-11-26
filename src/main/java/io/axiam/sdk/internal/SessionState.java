@@ -611,15 +611,15 @@ public final class SessionState {
 
     /**
      * The subset of access-token claims this class needs, decoded WITHOUT
-     * verifying the signature. {@code roles} is derived from the
-     * space-separated {@code scope} claim (empty when absent) — AXIAM's
-     * access tokens have no dedicated {@code roles} claim.
+     * verifying the signature. {@code roles} comes from the
+     * {@code roles} claim alone (CONTRACT.md &sect;10, contract 1.68; JAV-R1-1) and is never
+     * derived from the {@code scope} claim: an OAuth2 scope is a grant, not a role.
      *
      * @param sub      the token subject (user id) from the {@code sub} claim, or {@code null} if absent
      * @param tenantId the resolved tenant UUID string from the {@code tenant_id} claim, or {@code null} if absent
      * @param orgId    the resolved organization UUID string from the {@code org_id} claim, or {@code null} if absent
      * @param jti      the JWT id from the {@code jti} claim (used as the refresh {@code session_id}), or {@code null} if absent
-     * @param roles    the {@code scope} claim split on whitespace into individual tokens; empty (never {@code null}) when the claim is absent or blank
+     * @param roles    the strings of the {@code roles} claim; empty (never {@code null}) when the claim is absent, is not a JSON array, or holds a non-string member. Never filled from {@code scope}
      * @param exp      the {@code exp} claim as epoch seconds, or {@code 0} if absent
      */
     public record Claims(@Nullable String sub, @Nullable String tenantId, @Nullable String orgId,
@@ -650,13 +650,26 @@ public final class SessionState {
         } catch (IOException e) {
             return null;
         }
-        String scope = textOrNull(node, "scope");
-        List<String> roles = (scope == null || scope.isBlank())
-                ? List.of()
-                : List.of(scope.trim().split("\\s+"));
+        List<String> roles = rolesClaim(node);
         long exp = node.hasNonNull("exp") ? node.get("exp").asLong() : 0L;
         return new Claims(textOrNull(node, "sub"), textOrNull(node, "tenant_id"), textOrNull(node, "org_id"),
                 textOrNull(node, "jti"), roles, exp);
+    }
+
+    /** The {@code roles} claim as a list; empty unless it is a JSON array of strings (fail closed). */
+    private static List<String> rolesClaim(JsonNode node) {
+        JsonNode raw = node.get("roles");
+        if (raw == null || !raw.isArray()) {
+            return List.of();
+        }
+        List<String> out = new java.util.ArrayList<>(raw.size());
+        for (JsonNode item : raw) {
+            if (!item.isTextual()) {
+                return List.of();
+            }
+            out.add(item.asText());
+        }
+        return List.copyOf(out);
     }
 
     private static @Nullable String textOrNull(JsonNode node, String field) {

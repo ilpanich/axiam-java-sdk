@@ -133,4 +133,52 @@ final class OidcLoginBinding {
         }
         return true;
     }
+
+    /**
+     * The value of the callback's {@code Location} header for {@code destination}: its
+     * percent-encoded form (login-glue Decision 7, TYP-R3-1). Written by this adapter, at the point
+     * where the header is written; the application is never asked to encode.
+     *
+     * <p>Characters outside the URL-safe set ({@code A-Z a-z 0-9} and
+     * {@code ! # $ % & ' ( ) * + , - . / : ; = ? @ [ \ ] ^ _ | ~}) are UTF-8 percent-encoded with
+     * upper-case hex digits; a {@code %} that already starts a well-formed escape is kept, any other
+     * {@code %} becomes {@code %25}; a lone surrogate becomes U+FFFD first; a backslash is kept. The
+     * result is pure ASCII with no byte below {@code 0x21}, so CR or LF can never split the header.
+     */
+    static String encodeRedirectLocation(String destination) {
+        StringBuilder out = new StringBuilder(destination.length() + 16);
+        int n = destination.length();
+        for (int i = 0; i < n;) {
+            int cp = destination.codePointAt(i);
+            int len = Character.charCount(cp);
+            if (cp >= 0xD800 && cp <= 0xDFFF) {
+                cp = 0xFFFD; // a lone surrogate (a valid pair decodes to a supplementary code point)
+            }
+            if (cp == '%') {
+                if (i + 2 < n && isHex(destination.charAt(i + 1)) && isHex(destination.charAt(i + 2))) {
+                    out.append('%');
+                } else {
+                    out.append("%25");
+                }
+            } else if (cp < 0x80 && isUrlSafe(cp)) {
+                out.append((char) cp);
+            } else {
+                for (byte b : new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8)) {
+                    out.append('%').append(Character.toUpperCase(Character.forDigit((b >> 4) & 0xF, 16)))
+                            .append(Character.toUpperCase(Character.forDigit(b & 0xF, 16)));
+                }
+            }
+            i += len;
+        }
+        return out.toString();
+    }
+
+    private static boolean isHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    private static boolean isUrlSafe(int c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                || "!#$&'()*+,-./:;=?@[\\]^_|~".indexOf(c) >= 0;
+    }
 }

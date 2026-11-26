@@ -17,20 +17,15 @@ import java.util.HexFormat;
  * HMAC-SHA256 verify-before-handler primitive for inbound AMQP messages
  * (CONTRACT.md &sect;8, D-13).
  *
- * <p><strong>Canonicalization is wire/insertion-order preserving, NEVER
- * alphabetically sorted.</strong> The canonical Rust signer
- * ({@code crates/axiam-amqp/src/messages.rs}'s {@code sign_payload}) signs
- * the {@code serde_json} struct-declaration-order serialization of the
- * message body (with {@code hmac_signature} absent). Jackson's
- * {@link ObjectNode} is backed by a {@code LinkedHashMap} and preserves
- * insertion order from parsing by default — {@link ObjectNode#remove(String)}
- * mutates that same map in place, preserving the relative order of all
- * remaining keys. This is the single load-bearing property of this class:
- * do NOT introduce a {@code TreeMap}/sorted copy or enable any
- * key-ordering/alphabetizing Jackson feature here. This mirrors the
- * empirically-proven finding from Phase 19 (Python), re-verified in this
- * plan against the same real Rust-signed fixture (20-RESEARCH.md Pattern 5,
- * 20-PATTERNS.md "CRITICAL key-order divergence from Go").
+ * <p><strong>The signature is checked over the received bytes, never over a
+ * re-serialization</strong> (CONTRACT.md &sect;8 rule 2, contract 1.69; #882). The
+ * canonical bytes are the delivered body with its trailing
+ * {@code ,"hmac_signature":"<64 hex>"} member cut out. A signer's encoder and this
+ * SDK's JSON writer can disagree (escape case, number rendering, key order), and a
+ * rebuilt form then refuses a genuine message or, worse, lets a handler read
+ * something other than what was verified (C2). A body whose signature is not the
+ * trailing member, is {@code null} or is not a string, has a repeated key at any
+ * depth, or has content after the object, is refused.
  */
 public final class Hmac {
 
@@ -49,8 +44,8 @@ public final class Hmac {
     }
 
     /**
-     * Returns {@code true} iff {@code body}'s {@code hmac_signature} field
-     * matches {@code HMAC-SHA256(signingKey, canonical_json_of(body_without_hmac_signature))},
+     * Returns {@code true} iff {@code body}'s trailing {@code hmac_signature} member
+     * matches {@code HMAC-SHA256(signingKey, received_bytes_without_that_member)},
      * computed via constant-time comparison.
      *
      * <p>Never throws: malformed JSON, a missing/null signature, non-hex
@@ -83,23 +78,40 @@ public final class Hmac {
      */
     static byte @Nullable [] verifiedCanonical(byte[] signingKey, byte[] body) {
         try {
+            // Rule a: exactly one JSON object, nothing after it, no repeated member name at any depth.
             JsonNode root = MAPPER.readTree(body);
-            if (!(root instanceof ObjectNode node)) {
+            if (!(root instanceof ObjectNode)) {
                 return null;
             }
-            JsonNode sigNode = node.get("hmac_signature");
-            if (sigNode == null || sigNode.isNull()) {
-                return null; // §8.3 strict mode: missing signature = reject
+            // Rule b: the body ends in `,"hmac_signature":"<64 hex>"}`; the canonical bytes are the
+            // received bytes before that member, then `}`. Nothing is re-serialized (#882): an
+            // encoder that writes a character, a number or an escape differently from serde_json
+            // would otherwise refuse a genuine message.
+            int suffix = SIGNATURE_MEMBER.length + SIGNATURE_HEX_LENGTH + 2;
+            if (body.length <= suffix) {
+                return null;
             }
-            String sigHex = sigNode.asText();
-
-            // remove() mutates the SAME LinkedHashMap-backed ObjectNode in
-            // place, preserving the relative order of all remaining keys —
-            // this is the load-bearing property (see class Javadoc).
-            node.remove("hmac_signature");
-            byte[] canonical = MAPPER.writeValueAsBytes(node);
-
+            int start = body.length - suffix;
+            for (int i = 0; i < SIGNATURE_MEMBER.length; i++) {
+                if (body[start + i] != SIGNATURE_MEMBER[i]) {
+                    return null;
+                }
+            }
+            if (body[body.length - 2] != '"' || body[body.length - 1] != '}') {
+                return null;
+            }
+            String sigHex = new String(body, start + SIGNATURE_MEMBER.length, SIGNATURE_HEX_LENGTH,
+                    java.nio.charset.StandardCharsets.ISO_8859_1);
             byte[] expected = HexFormat.of().parseHex(sigHex);
+            // The member the tree sees must be that same trailing one (a second, earlier
+            // hmac_signature is a repeated key and was refused above).
+            JsonNode sigNode = root.get("hmac_signature");
+            if (sigNode == null || !sigNode.isTextual() || !sigNode.asText().equals(sigHex)) {
+                return null;
+            }
+            byte[] canonical = new byte[start + 1];
+            System.arraycopy(body, 0, canonical, 0, start);
+            canonical[start] = '}';
 
             Mac mac = Mac.getInstance(ALGO);
             mac.init(new SecretKeySpec(signingKey, ALGO));
@@ -110,4 +122,8 @@ public final class Hmac {
             return null; // parse failure / bad hex / bad key length -> reject, never throw
         }
     }
+
+    private static final byte[] SIGNATURE_MEMBER =
+            ",\"hmac_signature\":\"".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    private static final int SIGNATURE_HEX_LENGTH = 64;
 }

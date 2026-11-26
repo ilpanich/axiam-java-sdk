@@ -94,7 +94,7 @@ class JwksVerifierOidcTest {
     }
 
     @Test
-    void unmatchedKidIsRejectedAfterSingleForcedRefetch() throws Exception {
+    void unmatchedKidIsRejectedAfterASingleFetchAndNoneFollowInTheWindow() throws Exception {
         OctetKeyPair signingKey = generateEd25519KeyPair("kid-signing");
         OctetKeyPair otherKey = generateEd25519KeyPair("kid-other-only-in-jwks");
         AtomicInteger fetchCount = new AtomicInteger(0);
@@ -115,11 +115,12 @@ class JwksVerifierOidcTest {
             AuthError e = assertThrows(AuthError.class, () -> verifier.verifyForOidc(token));
 
             assertEquals("unknown_kid", e.reason());
-            // The initial (cold-cache) fetch plus exactly ONE forced re-fetch
-            // on the still-unmatched kid — the "single JWKS re-fetch" §12.4
-            // rule 2 requires — then fail; never a second re-fetch/retry loop.
-            assertEquals(2, fetchCount.get(),
-                    "an unknown kid must trigger the initial fetch plus exactly one forced re-fetch, then fail");
+            // §12.4 rule 2 (JAV-R1-3): an unknown kid costs at most ONE fetch per cooldown
+            // window, the cold-cache load included (this used to expect nimbus's load plus a
+            // forced re-fetch, two). A second token in the same window fetches nothing.
+            assertEquals(1, fetchCount.get(), "an unknown kid on a cold cache costs exactly one fetch");
+            assertThrows(AuthError.class, () -> verifier.verifyForOidc(token));
+            assertEquals(1, fetchCount.get(), "no further fetch inside the cooldown window");
         }
     }
 

@@ -34,7 +34,15 @@ public final class MemoryOidcStateStore implements OidcStateStore {
      */
     public static final long OIDC_STATE_TTL_MILLIS = 600_000L;
 
+    /**
+     * Upper bound on held entries (N1). Every login start saves one entry that lives ten minutes, so
+     * an unauthenticated caller of the login route could otherwise grow the map without limit; when
+     * the bound is reached the entry closest to expiry is evicted to make room.
+     */
+    public static final int DEFAULT_MAX_ENTRIES = 10_000;
+
     private final long ttlMillis;
+    private final int maxEntries;
     private final Map<String, Held> entries = new ConcurrentHashMap<>();
 
     /**
@@ -54,7 +62,21 @@ public final class MemoryOidcStateStore implements OidcStateStore {
      *                  as the maximum.
      */
     public MemoryOidcStateStore(long ttlMillis) {
+        this(ttlMillis, DEFAULT_MAX_ENTRIES);
+    }
+
+    /**
+     * Builds a store with a custom TTL and entry bound.
+     *
+     * @param ttlMillis  entry lifetime in milliseconds, clamped as in {@link #MemoryOidcStateStore(long)}
+     * @param maxEntries the most entries held at once; at least 1. The entry closest to expiry is evicted to make room
+     */
+    public MemoryOidcStateStore(long ttlMillis, int maxEntries) {
+        if (maxEntries < 1) {
+            throw new IllegalArgumentException("maxEntries must be at least 1");
+        }
         this.ttlMillis = Math.min(ttlMillis, OIDC_STATE_TTL_MILLIS);
+        this.maxEntries = maxEntries;
     }
 
     /**
@@ -71,6 +93,20 @@ public final class MemoryOidcStateStore implements OidcStateStore {
     @Override
     public void save(OidcStateEntry entry) {
         sweep();
+        while (entries.size() >= maxEntries && !entries.containsKey(entry.state())) {
+            String oldest = null;
+            long oldestExpiry = Long.MAX_VALUE;
+            for (Map.Entry<String, Held> e : entries.entrySet()) {
+                if (e.getValue().expiresAtEpochMs < oldestExpiry) {
+                    oldestExpiry = e.getValue().expiresAtEpochMs;
+                    oldest = e.getKey();
+                }
+            }
+            if (oldest == null) {
+                break;
+            }
+            entries.remove(oldest);
+        }
         entries.put(entry.state(), new Held(entry, System.currentTimeMillis() + ttlMillis));
     }
 

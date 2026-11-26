@@ -65,6 +65,36 @@ class AuthFlowTest {
     }
 
     @Test
+    void loginUserRolesNeverComeFromTheScopeClaim() throws Exception {
+        // JAV-R1-1 (N15 one layer up): a token whose scope is "openid admin" and which has no
+        // roles claim must not make the user an "admin".
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(loginSuccessResponse(
+                    ",\"scope\":\"openid admin\""));
+            server.start();
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), "acme")
+                    .orgSlug("acme-org").build()) {
+                LoginResult result = client.login("alice@example.com", "correct horse battery staple");
+                assertTrue(result.user().roles().isEmpty(), "roles: " + result.user().roles());
+            }
+        }
+    }
+
+    @Test
+    void loginUserRolesComeFromTheRolesClaim() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(loginSuccessResponse(
+                    ",\"scope\":\"openid admin\",\"roles\":[\"editor\"]"));
+            server.start();
+            try (AxiamClient client = AxiamClient.builder(server.url("/").toString(), "acme")
+                    .orgSlug("acme-org").build()) {
+                LoginResult result = client.login("alice@example.com", "correct horse battery staple");
+                assertEquals(java.util.List.of("editor"), result.user().roles());
+            }
+        }
+    }
+
+    @Test
     void refreshIncludesOrgIdAndTenantIdInBody() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.enqueue(loginSuccessResponse());
@@ -96,9 +126,13 @@ class AuthFlowTest {
     }
 
     private static MockResponse loginSuccessResponse() {
+        return loginSuccessResponse("");
+    }
+
+    private static MockResponse loginSuccessResponse(String extraClaims) {
         return new MockResponse()
                 .setResponseCode(200)
-                .addHeader("Set-Cookie", "axiam_access=" + fakeAccessToken(900) + "; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "axiam_access=" + fakeAccessToken(900, extraClaims) + "; Path=/; HttpOnly")
                 .addHeader("Set-Cookie", "axiam_refresh=fake-refresh-token; Path=/; HttpOnly")
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"user\":{\"id\":\"11111111-1111-1111-1111-111111111111\",\"username\":\"alice\",\"email\":\"alice@example.com\"},"
@@ -106,12 +140,16 @@ class AuthFlowTest {
     }
 
     private static String fakeAccessToken(long expiresInSeconds) {
+        return fakeAccessToken(expiresInSeconds, "");
+    }
+
+    private static String fakeAccessToken(long expiresInSeconds, String extraClaims) {
         String header = base64Url("{\"alg\":\"EdDSA\"}");
         String payload = base64Url("{\"sub\":\"11111111-1111-1111-1111-111111111111\","
                 + "\"tenant_id\":\"33333333-3333-3333-3333-333333333333\","
                 + "\"org_id\":\"44444444-4444-4444-4444-444444444444\","
                 + "\"jti\":\"22222222-2222-2222-2222-222222222222\","
-                + "\"exp\":" + (System.currentTimeMillis() / 1000 + expiresInSeconds) + "}");
+                + "\"exp\":" + (System.currentTimeMillis() / 1000 + expiresInSeconds) + extraClaims + "}");
         return header + "." + payload + ".fake-signature";
     }
 

@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
  * @param returnTo     optional application-owned data, e.g. the page the user was heading to before login
  * @param bindingDigest optional (contract 1.68, &sect;12.8 rule 1): lower-case hex SHA-256 of the browser-binding
  *                     cookie value the login glue set; the callback refuses an entry that has none. A caller-supplied
- *                     store MUST persist it and return it unchanged. Not a secret, but never logged
+ *                     store MUST persist it and return it unchanged. Not a secret, but kept out of {@link #toString()}
  */
 public record OidcStateEntry(String state, String nonce, Sensitive codeVerifier, String redirectUri,
         @Nullable String returnTo, @Nullable String bindingDigest) {
@@ -61,5 +61,16 @@ public record OidcStateEntry(String state, String nonce, Sensitive codeVerifier,
      */
     public OidcStateEntry(String state, String nonce, Sensitive codeVerifier, String redirectUri) {
         this(state, nonce, codeVerifier, redirectUri, null);
+    }
+
+    /**
+     * Redacts the code verifier and the browser-binding digest (CONTRACT.md &sect;12.8 rule 1 (e):
+     * the digest is not logged either).
+     */
+    @Override
+    public String toString() {
+        return "OidcStateEntry[state=" + state + ", nonce=" + nonce + ", codeVerifier=[SENSITIVE], redirectUri="
+                + redirectUri + ", returnTo=" + returnTo + ", bindingDigest="
+                + (bindingDigest == null ? "null" : "[REDACTED]") + "]";
     }
 }

@@ -226,10 +226,10 @@ class JwksVerifierAccessTokenRulesTest {
             JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
             String first = sign(key, "at+jwt", "forged-first", claims().build());
             assertThrows(AuthError.class, () -> verifier.verifyAccessToken(first, TENANT));
-            // The first token loads the cold cache and may spend the window's one refetch
-            // (nimbus loads, finds no such kid, and retries once): two fetches at most.
+            // The first token loads the cold cache and starts the window: one fetch, not two
+            // (JAV-R1-3; this used to allow nimbus's load-then-retry pair).
             int afterFirst = fetches.get();
-            assertTrue(afterFirst <= 2, "first unknown-kid token fetched " + afterFirst + " times");
+            assertTrue(afterFirst <= 1, "first unknown-kid token fetched " + afterFirst + " times");
 
             for (int i = 0; i < 10; i++) {
                 String forged = sign(key, "at+jwt", "forged-" + i, claims().build());

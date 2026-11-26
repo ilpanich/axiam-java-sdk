@@ -53,8 +53,8 @@ are regenerated (`AuditLogEntry`).
 - `io.axiam.sdk.amqp.AuthzRequester` (N2, D-9): an AMQP authorization requester. It publishes a
   signed `AuthzRequest` with a private exclusive reply queue and accepts only the server's signed
   response (CONTRACT §8 "Signed authorization responses"): verified with the tenant subkey over the
-  received bytes, bound to its own `tenant_id`, `correlation_id` and `nonce`, unsigned refused
-  unless the explicit `allowUnsignedResponses` opt-out is set. All four contract test vectors pass.
+  received bytes, bound to its own `tenant_id`, `correlation_id` and `nonce`; an unsigned response is
+  always discarded. All four contract test vectors pass.
 - `@AxiamRequireScope` (§11.1 `require_scope`): a local check of the token's `scope` claim.
 - `AxiamAuthentication`: the identity the filter sets, exposing `roles()` (`null` when the token has
   no usable `roles` claim, empty when it is `[]`) and `scopes()`.
@@ -71,6 +71,60 @@ are regenerated (`AuditLogEntry`).
 - The AMQP consumer passes the handler the verified canonical bytes (compact JSON in wire order,
   `hmac_signature` removed), not the delivery body.
 - `Hmac.verify` is stricter: a repeated key or trailing content makes a body fail verification.
+
+### Fixed (follow-up review of 1.4.0, JAV-R1-1 … JAV-R1-8; contract 1.69)
+
+- **JAV-R1-1 (security): `LoginResult.user().roles()` no longer carries OAuth2 scopes.** It was the
+  `scope` claim split on whitespace, so a token whose scope was named `admin` gave a user for whom
+  `roles().contains("admin")` was true (N15 one layer up from the Spring guard). `AxiamUser.roles` and
+  `SessionState.Claims.roles` now come from the `roles` claim only (a JSON array of strings; empty when
+  absent or malformed), as CONTRACT §10 requires. The test that pinned the old mapping is rewritten.
+- **JAV-R1-2 / GLUE-R1-1: a `returnTo` that `java.net.URI` rejects no longer turns a successful
+  sign-in into a 500.** The callback now writes the `Location` header itself as the percent-encoded form
+  of the destination (existing `%XX` kept, any other `%` becomes `%25`, a lone surrogate becomes U+FFFD,
+  `\` kept, pure ASCII so CR/LF never reach the header), for the stored `returnTo` and for
+  `successRedirect` (login-glue Decision 7). The binding cookie is cleared on that response.
+- **GLUE-R1-5: the binding cookie is cleared when the success hook, the state store or anything else
+  throws in the callback.** The callback answers a generic `500` (the exception is logged by class, never
+  echoed) with the clearing `Set-Cookie`, instead of propagating a bare exception.
+- **N4: an `allowReturnTo` predicate that throws an `Error` accepts nothing** (it only caught
+  `RuntimeException`); `VirtualMachineError` still propagates.
+- **N1: `MemoryOidcStateStore` is bounded** (`DEFAULT_MAX_ENTRIES` = 10 000, or the new two-argument
+  constructor); at the bound the entry closest to expiry is evicted.
+- **GLUE-R1-4:** a test pins that a refusal with another browser's cookie consumes the state.
+- **JAV-R1-3 (D-4): the unknown-`kid` cooldown (CONTRACT §12.4 rule 2) also holds on a cold cache and
+  when the JWKS endpoint fails.** It was skipped whenever the cache was cold, so during a JWKS outage
+  every presented token cost one outbound request. A failed fetch now counts toward the 60 s window, and
+  a cold cache costs one fetch, not nimbus's load-plus-retry pair. The contract's conformance test (fifty
+  unknown `kid`s in one window cause at most one fetch; a rotated key is accepted after one fetch) is
+  added; two tests that expected the two-fetch behaviour are rewritten to the one-fetch rule.
+- **JAV-R1-4 / #883: the `AuthzRequester` discard log carries the security-event context** (CONTRACT §8
+  consumer obligation 4): `timestamp`, `exchange`, `routing_key` (the reply queue), `tenant_id` (the
+  requester's own) and `reason` (`malformed`, `unsigned`, `signature`, `tenant`, `unknown_request`), on
+  every discard path, never a signature, nonce, key or body value.
+- **JAV-R1-6: `AuthzRequester` completes the futures it returns off the RabbitMQ consumer thread**, on
+  `Options.withExecutor(...)` or a requester-owned daemon pool. A continuation that blocks, such as a
+  second `check` inside `checkAsync(...).thenApply(...)`, no longer stalls the reply queue until timeout.
+  Documented on `checkAsync` and in the README.
+- **#882 (the AMQP event consumer verifies over the received bytes).** `Hmac` re-serialized the parsed
+  body, so a genuine message whose encoding differs from serde_json's (a lower-case `\u001f` escape, a
+  float such as `1e21`, a non-ASCII value) failed verification. It now cuts the trailing
+  `,"hmac_signature":"<64 hex>"` member from the received bytes and verifies and delivers those; a
+  signature that is not the last member, is `null` or is not a string is refused.
+- **JAV-R1-8: `OidcStateEntry.toString()` no longer prints `bindingDigest`** (nor the verifier).
+- **#880: back-channel logout tokens carry a `kid` from contract 1.69.** `verifyLogoutToken` already
+  selected by `kid` and refused a kid-less token; tests now use a server-shaped token (header exactly
+  `alg`, `typ: logout+jwt`, `kid`) against a two-key JWKS, and pin that §10.1 rules 10 and 11 stay off the
+  logout and ID-token paths.
+
+### Removed
+
+- The AMQP authz requester no longer offers an opt-out for unsigned responses
+  (`Options.withAllowUnsignedResponses()` and `Decision.unsigned()`, added earlier in 1.4.0 and never
+  released): no AXIAM server sends one to a reply queue, so the option could admit only a forged
+  response (CONTRACT 1.69 §8, server #881). The requester requires a 1.68 server; against an older
+  one every check times out (JAV-R1-5). The README says so. `Options` is now
+  `(logger, timeout, clock, executor)`.
 
 ### Migration
 

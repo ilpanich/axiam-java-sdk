@@ -121,7 +121,7 @@ class AuthzRequesterTest {
 
     // ---- doubles ---------------------------------------------------------------------------------
 
-    private static final class RecordedDelivery implements ResponseDelivery {
+    private static class RecordedDelivery implements ResponseDelivery {
         private final byte[] body;
         int acks;
         int nacksWithoutRequeue;
@@ -218,7 +218,6 @@ class AuthzRequesterTest {
             assertEquals(v.allowed(), decision.allowed(), v.name());
             assertEquals(v.reason(), decision.reason(), v.name());
             assertEquals(v.code(), decision.reasonCode(), v.name());
-            assertFalse(decision.unsigned());
             assertEquals(1, d.acks, "an accepted response is acked");
 
             // Retired on acceptance: the same response again is dropped and nacked.
@@ -312,56 +311,192 @@ class AuthzRequesterTest {
         }
     }
 
-    // ---- unsigned responses (a server older than 1.68) ---------------------------------------------
+    // ---- unsigned responses: no opt-out (CONTRACT 1.69 §8, A.1) -------------------------------------
 
     private static final byte[] UNSIGNED = ("{\"correlation_id\":\"" + CORRELATION
             + "\",\"allowed\":true,\"reason_code\":\"allowed\"}").getBytes(StandardCharsets.UTF_8);
 
     @Test
-    void anUnsignedResponseIsRefusedByDefault() throws Exception {
-        Fixture f = fixture(AuthzRequester.Options.defaults());
+    void aWellFormedUnsignedResponseForAnOutstandingRequestIsDiscardedAsUnsignedAndTheCheckKeepsWaiting()
+            throws Exception {
+        List<String> warnings = new ArrayList<>();
+        Fixture f = fixture(AuthzRequester.Options.defaults().withLogger(recordingLogger(warnings)));
         RecordedDelivery d = f.offer(UNSIGNED);
+
         assertFalse(f.outstanding().isDone());
         assertEquals(1, d.nacksWithoutRequeue);
+        assertEquals(0, d.acks);
+        assertEquals(1, warnings.size());
+        assertTrue(warnings.get(0).contains("reason=unsigned"), warnings.get(0));
+        // The genuine answer still completes it.
+        f.offer(VECTORS.get(0).wire());
+        assertTrue(f.outstanding().isDone() && f.outstanding().get().allowed());
     }
 
     @Test
-    void anUnsignedResponseIsAcceptedOnlyWithTheExplicitOptOutAndIsFlaggedAndLogged() throws Exception {
+    void theOptionsHaveNoUnsignedResponseSwitch() {
+        for (java.lang.reflect.RecordComponent c : AuthzRequester.Options.class.getRecordComponents()) {
+            assertFalse(c.getName().toLowerCase().contains("unsigned"), c.getName());
+        }
+        for (java.lang.reflect.Method m : AuthzRequester.Options.class.getMethods()) {
+            assertFalse(m.getName().toLowerCase().contains("unsigned"), m.getName());
+        }
+    }
+
+    // ---- the discard security event (CONTRACT 1.69 §8 obligation 4; A.2; #883, JAV-R1-4) --------------
+
+    private static String field(String line, String name) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(name + "=(\"[^\"]*\"|\\S+)").matcher(line);
+        assertTrue(m.find(), name + " missing from: " + line);
+        return m.group(1);
+    }
+
+    private void assertDiscardEvent(byte[] body, String reason, String exchange, String routingKey) throws Exception {
         List<String> warnings = new ArrayList<>();
-        Fixture f = fixture(AuthzRequester.Options.defaults().withAllowUnsignedResponses()
-                .withLogger(recordingLogger(warnings)));
-        f.offer(UNSIGNED);
+        Fixture f = fixture(AuthzRequester.Options.defaults().withLogger(recordingLogger(warnings))
+                .withClock(Clock.fixed(Instant.parse("2026-07-10T12:00:00Z"), ZoneOffset.UTC)));
+        RecordedDelivery d = new RecordedDelivery(body) {
+            @Override
+            public String exchange() {
+                return exchange;
+            }
 
-        Decision decision = f.outstanding().get();
-        assertTrue(decision.allowed());
-        assertTrue(decision.unsigned());
-        assertEquals("allowed", decision.reasonCode());
-        assertFalse(warnings.isEmpty(), "admitting an unsigned response must be logged as a warning");
-    }
+            @Override
+            public String routingKey() {
+                return routingKey;
+            }
+        };
+        f.requester().handle(d);
 
-    @Test
-    void theOptOutStillNeedsAnOutstandingCorrelationIdAndABooleanAllowed() throws Exception {
-        for (String body : List.of(
-                "{\"correlation_id\":\"77777777-7777-7777-7777-777777777777\",\"allowed\":true}",
-                "{\"correlation_id\":\"" + CORRELATION + "\"}",
-                "{\"correlation_id\":\"" + CORRELATION + "\",\"allowed\":\"yes\"}")) {
-            Fixture f = fixture(AuthzRequester.Options.defaults().withAllowUnsignedResponses());
-            f.offer(body.getBytes(StandardCharsets.UTF_8));
-            assertFalse(f.outstanding().isDone(), body);
+        assertEquals(1, warnings.size(), reason);
+        String line = warnings.get(0);
+        assertEquals(reason, field(line, "reason"));
+        assertEquals(TENANT, field(line, "tenant_id"), "the requester's own tenant");
+        assertEquals("amq.gen-Xk3pQ", field(line, "routing_key"), "the reply queue");
+        assertEquals("\"" + exchange + "\"", field(line, "exchange"));
+        assertEquals("2026-07-10T12:00:00Z", field(line, "timestamp"));
+        // Nothing from the body, no signature (received or computed), no nonce.
+        assertFalse(line.contains(NONCE), line);
+        assertFalse(line.contains(CORRELATION), line);
+        String text = new String(body, StandardCharsets.UTF_8);
+        java.util.regex.Matcher sig = java.util.regex.Pattern.compile("[0-9a-f]{64}").matcher(text);
+        while (sig.find()) {
+            assertFalse(line.contains(sig.group()), "received signature in the event");
+        }
+        assertFalse(line.contains(SUBKEY_HEX), line);
+        if (text.contains("\"hmac_signature\"")) {
+            String canonical = text.substring(0, text.indexOf(",\"hmac_signature\"")) + "}";
+            assertFalse(line.contains(HexFormat.of().formatHex(
+                    hmac(subkey(), canonical.getBytes(StandardCharsets.UTF_8)))), "computed signature in the event");
         }
     }
 
     @Test
-    void theOptOutNeverAdmitsASignedResponseThatFails() throws Exception {
-        Fixture f = fixture(AuthzRequester.Options.defaults().withAllowUnsignedResponses());
-        String bad = new String(VECTORS.get(1).wire(), StandardCharsets.UTF_8)
-                .replace("\"allowed\":false", "\"allowed\":true");
-        f.offer(bad.getBytes(StandardCharsets.UTF_8));
-        assertFalse(f.outstanding().isDone(), "a tampered signed response is refused even with the opt-out");
+    void everyDiscardPathLogsTheEventWithRoutingKeyAndOwnTenant() throws Exception {
+        Vector v1 = VECTORS.get(0);
+        String wire1 = new String(v1.wire(), StandardCharsets.UTF_8);
+        byte[] good = subkey();
+        // signature
+        assertDiscardEvent(wire1.replace("\"allowed\":true", "\"allowed\":false").getBytes(StandardCharsets.UTF_8),
+                "signature", "", "amq.gen-Xk3pQ");
+        // tenant: validly signed, another tenant
+        assertDiscardEvent(signWith(good, v1.canonical().replace(TENANT, OTHER_TENANT)), "tenant", "", "amq.gen-Xk3pQ");
+        // unsigned
+        assertDiscardEvent(UNSIGNED, "unsigned", "", "amq.gen-Xk3pQ");
+        // malformed
+        assertDiscardEvent("not json".getBytes(StandardCharsets.UTF_8), "malformed", "", "amq.gen-Xk3pQ");
+        // unknown_request: validly signed, a correlation id nobody asked about
+        assertDiscardEvent(signWith(good, v1.canonical().replace(CORRELATION,
+                "77777777-7777-7777-7777-777777777777")), "unknown_request", "", "amq.gen-Xk3pQ");
+        // a broker-reported exchange is reported as such; a transport with no routing key gets the reply queue
+        assertDiscardEvent(UNSIGNED, "unsigned", "amq.direct", null);
+    }
 
-        String nullSignature = "{\"correlation_id\":\"" + CORRELATION + "\",\"allowed\":true,\"hmac_signature\":null}";
-        f.offer(nullSignature.getBytes(StandardCharsets.UTF_8));
-        assertFalse(f.outstanding().isDone(), "a null hmac_signature is a signature member: verified, not treated as absent");
+    @Test
+    void aSecondAnswerToARetiredRequestIsAnUnknownRequestDiscardWithTheEvent() throws Exception {
+        List<String> warnings = new ArrayList<>();
+        Fixture f = fixture(AuthzRequester.Options.defaults().withLogger(recordingLogger(warnings)));
+        f.offer(VECTORS.get(0).wire());
+        assertTrue(warnings.isEmpty());
+        f.offer(VECTORS.get(0).wire());
+        assertEquals(1, warnings.size());
+        assertTrue(warnings.get(0).contains("reason=unknown_request"), warnings.get(0));
+        assertTrue(warnings.get(0).contains("routing_key=amq.gen-Xk3pQ"), warnings.get(0));
+        assertTrue(warnings.get(0).contains("tenant_id=" + TENANT), warnings.get(0));
+    }
+
+    // ---- JAV-R1-6: decisions complete off the consumer thread ----------------------------------------
+
+    @Test
+    void aDecisionCompletesOnTheExecutorNotOnTheConsumerThread() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        java.util.concurrent.ExecutorService supplied = java.util.concurrent.Executors.newSingleThreadExecutor(
+                r -> new Thread(r, "caller-supplied"));
+        try (AuthzRequester r = AuthzRequester.create(transport, TENANT, subkey(),
+                AuthzRequester.Options.defaults().withExecutor(supplied))) {
+            CompletableFuture<String> thread = r.checkAsync(SUBJECT, "documents:read", RESOURCE, null)
+                    .thenApply(d -> Thread.currentThread().getName());
+            Published pub = transport.published.get(0);
+            JsonNode req = MAPPER.readTree(pub.body());
+            String answer = "{\"correlation_id\":\"" + pub.correlationId() + "\",\"tenant_id\":\"" + TENANT
+                    + "\",\"allowed\":true,\"reason_code\":\"allowed\",\"nonce\":\"" + req.get("nonce").asText()
+                    + "\"}";
+            Thread consumer = new Thread(() -> transport.sink.accept(
+                    new RecordedDelivery(answerSigned(answer))), "rabbit-consumer");
+            consumer.start();
+            consumer.join();
+
+            assertEquals("caller-supplied", thread.get(2, TimeUnit.SECONDS),
+                    "the continuation must not run on the RabbitMQ consumer thread");
+        } finally {
+            supplied.shutdownNow();
+        }
+    }
+
+    @Test
+    void aBlockingContinuationCannotStallTheReplyQueue() throws Exception {
+        // check A, then (blocking) check B inside the continuation: B's answer must still be dispatched.
+        FakeTransport transport = new FakeTransport();
+        try (AuthzRequester r = AuthzRequester.create(transport, TENANT, subkey(),
+                AuthzRequester.Options.defaults().withTimeout(Duration.ofSeconds(5)))) {
+            CompletableFuture<Boolean> both = r.checkAsync(SUBJECT, "a", RESOURCE, null)
+                    .thenApply(d -> d.allowed() && r.check(SUBJECT, "b", RESOURCE, null).allowed());
+
+            Thread consumer = new Thread(() -> {
+                try {
+                    answer(transport, 0);
+                    // the consumer thread would be blocked here by a synchronous continuation
+                    long until = System.currentTimeMillis() + 2000;
+                    while (transport.published.size() < 2 && System.currentTimeMillis() < until) {
+                        Thread.sleep(5);
+                    }
+                    answer(transport, 1);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }, "rabbit-consumer");
+            consumer.start();
+            consumer.join();
+
+            assertTrue(both.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    private static void answer(FakeTransport transport, int index) throws Exception {
+        Published pub = transport.published.get(index);
+        JsonNode req = MAPPER.readTree(pub.body());
+        String answer = "{\"correlation_id\":\"" + pub.correlationId() + "\",\"tenant_id\":\"" + TENANT
+                + "\",\"allowed\":true,\"reason_code\":\"allowed\",\"nonce\":\"" + req.get("nonce").asText()
+                + "\"}";
+        transport.sink.accept(new RecordedDelivery(answerSigned(answer)));
+    }
+
+    private static byte[] answerSigned(String canonical) {
+        try {
+            return signWith(subkey(), canonical);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     // ---- end to end --------------------------------------------------------------------------------
@@ -445,6 +580,8 @@ class AuthzRequesterTest {
         r.close();
 
         assertTrue(transport.closedByRequester);
+        // Completions run on the executor (JAV-R1-6), so wait for it rather than assume it is done.
+        assertThrows(java.util.concurrent.ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
         assertTrue(future.isCompletedExceptionally());
         assertThrows(NetworkError.class, () -> r.check(SUBJECT, "a", RESOURCE, null));
         // A reply queue that goes away closes the requester too.

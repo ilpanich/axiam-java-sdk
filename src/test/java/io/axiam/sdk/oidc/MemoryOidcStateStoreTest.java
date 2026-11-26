@@ -46,6 +46,20 @@ class MemoryOidcStateStoreTest {
     }
 
     @Test
+    void theStoreIsBoundedAndEvictsTheEntryClosestToExpiry() throws InterruptedException {
+        MemoryOidcStateStore store = new MemoryOidcStateStore(MemoryOidcStateStore.OIDC_STATE_TTL_MILLIS, 3);
+        for (int i = 0; i < 3; i++) {
+            store.save(new OidcStateEntry("s" + i, "n", Sensitive.of("v"), "https://app/cb"));
+            Thread.sleep(3);
+        }
+        store.save(new OidcStateEntry("s3", "n", Sensitive.of("v"), "https://app/cb"));
+
+        assertEquals(3, store.size(), "an unauthenticated login flood cannot grow the store without bound");
+        assertNull(store.consume("s0"), "the oldest entry was evicted");
+        assertNotNull(store.consume("s3"));
+    }
+
+    @Test
     void consumeOfUnknownStateReturnsNull() {
         MemoryOidcStateStore store = new MemoryOidcStateStore();
         assertNull(store.consume("never-saved"));
