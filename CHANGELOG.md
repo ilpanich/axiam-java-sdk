@@ -186,7 +186,8 @@ are regenerated (`AuditLogEntry`).
   over REST while the JWKS fetch accepted it. REST and JWKS now load the bundle through one shared
   parser (`TlsSupport.customCaStore`) that trusts every certificate and refuses an empty or non-PEM
   bundle with a message that never echoes the content. The system roots are still trusted alongside
-  the bundle, and chain and hostname verification are unchanged.
+  the bundle, and chain and hostname verification are unchanged. The gRPC transport had the same
+  first-certificate defect and now uses the same parser.
 
 ### Migration
 

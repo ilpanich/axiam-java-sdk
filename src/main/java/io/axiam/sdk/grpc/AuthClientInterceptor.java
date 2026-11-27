@@ -24,12 +24,10 @@ import javax.net.ssl.X509ExtendedTrustManager;
 import javax.net.ssl.X509TrustManager;
 
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.CertificateException;
-import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Arrays;
@@ -210,18 +208,15 @@ public final class AuthClientInterceptor implements ClientInterceptor {
                 return systemTm;
             }
 
-            KeyStore customStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            customStore.load(null, null);
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate customCert = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(customCaPem));
-            customStore.setCertificateEntry("custom-ca", customCert);
+            // Every certificate of the bundle, via the one parser REST, JWKS and gRPC share.
+            KeyStore customStore = io.axiam.sdk.internal.TlsSupport.customCaStore(customCaPem);
 
             TrustManagerFactory customTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             customTmf.init(customStore);
             X509ExtendedTrustManager customTm = firstX509(customTmf.getTrustManagers());
 
             return new CompositeX509TrustManager(systemTm, customTm);
-        } catch (GeneralSecurityException | IOException e) {
+        } catch (GeneralSecurityException e) {
             // §6: a non-PEM/invalid custom CA MUST return a clear error at construction time.
             throw new NetworkError("invalid custom CA PEM: " + e.getMessage(), e);
         }
