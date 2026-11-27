@@ -869,6 +869,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        // Every handle owns its own lazily-built OIDC jwks_uri verifiers; each holds an HTTP client with a thread.
+        oidcJwksVerifiers.values().forEach(JwksVerifier::close);
         if (!isPrimaryHandle) {
             // A rebound handle (actingTenant(UUID)/clearActingTenant()) does not own
             // httpClient — every other handle over this same session is still using
@@ -877,6 +879,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             return;
         }
         decisionMemo.clear();
+        jwksVerifier.close(); // shared with rebound handles, so only the primary handle closes it
         httpClient.dispatcher().executorService().shutdown();
         httpClient.connectionPool().evictAll();
         okhttp3.Cache cache = httpClient.cache();

@@ -114,6 +114,9 @@ are regenerated (`AuditLogEntry`).
   context. New optional Spring property `axiam.custom-ca-path` (PEM file) feeds the auto-configured
   filter and clients; the `@Bean` methods `axiamAuthenticationFilter`, `axiamClient` and
   `axiamOidcClient` each gained a trailing `String customCaPath` parameter.
+  Each verifier's HTTP client is built on its first fetch, and `JwksVerifier` is now `AutoCloseable`:
+  `AxiamClient.close()` releases the clients (and their threads) of its verifiers, a rebound handle's
+  `close()` only those of its own OIDC verifiers, and a fetch after close fails closed.
 
 - **JAV-R1-1 (security): `LoginResult.user().roles()` no longer carries OAuth2 scopes.** It was the
   `scope` claim split on whitespace, so a token whose scope was named `admin` gave a user for whom

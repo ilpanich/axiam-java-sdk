@@ -121,7 +121,7 @@ import javax.net.ssl.SSLContext;
  * {@link #assertTenant(JWTClaimsSet, String)} (and every other &sect;10.1
  * rule) for itself.
  */
-public final class JwksVerifier {
+public final class JwksVerifier implements AutoCloseable {
 
     /**
      * CONTRACT.md &sect;10.1 rule 7 &mdash; the RECOMMENDED clock-skew
@@ -425,7 +425,7 @@ public final class JwksVerifier {
 
     private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed,
             @Nullable SSLContext sslContext) {
-        this.fetchClient = newFetchClient(sslContext);
+        this.sslContext = sslContext;
         this.policy = policy;
         this.revocationFeed = revocationFeed;
         // TTL 300s, forced-refetch cooldown 60s — matches the Rust
@@ -1231,7 +1231,43 @@ public final class JwksVerifier {
      * This verifier's own fetch client: built per instance so the TLS context it was given applies, and so the
      * system proxy selector and authenticator are read at construction, not frozen at class load.
      */
-    private final java.net.http.HttpClient fetchClient;
+    private final @Nullable SSLContext sslContext;
+    private final Object clientLock = new Object();
+    private java.net.http.@Nullable HttpClient fetchClient; // guarded by clientLock; built on first fetch
+    private boolean closed; // guarded by clientLock
+
+    /**
+     * The fetch client, built on first use: an {@code HttpClient} starts a selector thread, so a verifier that never
+     * fetches must not own one. Only the build is under the lock, never any I/O.
+     */
+    private java.net.http.HttpClient fetchClient() {
+        synchronized (clientLock) {
+            if (closed) {
+                throw new IllegalStateException("JwksVerifier is closed");
+            }
+            if (fetchClient == null) {
+                fetchClient = newFetchClient(sslContext);
+            }
+            return fetchClient;
+        }
+    }
+
+    /**
+     * Releases the fetch client and its selector thread, abandoning any exchange in flight. Idempotent. After this
+     * every refresh fails (the verifier fails closed once its held keys are stale); it never reopens.
+     */
+    @Override
+    public void close() {
+        java.net.http.HttpClient client;
+        synchronized (clientLock) {
+            closed = true;
+            client = fetchClient;
+            fetchClient = null;
+        }
+        if (client != null) {
+            client.shutdownNow();
+        }
+    }
 
     private static java.net.http.HttpClient newFetchClient(@Nullable SSLContext sslContext) {
         java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
@@ -1333,7 +1369,7 @@ public final class JwksVerifier {
         try {
             java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(jwksUrl.toURI())
                     .timeout(FETCH_DEADLINE).header("Accept", "application/json").GET().build();
-            request = fetchClient.sendAsync(req, boundedBody());
+            request = fetchClient().sendAsync(req, boundedBody());
             final java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<byte[]>> sent = request;
             // The timeout goes on a COPY: orTimeout completes the future it is applied to, and cancelling an
             // already-completed future is a no-op, so the exchange would never be abandoned.
