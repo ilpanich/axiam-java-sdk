@@ -191,7 +191,7 @@ class JwksVerifierKidCooldownTest {
     }
 
     @Test
-    void staleIfError_isBoundedAKidRemovedUpstreamStopsVerifyingAfterTheStaleBound() throws Exception {
+    void staleIfError_isBoundedByAgeASetOlderThanTtlPlusStaleBoundIsNoLongerTrusted() throws Exception {
         OctetKeyPair key = key("key-1");
         AtomicInteger fetches = new AtomicInteger();
         AtomicInteger status = new AtomicInteger(200);

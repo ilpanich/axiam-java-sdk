@@ -161,14 +161,15 @@ public final class JwksVerifier {
     private final URL jwksUrl;
     private final ResourceRetriever http = new DefaultResourceRetriever(500, 500, 50 * 1024);
 
-    /** The last JWKS fetched successfully, or {@code null} if none has been (never loaded). */
-    private volatile com.nimbusds.jose.jwk.@Nullable JWKSet current;
+    /** A JWKS and the monotonic time it was loaded, published together so a reader never pairs them wrongly. */
+    private record Loaded(com.nimbusds.jose.jwk.JWKSet set, long atNanos) {
+    }
 
-    /** Monotonic time {@link #current} was loaded; guarded by {@link #refreshLock} for writes. */
-    private volatile long loadedAtNanos;
+    /** The last JWKS fetched successfully, or {@code null} if none has been (never loaded). */
+    private volatile @Nullable Loaded loaded;
 
     /**
-     * How long {@link #current} is served without a refresh attempt. Past it, a refresh is attempted
+     * How long {@link #loaded} is served without a refresh attempt. Past it, a refresh is attempted
      * (throttled by {@link #UNKNOWN_KID_REFETCH_COOLDOWN}); if that fails the last good set is kept
      * and still used (stale-if-error), so a transient JWKS failure never refuses every token.
      */
@@ -1120,8 +1121,7 @@ public final class JwksVerifier {
                 lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
                 try {
                     String body = http.retrieveResource(jwksUrl).getContent();
-                    current = com.nimbusds.jose.jwk.JWKSet.parse(body);
-                    loadedAtNanos = nowNanos;
+                    loaded = new Loaded(com.nimbusds.jose.jwk.JWKSet.parse(body), nowNanos);
                 } catch (IOException | ParseException | RuntimeException e) {
                     // Keep whatever was loaded before (stale-if-error); the window already counts
                     // this attempt. Nothing about the response is logged.
@@ -1158,11 +1158,12 @@ public final class JwksVerifier {
      * {@code JWKS_TTL + }{@link #JWKS_MAX_STALE}; else {@code null}.
      */
     private com.nimbusds.jose.jwk.@Nullable JWKSet usableSet(long nowNanos, boolean allowStale) {
-        com.nimbusds.jose.jwk.JWKSet set = current;
-        if (set == null) {
+        Loaded snapshot = loaded; // one read: the set and its load time cannot be paired from two loads
+        if (snapshot == null) {
             return null;
         }
-        long age = nowNanos - loadedAtNanos;
+        com.nimbusds.jose.jwk.JWKSet set = snapshot.set();
+        long age = nowNanos - snapshot.atNanos();
         long limit = allowStale ? JWKS_TTL.toNanos() + JWKS_MAX_STALE.toNanos() : JWKS_TTL.toNanos();
         return age < limit ? set : null;
     }
