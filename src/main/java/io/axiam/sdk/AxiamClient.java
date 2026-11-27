@@ -298,7 +298,48 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * starts refusing calls), but leaves the shared transport running for every other handle.
      */
     private final boolean isPrimaryHandle;
-    private final SingleFlight<OidcTokenSet> oidcRefreshSingleFlight = new SingleFlight<>();
+    /**
+     * CONTRACT.md &sect;9: the {@code oidc_refresh} single-flight is keyed PER refresh token and
+     * effective tenant — the key is a SHA-256 digest, never the raw token. A slot lives only while a
+     * caller is using it ({@link RefreshSlot#users}) and is removed by the last one out, so the map
+     * does not grow.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, RefreshSlot> oidcRefreshSlots =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** One key's single-flight plus the number of callers currently inside it (guarded by the map's per-key lock). */
+    private static final class RefreshSlot {
+        final SingleFlight<OidcTokenSet> flight = new SingleFlight<>();
+        int users;
+    }
+
+    /** Number of live {@code oidc_refresh} slots; test seam. */
+    int oidcRefreshSlotCount() {
+        return oidcRefreshSlots.size();
+    }
+
+    /** Total callers currently inside any slot (running or joined); test seam. */
+    int oidcRefreshUsers() {
+        return oidcRefreshSlots.values().stream().mapToInt(s -> s.users).sum();
+    }
+
+    /** The (digest) keys of the live slots; test seam. */
+    java.util.Set<String> oidcRefreshSlotKeys() {
+        return java.util.Set.copyOf(oidcRefreshSlots.keySet());
+    }
+
+    /** SHA-256 over the canonical (lower-case hyphenated) tenant, a separator that cannot occur in it, and the token. */
+    private static String oidcRefreshKey(UUID tenant, Sensitive refreshToken) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            md.update(tenant.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            md.update((byte) 0);
+            md.update(refreshToken.expose().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(md.digest());
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
 
     /**
      * CONTRACT.md &sect;5.2 rule 1 (contract 1.51) — the tenant THIS handle acts on,
@@ -2537,13 +2578,26 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     @Override
     public OidcTokenSet oidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration) {
-        // §9's single guard also serializes the cookie-session refresh() path
-        // (RefreshGuard.runExclusive shares that SAME lock), so an oidcRefresh
-        // and a concurrent cookie-session refresh can never interleave; the
-        // SingleFlight coalesces concurrent oidcRefresh callers into one wire
-        // call sharing its result (port-brief-addendum item 14).
-        return oidcRefreshSingleFlight.run(() ->
-                refreshGuard.runExclusive(() -> doOidcRefresh(refreshToken, scope, tenantId, configuration)));
+        // §12.3 rule 4: always tenant-scoped. Resolve ONCE, before any slot, discovery or wire call; the same
+        // canonical UUID is the key's tenant AND the request's tenant_id (doOidcRefresh never re-resolves).
+        UUID tenant = resolveOauth2TenantId(tenantId);
+        String key = oidcRefreshKey(tenant, refreshToken);
+
+        // §9 rules 2/6a-6d apply per key; other keys run independently and concurrently, and no lock shared
+        // with the §1 cookie-session refresh is held across the wire call (rule 7).
+        RefreshSlot slot = oidcRefreshSlots.compute(key, (k, existing) -> {
+            RefreshSlot s = existing != null ? existing : new RefreshSlot();
+            s.users++;
+            return s;
+        });
+        try {
+            return slot.flight.run(() -> doOidcRefresh(refreshToken, scope, tenant, configuration));
+        } finally {
+            // Identity-checked vacate: the slot is dropped only by the last caller out, and only if it is
+            // still the one this caller joined.
+            oidcRefreshSlots.computeIfPresent(key, (k, current) ->
+                    current == slot && --current.users == 0 ? null : current);
+        }
     }
 
     private OidcTokenSet doOidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,

@@ -189,6 +189,17 @@ are regenerated (`AuditLogEntry`).
   the bundle, and chain and hostname verification are unchanged. The gRPC transport had the same
   first-certificate defect and now uses the same parser.
 
+- **`oidcRefresh` with a different refresh token could receive another grant's token set (#142).**
+  The `oidc_refresh` single-flight was one slot per client, so a call for token B made while token A's
+  refresh was in flight joined it and returned A's tokens (B was never sent). It is now keyed per refresh
+  token and effective tenant (CONTRACT §9): the key is a SHA-256 digest of the tenant, resolved once
+  and normalised to lower-case hyphenated UUID form, plus the token; the raw token is never a key. Callers
+  with the same token and tenant still share one wire call (an omitted tenant and an explicit default are
+  one flight, and `scope` is not part of the key); a different token or tenant gets its own call and result.
+  A slot is removed once vacated. An unresolvable tenant now fails with `AuthError` before any discovery
+  fetch or token call. `oidcRefresh` no longer holds the cookie-session refresh lock across its wire call,
+  so refreshes of different tokens run concurrently.
+
 ### Migration
 
 1. **`@AxiamRequireRole` (N15).** Add the `roles` scope to every client that needs it: add `roles` to
