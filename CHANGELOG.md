@@ -180,6 +180,14 @@ are regenerated (`AuditLogEntry`).
   login callback also clears the binding cookie when a hook throws an `Error`, and
   `MemoryOidcStateStore` evicts and sweeps in O(1) (insertion-ordered).
 
+- **The REST client trusted only the first certificate of a `customCa` bundle (#141).**
+  `AxiamClient`'s trust manager parsed the bundle with `generateCertificate`, so a server under the
+  second CA of a bundle (a root plus an intermediate, or two roots during a CA rotation) was refused
+  over REST while the JWKS fetch accepted it. REST and JWKS now load the bundle through one shared
+  parser (`TlsSupport.customCaStore`) that trusts every certificate and refuses an empty or non-PEM
+  bundle with a message that never echoes the content. The system roots are still trusted alongside
+  the bundle, and chain and hostname verification are unchanged.
+
 ### Migration
 
 1. **`@AxiamRequireRole` (N15).** Add the `roles` scope to every client that needs it: add `roles` to

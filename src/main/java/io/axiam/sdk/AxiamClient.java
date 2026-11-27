@@ -6400,18 +6400,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 return systemTm;
             }
 
-            KeyStore customStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            customStore.load(null, null);
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate customCert = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(customCaPem));
-            customStore.setCertificateEntry("custom-ca", customCert);
+            // Every certificate of the bundle, via the one parser REST and JWKS share.
+            KeyStore customStore = io.axiam.sdk.internal.TlsSupport.customCaStore(customCaPem);
 
             TrustManagerFactory customTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             customTmf.init(customStore);
             X509TrustManager customTm = firstX509(customTmf.getTrustManagers());
 
             return new CompositeX509TrustManager(systemTm, customTm);
-        } catch (GeneralSecurityException | IOException e) {
+        } catch (GeneralSecurityException e) {
             // §6: a non-PEM/invalid custom CA MUST return a clear error at
             // construction time.
             throw new NetworkError("invalid custom CA PEM: " + e.getMessage(), e);
