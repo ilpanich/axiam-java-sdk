@@ -191,6 +191,57 @@ class JwksVerifierKidCooldownTest {
     }
 
     @Test
+    void staleIfError_isBoundedAKidRemovedUpstreamStopsVerifyingAfterTheStaleBound() throws Exception {
+        OctetKeyPair key = key("key-1");
+        AtomicInteger fetches = new AtomicInteger();
+        AtomicInteger status = new AtomicInteger(200);
+        MockWebServer server = new MockWebServer();
+        server.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                fetches.incrementAndGet();
+                if (status.get() != 200) {
+                    return new MockResponse().setResponseCode(status.get());
+                }
+                return new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                        .setBody(new JWKSet(List.of(key.toPublicJWK())).toString());
+            }
+        });
+        server.start();
+        try (server) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            AtomicLong now = new AtomicLong(1_000_000_000L);
+            verifier.setClockForTesting(now::get);
+            long second = 1_000_000_000L;
+            String cached = sign(key, "key-1");
+
+            assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject()); // t=0, fetch 1
+            status.set(500);
+
+            // t=301 .. t=599: past the TTL, the endpoint failing, the stale set still answers, with one
+            // fetch per 60 s window (t=301, 361, 421, 481, 541) and none in between.
+            now.addAndGet(301 * second);
+            for (int t = 301; t <= 595; t += 6) {
+                assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject(), "t=" + t);
+                now.addAndGet(6 * second);
+            }
+            now.addAndGet(-2 * second); // the loop ends at t=601; step back to t=599
+            assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject(), "t=599");
+            now.addAndGet(2 * second);
+            assertEquals(6, fetches.get(), "one fetch per window");
+
+            // t=601: older than TTL + the stale bound: fail closed, a kid removed upstream no longer verifies.
+            AuthError e = assertThrows(AuthError.class, () -> verifier.verifyAccessToken(cached, TENANT));
+            assertTrue(e.getMessage().contains("JWKS"), e.getMessage());
+            assertEquals(7, fetches.get());
+            now.addAndGet(1 * second);
+            AuthError again = assertThrows(AuthError.class, () -> verifier.verifyAccessToken(cached, TENANT));
+            assertTrue(again.getMessage().contains("JWKS unavailable"), again.getMessage());
+            assertEquals(7, fetches.get(), "still one fetch per window");
+        }
+    }
+
+    @Test
     void aVerifierThatNeverLoadedReportsJwksUnavailableInsideTheWindow() throws Exception {
         OctetKeyPair key = key("key-1");
         AtomicInteger fetches = new AtomicInteger();

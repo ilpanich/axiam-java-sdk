@@ -20,7 +20,7 @@ import java.util.Map;
  * {@link OidcStateStore} yourself for that; nothing in the SDK assumes this
  * class.
  *
- * <p>Thread-safe: backed by a a synchronized insertion-ordered map, so concurrent
+ * <p>Thread-safe: backed by a synchronized insertion-ordered map, so concurrent
  * {@link #save}/{@link #consume} calls never corrupt it, and the atomic
  * get-and-delete in {@link #consume} makes it single-use even under concurrent
  * callers racing the same {@code state}.

@@ -119,7 +119,10 @@ are regenerated (`AuditLogEntry`).
 
 - **Review round 1.** The JWKS verifier now keeps the last good key set past its TTL when a refresh
   fails (stale-if-error) and throttles only the network call: one failed fetch near the TTL no longer
-  refuses every token for a window, and a verifier that never loaded reports "JWKS unavailable". The
+  refuses every token for a window, and a verifier that never loaded reports "JWKS unavailable". The stale
+  set is trusted for at most 600 s (`JWKS_TTL` + `JWKS_MAX_STALE`, 300 s each); past that the verifier
+  fails closed, so a key removed upstream cannot keep verifying through an outage. Past the TTL a cached
+  kid is verified without taking the refresh lock unless a fetch is due. The
   login callback also clears the binding cookie when a hook throws an `Error`, and
   `MemoryOidcStateStore` evicts and sweeps in O(1) (insertion-ordered).
 

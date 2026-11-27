@@ -49,7 +49,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * {@code kid}, a TTL refresh or a retry after a failure, is bounded by this class's
  * own per-verifier 60s window ({@link #UNKNOWN_KID_REFETCH_COOLDOWN}); only the
  * fetch is throttled, never the verification of a {@code kid} the last good set
- * holds (stale-if-error).
+ * holds, which is used even when a refresh has failed (stale-if-error) but only while it is at
+ * most {@link #JWKS_TTL} + {@link #JWKS_MAX_STALE} (600 s) old; past that the verifier fails closed.
  *
  * <p><strong>Implementation note (Assumption A5 resolved against the
  * installed nimbus-jose-jwt 10.7 sources):</strong> the "obvious" nimbus
@@ -173,6 +174,13 @@ public final class JwksVerifier {
      */
     static final Duration JWKS_TTL = Duration.ofSeconds(300);
 
+    /**
+     * How far past {@link #JWKS_TTL} a set that could not be refreshed is still trusted (R2-1). Beyond
+     * {@code JWKS_TTL + JWKS_MAX_STALE} the verifier fails closed, so a key removed upstream (a
+     * rotated-out compromised key) stops verifying within 600 s even while the endpoint is unreachable.
+     */
+    static final Duration JWKS_MAX_STALE = Duration.ofSeconds(300);
+
     private final LocalVerificationPolicy policy;
 
     /**
@@ -204,7 +212,7 @@ public final class JwksVerifier {
     private volatile java.util.function.LongSupplier clock = System::nanoTime;
 
     /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #refreshLock}. */
-    private long lastFetchNanos;
+    private volatile long lastFetchNanos;
 
     /** Test seam: replaces the monotonic clock behind the unknown-kid cooldown. */
     void setClockForTesting(java.util.function.LongSupplier nanoClock) {
@@ -1077,10 +1085,13 @@ public final class JwksVerifier {
                 .build();
         JWKSelector selector = new JWKSelector(matcher);
 
+        // Fast path, no lock: a set within the TTL answers; a set past the TTL but within the stale
+        // bound answers too while no fetch is due (R2-2), so past the TTL verification does not
+        // serialize on the lock. When a fetch is due the lock is taken below.
         long now0 = clock.getAsLong();
-        com.nimbusds.jose.jwk.JWKSet fresh = freshSet(now0);
-        if (fresh != null) {
-            OctetKeyPair fastKey = firstOctetKeyPair(selector.select(fresh));
+        com.nimbusds.jose.jwk.JWKSet fast = usableSet(now0, !fetchDue(now0));
+        if (fast != null) {
+            OctetKeyPair fastKey = firstOctetKeyPair(selector.select(fast));
             if (fastKey != null) {
                 return fastKey;
             }
@@ -1089,9 +1100,10 @@ public final class JwksVerifier {
         refreshLock.lock();
         try {
             long nowNanos = clock.getAsLong();
-            fresh = freshSet(nowNanos);
-            if (fresh != null) {
-                OctetKeyPair recheckKey = firstOctetKeyPair(selector.select(fresh));
+            boolean due = fetchDue(nowNanos);
+            com.nimbusds.jose.jwk.JWKSet recheck = usableSet(nowNanos, !due);
+            if (recheck != null) {
+                OctetKeyPair recheckKey = firstOctetKeyPair(selector.select(recheck));
                 if (recheckKey != null) {
                     return recheckKey;
                 }
@@ -1101,9 +1113,9 @@ public final class JwksVerifier {
             // whether the cache is warm, expired or cold, and a failed attempt counts. Only the
             // NETWORK CALL is throttled: a kid the last good set holds is still verified from that
             // set while the window holds (L-1), so one transient failure near the TTL does not
-            // refuse every token. The first fetch of a verifier's life is allowed (lastFetchNanos is 0).
-            boolean throttled = lastFetchNanos != 0L
-                    && nowNanos - lastFetchNanos < UNKNOWN_KID_REFETCH_COOLDOWN.toNanos();
+            // refuse every token; but only up to TTL + JWKS_MAX_STALE old (R2-1), so a key removed
+            // upstream cannot keep verifying through an outage, however long. The first fetch of a verifier's life is allowed (lastFetchNanos is 0).
+            boolean throttled = !due;
             if (!throttled) {
                 lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
                 try {
@@ -1116,9 +1128,10 @@ public final class JwksVerifier {
                 }
             }
 
-            com.nimbusds.jose.jwk.JWKSet set = current;
+            // The set is trusted only within TTL + the stale bound (R2-1); past that, fail closed.
+            com.nimbusds.jose.jwk.JWKSet set = usableSet(nowNanos, true);
             if (set == null) {
-                // Never loaded: nothing to verify against.
+                // Never loaded, or too old to trust: nothing to verify against.
                 throw new AuthError(throttled
                         ? "JWKS unavailable: the last fetch failed and the next attempt is not yet due "
                                 + "(CONTRACT.md §12.4 rule 2)"
@@ -1134,13 +1147,24 @@ public final class JwksVerifier {
         }
     }
 
-    /** The loaded JWKS if it is within {@link #JWKS_TTL}, else {@code null}. */
-    private com.nimbusds.jose.jwk.@Nullable JWKSet freshSet(long nowNanos) {
+    /** Whether the window allows a JWKS fetch now (the first fetch of a verifier's life always does). */
+    private boolean fetchDue(long nowNanos) {
+        long last = lastFetchNanos;
+        return last == 0L || nowNanos - last >= UNKNOWN_KID_REFETCH_COOLDOWN.toNanos();
+    }
+
+    /**
+     * The loaded JWKS if it is within {@link #JWKS_TTL}; or, when {@code allowStale}, within
+     * {@code JWKS_TTL + }{@link #JWKS_MAX_STALE}; else {@code null}.
+     */
+    private com.nimbusds.jose.jwk.@Nullable JWKSet usableSet(long nowNanos, boolean allowStale) {
         com.nimbusds.jose.jwk.JWKSet set = current;
-        if (set == null || nowNanos - loadedAtNanos >= JWKS_TTL.toNanos()) {
+        if (set == null) {
             return null;
         }
-        return set;
+        long age = nowNanos - loadedAtNanos;
+        long limit = allowStale ? JWKS_TTL.toNanos() + JWKS_MAX_STALE.toNanos() : JWKS_TTL.toNanos();
+        return age < limit ? set : null;
     }
 
     private static OctetKeyPair firstOctetKeyPair(List<JWK> jwks) {
