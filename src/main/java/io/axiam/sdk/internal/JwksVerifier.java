@@ -5,7 +5,6 @@ import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.KeySourceException;
 import com.nimbusds.jose.crypto.Ed25519Verifier;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.JWK;
@@ -14,12 +13,8 @@ import com.nimbusds.jose.jwk.JWKSelector;
 import com.nimbusds.jose.jwk.KeyType;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.OctetKeyPair;
-import com.nimbusds.jose.jwk.source.DefaultJWKSetCache;
-import com.nimbusds.jose.jwk.source.JWKSetCache;
-import com.nimbusds.jose.jwk.source.RemoteJWKSet;
 import com.nimbusds.jose.util.DefaultResourceRetriever;
 import com.nimbusds.jose.util.ResourceRetriever;
-import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -44,18 +39,17 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Local JWT verification against the organization-wide EdDSA JWKS (D-19,
  * CONTRACT.md &sect;9's local-verify companion). Sources keys from
- * {@code {baseUrl}/oauth2/jwks} via nimbus's {@link RemoteJWKSet}, cached
- * with {@link DefaultJWKSetCache} (TTL 300s) and rotated on an unknown
- * {@code kid} (built into {@link RemoteJWKSet#get}); the unknown-{@code kid}
- * refetch is bounded by this class's own per-verifier 60s cooldown
- * ({@link #UNKNOWN_KID_REFETCH_COOLDOWN}), because the library's cache does not
- * bound it.
+ * {@code {baseUrl}/oauth2/jwks}, cached for {@link #JWKS_TTL} (300s) and
+ * refetched on an unknown {@code kid}. Every network fetch, for an unknown
+ * {@code kid}, a TTL refresh or a retry after a failure, is bounded by this class's
+ * own per-verifier 60s window ({@link #UNKNOWN_KID_REFETCH_COOLDOWN}); only the
+ * fetch is throttled, never the verification of a {@code kid} the last good set
+ * holds (stale-if-error).
  *
  * <p><strong>Implementation note (Assumption A5 resolved against the
  * installed nimbus-jose-jwt 10.7 sources):</strong> the "obvious" nimbus
@@ -74,12 +68,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * found")} even though the JWKS fetch and key match succeeded. Separately,
  * {@code DefaultJWSVerifierFactory.createJWSVerifier} has no EdDSA/OKP
  * branch at all (only HMAC/RSA/EC) even if a converted key did exist. This
- * class therefore builds the key lookup directly against the same
- * {@link RemoteJWKSet} + {@link DefaultJWKSetCache} (preserving D-19's
- * "Don't Hand-Roll: use RemoteJWKSet+DefaultJWKSetCache" mandate for
- * fetch/cache/rotation) and constructs {@link Ed25519Verifier} directly
- * from the matched {@link OctetKeyPair}, which nimbus DOES support
- * natively.
+ * class therefore builds the key lookup directly over a
+ * {@link com.nimbusds.jose.jwk.JWKSet} it fetches and caches itself (so the
+ * fetch window and stale-if-error are exact) and constructs
+ * {@link Ed25519Verifier} directly from the matched {@link OctetKeyPair},
+ * which nimbus DOES support natively.
  *
  * <p><strong>Algorithm pinning (T-20-06):</strong> the header {@code alg}
  * is checked against an explicit {@code EdDSA} allowlist BEFORE any JWKS
@@ -164,7 +157,21 @@ public final class JwksVerifier {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final RemoteJWKSet<SecurityContext> jwkSource;
+    private final URL jwksUrl;
+    private final ResourceRetriever http = new DefaultResourceRetriever(500, 500, 50 * 1024);
+
+    /** The last JWKS fetched successfully, or {@code null} if none has been (never loaded). */
+    private volatile com.nimbusds.jose.jwk.@Nullable JWKSet current;
+
+    /** Monotonic time {@link #current} was loaded; guarded by {@link #refreshLock} for writes. */
+    private volatile long loadedAtNanos;
+
+    /**
+     * How long {@link #current} is served without a refresh attempt. Past it, a refresh is attempted
+     * (throttled by {@link #UNKNOWN_KID_REFETCH_COOLDOWN}); if that fails the last good set is kept
+     * and still used (stale-if-error), so a transient JWKS failure never refuses every token.
+     */
+    static final Duration JWKS_TTL = Duration.ofSeconds(300);
 
     private final LocalVerificationPolicy policy;
 
@@ -180,9 +187,8 @@ public final class JwksVerifier {
 
     /**
      * Serializes the forced-refetch path so a concurrent burst of
-     * unknown-{@code kid} verifications collapses to exactly one Nimbus
-     * refetch (D-08/D-09) &mdash; we do NOT rely on {@link RemoteJWKSet}'s
-     * own thread-safety for this guarantee (Assumption A3). The lock wraps
+     * unknown-{@code kid} verifications collapses to at most one fetch
+     * per window (D-08/D-09). The lock wraps
      * only the fetch/refetch decision below; the EdDSA signature
      * verification in {@link #verifySignatureOnlyUnchecked(String)} is unaffected.
      */
@@ -190,20 +196,12 @@ public final class JwksVerifier {
 
     /**
      * CONTRACT.md &sect;12.4 rule 2: the per-verifier window within which an unknown {@code kid}
-     * causes no further JWKS fetch. A named constant, not left to {@link DefaultJWKSetCache}.
+     * causes no further JWKS fetch. A named constant.
      */
     static final Duration UNKNOWN_KID_REFETCH_COOLDOWN = Duration.ofSeconds(60);
 
     /** Monotonic clock for the cooldown; replaceable by tests in this package. */
     private volatile java.util.function.LongSupplier clock = System::nanoTime;
-
-    /**
-     * Network fetches {@link #selectKey} has granted the underlying {@link RemoteJWKSet} for the
-     * call in progress; guarded by {@link #refreshLock}. Zero outside that call, so nothing else
-     * can make the source fetch.
-     */
-    private final java.util.concurrent.atomic.AtomicInteger fetchPermits =
-            new java.util.concurrent.atomic.AtomicInteger();
 
     /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #refreshLock}. */
     private long lastFetchNanos;
@@ -354,22 +352,7 @@ public final class JwksVerifier {
         // (JWKS_CACHE_TTL=300s / FORCED_REFETCH_MIN_INTERVAL=60s), Go
         // (jwx minInterval=60s / maxInterval=300s), and Python
         // (PyJWKClient lifespan=300) reference SDKs' proven defaults.
-        JWKSetCache cache = new DefaultJWKSetCache(300, 60, TimeUnit.SECONDS);
-        // The same defaults RemoteJWKSet uses when given no retriever, behind a gate that lets
-        // exactly the fetches selectKey has granted through (see fetchPermits).
-        ResourceRetriever http = new DefaultResourceRetriever(
-                RemoteJWKSet.DEFAULT_HTTP_CONNECT_TIMEOUT,
-                RemoteJWKSet.DEFAULT_HTTP_READ_TIMEOUT,
-                RemoteJWKSet.DEFAULT_HTTP_SIZE_LIMIT);
-        ResourceRetriever gated = url -> {
-            if (fetchPermits.getAndDecrement() <= 0) {
-                fetchPermits.set(0);
-                throw new IOException("JWKS fetch not permitted: one fetch per unknown-kid window "
-                        + "(CONTRACT.md §12.4 rule 2)");
-            }
-            return http.retrieveResource(url);
-        };
-        this.jwkSource = new RemoteJWKSet<>(jwksUrl, gated, cache);
+        this.jwksUrl = jwksUrl;
     }
 
     private static URL deriveJwksUrl(String baseUrl) {
@@ -1065,21 +1048,15 @@ public final class JwksVerifier {
     }
 
     /**
-     * Looks up the EdDSA/Ed25519 signing key matching {@code header}'s
-     * {@code kid} in the cached JWKS, sourced from {@link #jwkSource}
-     * ({@link RemoteJWKSet}, which itself forces exactly one refetch +
-     * retry when the sought {@code kid} is not found in the cached set —
-     * key-rotation support carried by the library, not hand-rolled).
+     * Looks up the EdDSA/Ed25519 signing key matching {@code header}'s {@code kid} in the loaded
+     * JWKS.
      *
-     * <p>D-08/D-09: a concurrent burst of unknown-{@code kid} lookups must
-     * collapse to exactly one Nimbus refetch. The fast path below matches
-     * against {@link RemoteJWKSet#getCachedJWKSet()} — which never triggers
-     * a network call — before ever acquiring {@link #refreshLock}. Only on
-     * a cache miss is the lock acquired; the cache is re-checked once more
-     * under the lock (another thread may have just refreshed it while this
-     * one waited), and {@link RemoteJWKSet#get} — the call that may
-     * perform the actual network refetch — is invoked only if the key is
-     * still missing.
+     * <p>D-08/D-09, L-1: the fast path matches against the loaded set while it is within
+     * {@link #JWKS_TTL}, without the lock and without the network. Otherwise (unknown {@code kid},
+     * expired set, nothing loaded) the lock is taken, the set re-checked, and at most one fetch is
+     * made per {@link #UNKNOWN_KID_REFETCH_COOLDOWN}, failures included. When the fetch is refused
+     * or fails, the last good set (however old) still answers for the kids it holds; only a
+     * verifier that has never loaded a set has nothing to verify against.
      */
     private OctetKeyPair selectKey(JWSHeader header) {
         // CONTRACT.md §10.1 rule 12 (contract 1.68; N14): the key is selected by the
@@ -1100,53 +1077,54 @@ public final class JwksVerifier {
                 .build();
         JWKSelector selector = new JWKSelector(matcher);
 
-        OctetKeyPair fastKey = selectFromCache(selector);
-        if (fastKey != null) {
-            return fastKey;
+        long now0 = clock.getAsLong();
+        com.nimbusds.jose.jwk.JWKSet fresh = freshSet(now0);
+        if (fresh != null) {
+            OctetKeyPair fastKey = firstOctetKeyPair(selector.select(fresh));
+            if (fastKey != null) {
+                return fastKey;
+            }
         }
 
         refreshLock.lock();
         try {
-            OctetKeyPair recheckKey = selectFromCache(selector);
-            if (recheckKey != null) {
-                return recheckKey;
-            }
-
-            // CONTRACT.md §12.4 rule 2 (C5): at most ONE refetch per cooldown window, however
-            // many tokens present an unknown kid. nimbus's DefaultJWKSetCache refetches on
-            // every kid miss (its cooldown does not bound this path), so the window is kept
-            // here. A cold or expired cache is a plain load, but it starts the window too.
             long nowNanos = clock.getAsLong();
-            // JAV-R1-3 (D-4): the window also holds on a COLD cache. A cache is cold after a failed
-            // fetch (endpoint down, 5xx, bad JSON) and again at every TTL expiry; if that state
-            // skipped the window, a JWKS outage would turn every presented token, forged kids
-            // included, into one outbound request. The first fetch of a verifier's life is
-            // allowed (lastFetchNanos is 0); after a TTL expiry the last fetch is at least 300 s
-            // old, so the 60 s window has long passed and no legitimate token is held back.
-            if (lastFetchNanos != 0L && nowNanos - lastFetchNanos < UNKNOWN_KID_REFETCH_COOLDOWN.toNanos()) {
-                throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
-            }
-            lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
-
-            // One network fetch for this whole call, however nimbus would like to behave: on an
-            // unknown kid it loads a cold cache and then refetches once more, which would make
-            // two fetches per window.
-            fetchPermits.set(1);
-            List<JWK> matches;
-            try {
-                matches = jwkSource.get(selector, null);
-            } catch (KeySourceException e) {
-                if (jwkSource.getCachedJWKSet() != null) {
-                    // The one permitted fetch loaded the set and the kid is still absent: nimbus's
-                    // own second fetch was refused by the gate. That is "no such key", not an outage.
-                    throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
+            fresh = freshSet(nowNanos);
+            if (fresh != null) {
+                OctetKeyPair recheckKey = firstOctetKeyPair(selector.select(fresh));
+                if (recheckKey != null) {
+                    return recheckKey;
                 }
-                throw new AuthError("JWKS fetch failed: " + e.getMessage());
-            } finally {
-                fetchPermits.set(0);
             }
 
-            OctetKeyPair key = firstOctetKeyPair(matches);
+            // CONTRACT.md §12.4 rule 2 (C5, JAV-R1-3): at most ONE JWKS fetch per cooldown window,
+            // whether the cache is warm, expired or cold, and a failed attempt counts. Only the
+            // NETWORK CALL is throttled: a kid the last good set holds is still verified from that
+            // set while the window holds (L-1), so one transient failure near the TTL does not
+            // refuse every token. The first fetch of a verifier's life is allowed (lastFetchNanos is 0).
+            boolean throttled = lastFetchNanos != 0L
+                    && nowNanos - lastFetchNanos < UNKNOWN_KID_REFETCH_COOLDOWN.toNanos();
+            if (!throttled) {
+                lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
+                try {
+                    String body = http.retrieveResource(jwksUrl).getContent();
+                    current = com.nimbusds.jose.jwk.JWKSet.parse(body);
+                    loadedAtNanos = nowNanos;
+                } catch (IOException | ParseException | RuntimeException e) {
+                    // Keep whatever was loaded before (stale-if-error); the window already counts
+                    // this attempt. Nothing about the response is logged.
+                }
+            }
+
+            com.nimbusds.jose.jwk.JWKSet set = current;
+            if (set == null) {
+                // Never loaded: nothing to verify against.
+                throw new AuthError(throttled
+                        ? "JWKS unavailable: the last fetch failed and the next attempt is not yet due "
+                                + "(CONTRACT.md §12.4 rule 2)"
+                        : "JWKS fetch failed");
+            }
+            OctetKeyPair key = firstOctetKeyPair(selector.select(set));
             if (key == null) {
                 throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
             }
@@ -1156,17 +1134,13 @@ public final class JwksVerifier {
         }
     }
 
-    /**
-     * Matches {@code selector} against whatever is currently in
-     * {@link RemoteJWKSet#getCachedJWKSet()} WITHOUT triggering a network
-     * fetch (returns {@code null} on a cold/empty cache or no match).
-     */
-    private OctetKeyPair selectFromCache(JWKSelector selector) {
-        com.nimbusds.jose.jwk.JWKSet cached = jwkSource.getCachedJWKSet();
-        if (cached == null) {
+    /** The loaded JWKS if it is within {@link #JWKS_TTL}, else {@code null}. */
+    private com.nimbusds.jose.jwk.@Nullable JWKSet freshSet(long nowNanos) {
+        com.nimbusds.jose.jwk.JWKSet set = current;
+        if (set == null || nowNanos - loadedAtNanos >= JWKS_TTL.toNanos()) {
             return null;
         }
-        return firstOctetKeyPair(selector.select(cached));
+        return set;
     }
 
     private static OctetKeyPair firstOctetKeyPair(List<JWK> jwks) {

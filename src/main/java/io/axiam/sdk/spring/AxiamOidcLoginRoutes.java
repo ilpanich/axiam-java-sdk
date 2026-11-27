@@ -224,7 +224,10 @@ public final class AxiamOidcLoginRoutes {
         String clear = OidcLoginBinding.clearCookie(options.redirectUri());
         try {
             return completeLogin(client, store, options, request, clear);
-        } catch (RuntimeException e) {
+        } catch (VirtualMachineError e) {
+            throw e;
+        } catch (Throwable e) {
+            // Any other failure, an Error from an application hook included, still clears the cookie.
             LOG.warn("axiam_sdk.oidc: the login callback failed unexpectedly: {}", e.getClass().getName());
             LOG.debug("axiam_sdk.oidc: callback failure detail", e);
             return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "server_error",

@@ -129,6 +129,81 @@ class JwksVerifierKidCooldownTest {
         }
     }
 
+    @Test
+    void staleIfError_aFailedRefreshNearTheTtlStillVerifiesACachedKidAndFetchesAtMostOncePerWindow()
+            throws Exception {
+        OctetKeyPair key = key("key-1");
+        AtomicInteger fetches = new AtomicInteger();
+        AtomicInteger status = new AtomicInteger(200);
+        MockWebServer server = new MockWebServer();
+        server.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                fetches.incrementAndGet();
+                if (status.get() != 200) {
+                    return new MockResponse().setResponseCode(status.get());
+                }
+                return new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                        .setBody(new JWKSet(List.of(key.toPublicJWK())).toString());
+            }
+        });
+        server.start();
+        try (server) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            AtomicLong now = new AtomicLong(1_000_000_000L);
+            verifier.setClockForTesting(now::get);
+            long second = 1_000_000_000L;
+            String cached = sign(key, "key-1");
+
+            // t=0: the set is loaded.
+            assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
+            assertEquals(1, fetches.get());
+
+            // t=270: an unknown kid causes one fetch, which fails.
+            status.set(500);
+            now.addAndGet(270 * second);
+            assertThrows(AuthError.class, () -> verifier.verifyAccessToken(sign(key, "unknown"), TENANT));
+            assertEquals(2, fetches.get());
+
+            // t=301 and t=329: the TTL has passed and the window holds, yet the cached kid verifies from
+            // the last good set and nothing is fetched.
+            now.addAndGet(31 * second);
+            assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
+            now.addAndGet(28 * second); // t=329, one second inside the window
+            for (int i = 0; i < 10; i++) {
+                assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
+            }
+            assertEquals(2, fetches.get(), "no fetch inside the window");
+
+            // t=331: the window has passed: ONE retry, which fails, and the cached kid still verifies.
+            now.addAndGet(2 * second);
+            for (int i = 0; i < 10; i++) {
+                assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
+            }
+            assertEquals(3, fetches.get(), "one fetch per window");
+
+            // The endpoint recovers: the next window's attempt loads the set again.
+            status.set(200);
+            now.addAndGet(61 * second);
+            assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
+            assertEquals(4, fetches.get());
+        }
+    }
+
+    @Test
+    void aVerifierThatNeverLoadedReportsJwksUnavailableInsideTheWindow() throws Exception {
+        OctetKeyPair key = key("key-1");
+        AtomicInteger fetches = new AtomicInteger();
+        try (MockWebServer server = server(fetches, new AtomicReference<>(key), 500)) {
+            JwksVerifier verifier = new JwksVerifier(server.url("/").toString());
+            AuthError first = assertThrows(AuthError.class, () -> verifier.verifyAccessToken(sign(key, "key-1"), TENANT));
+            assertTrue(first.getMessage().contains("fetch failed"), first.getMessage());
+            AuthError second = assertThrows(AuthError.class, () -> verifier.verifyAccessToken(sign(key, "key-1"), TENANT));
+            assertTrue(second.getMessage().contains("JWKS unavailable"), second.getMessage());
+            assertEquals(1, fetches.get());
+        }
+    }
+
     // --- helpers -----------------------------------------------------------
 
     private static OctetKeyPair key(String kid) throws Exception {

@@ -28,6 +28,7 @@ import org.springframework.web.servlet.function.RouterFunction;
 import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -353,6 +354,11 @@ class AxiamOidcLoginBindingTest {
             {"/\u20ac", "/%E2%82%AC"},
             {"/a|b\"c", "/a|b%22c"},
             {"/a\ud800b", "/a%EF%BF%BDb"},
+            {"/%%41", "/%25%41"},
+            {"/a%2", "/a%252"},
+            {"/\ud800\ud800", "/%EF%BF%BD%EF%BF%BD"},
+            {"/\udc00\udc00", "/%EF%BF%BD%EF%BF%BD"},
+            {"/\ud83d\ude00", "/%F0%9F%98%80"},
             {"/dashboard?tab=1&x=a b#frag", "/dashboard?tab=1&x=a%20b#frag"}};
         for (String[] c : cases) {
             try (Harness h = new Harness(HTTPS_CALLBACK)) {
@@ -499,6 +505,19 @@ class AxiamOidcLoginBindingTest {
     }
 
     @Test
+    void aSuccessHookThatThrowsAnErrorStillClearsTheCookie() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> new AxiamOidcLoginRoutes.Options(o.loginPath(),
+                o.callbackPath(), o.redirectUri(), null, null, t -> {
+                    throw new AssertionError("hook failed with an Error");
+                }))) {
+            Login login = h.login();
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+            assertEquals(500, response.getStatus());
+            assertCleared(h, response);
+        }
+    }
+
+    @Test
     void aPredicateThatThrowsAnErrorAcceptsNothing() throws Exception {
         try (Harness h = new Harness(HTTPS_CALLBACK, o -> o.withAllowReturnTo(v -> {
             throw new AssertionError("boom");
@@ -584,10 +603,28 @@ class AxiamOidcLoginBindingTest {
                     return OidcTestSupport.discoveryResponse(base);
                 }
             });
+            prewarm(base);
             this.client = AxiamClient.builder(base, TENANT).oidcClientId("my-app").build();
             this.routes = AxiamOidcLoginRoutes.routes(client, store, customize.apply(
                     new AxiamOidcLoginRoutes.Options(
                             "/oidc/login", "/oidc/callback", redirectUri, null, null, successCalls::add)));
+        }
+
+        /**
+         * Warms the mock server's JWKS and discovery handlers. The SDK reads the JWKS with a 500 ms
+         * timeout, and the first request to a cold mock server can exceed it (a rare 401 on the first
+         * callback of a run).
+         */
+        private static void prewarm(String base) {
+            okhttp3.OkHttpClient http = new okhttp3.OkHttpClient();
+            for (String path : new String[] {"oauth2/jwks", ".well-known/openid-configuration"}) {
+                try (okhttp3.Response ignored = http.newCall(new okhttp3.Request.Builder().url(base + path).build())
+                        .execute()) {
+                    // the response is irrelevant
+                } catch (IOException e) {
+                    // best effort
+                }
+            }
         }
 
         /** Runs the login route and returns the state, nonce and binding cookie it issued. */

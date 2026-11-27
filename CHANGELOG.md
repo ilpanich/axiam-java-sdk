@@ -117,6 +117,12 @@ are regenerated (`AuditLogEntry`).
   `alg`, `typ: logout+jwt`, `kid`) against a two-key JWKS, and pin that §10.1 rules 10 and 11 stay off the
   logout and ID-token paths.
 
+- **Review round 1.** The JWKS verifier now keeps the last good key set past its TTL when a refresh
+  fails (stale-if-error) and throttles only the network call: one failed fetch near the TTL no longer
+  refuses every token for a window, and a verifier that never loaded reports "JWKS unavailable". The
+  login callback also clears the binding cookie when a hook throws an `Error`, and
+  `MemoryOidcStateStore` evicts and sweeps in O(1) (insertion-ordered).
+
 ### Removed
 
 - The AMQP authz requester no longer offers an opt-out for unsigned responses
