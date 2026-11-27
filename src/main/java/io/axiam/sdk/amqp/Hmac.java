@@ -83,6 +83,10 @@ public final class Hmac {
     static byte @Nullable [] verifiedCanonical(byte[] signingKey, byte[] body) {
         try {
             // Rule a: exactly one JSON object, nothing after it, no repeated member name at any depth.
+            // The first byte must be `{`: Jackson would skip a leading UTF-8 byte order mark.
+            if (body.length == 0 || body[0] != '{') {
+                return null;
+            }
             JsonNode root = MAPPER.readTree(body);
             if (!(root instanceof ObjectNode)) {
                 return null;

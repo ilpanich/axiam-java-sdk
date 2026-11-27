@@ -793,6 +793,9 @@ public final class AuthzRequester implements AutoCloseable {
     }
 
     private static JsonNode parseStrict(byte[] bytes) throws Discard {
+        if (bytes.length == 0 || bytes[0] != '{') {
+            throw new Discard(Reason.MALFORMED); // also keeps Jackson from skipping a UTF-8 byte order mark
+        }
         try {
             JsonNode node = STRICT.readTree(bytes);
             if (node == null) {

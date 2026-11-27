@@ -137,7 +137,9 @@ class AmqpContract169AlignTest {
     @Test
     void aValidlySignedAuthzResponseOrACacheInvalidationShapeSentToTheEventConsumerIsRefused() throws Exception {
         String response = "{\"correlation_id\":\"" + CORRELATION + "\",\"allowed\":true,\"reason_code\":\"allowed\","
-                + "\"tenant_id\":\"" + TENANT + "\",\"nonce\":\"" + NONCE + "\"}";
+                + "\"tenant_id\":\"" + TENANT + "\",\"key_version\":2,\"nonce\":\"" + NONCE
+                + "\",\"issued_at\":\"2026-07-10T12:00:00Z\"}";
+        // Carries every v2 field, so the replay checks pass and only the layout check can refuse it.
         assertRefused("authz response", sign(response));
         // A shape whose members are a subset of AuditEventMessage's that an absent-means-default decoder
         // would otherwise fill in.
@@ -291,5 +293,21 @@ class AmqpContract169AlignTest {
             assertEquals(1, d.nacks);
         }
         assertTrue(log.isEmpty(), "no discard event after Close: " + log);
+    }
+
+    @Test
+    void aBodyWithALeadingByteOrderMarkIsRefusedByBothConsumers() throws Exception {
+        byte[] bom = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+        byte[] wire = fixture().get("authz_request").get("wire_json").asText().getBytes(StandardCharsets.UTF_8);
+        byte[] withBom = new byte[bom.length + wire.length];
+        System.arraycopy(bom, 0, withBom, 0, bom.length);
+        System.arraycopy(wire, 0, withBom, bom.length, wire.length);
+        assertRefused("event consumer", withBom);
+
+        byte[] resp = sign(RESPONSE);
+        byte[] respBom = new byte[bom.length + resp.length];
+        System.arraycopy(bom, 0, respBom, 0, bom.length);
+        System.arraycopy(resp, 0, respBom, bom.length, resp.length);
+        assertEquals("malformed", reasonOfBytes(respBom));
     }
 }
