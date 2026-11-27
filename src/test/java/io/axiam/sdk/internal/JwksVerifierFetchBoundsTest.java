@@ -46,7 +46,7 @@ class JwksVerifierFetchBoundsTest {
     private static final long T0 = 1_000_000_000L;
     private static final long TTL = JwksVerifier.JWKS_TTL.toSeconds();
 
-    private enum Mode { OK, HANG, DRIP, HEADER_DRIP, STATUS_203, STATUS_206 }
+    private enum Mode { OK, HANG, DRIP, HEADER_DRIP, BIG_BODY, BIG_HEADER, STATUS_203, STATUS_206 }
 
     /** A raw HTTP/1.1 server whose behaviour is switchable and which counts connections. */
     private static final class RawServer implements AutoCloseable {
@@ -55,6 +55,9 @@ class JwksVerifierFetchBoundsTest {
         final AtomicReference<Mode> mode = new AtomicReference<>(Mode.OK);
         final String jwks;
         final List<Socket> open = new ArrayList<>();
+        /** Counted down when a streaming response could no longer be written (the client closed the connection). */
+        final CountDownLatch streamClosed = new CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicLong bigBytesWritten = new java.util.concurrent.atomic.AtomicLong();
 
         RawServer(String jwks) throws IOException {
             this.jwks = jwks;
@@ -97,6 +100,35 @@ class JwksVerifierFetchBoundsTest {
                 OutputStream out = s.getOutputStream();
                 switch (mode.get()) {
                     case HANG -> Thread.sleep(60_000);
+                    case BIG_BODY -> {
+                        out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
+                                .getBytes(StandardCharsets.US_ASCII)); // no Content-Length: a stream of unknown size
+                        byte[] chunk = new byte[64 * 1024];
+                        java.util.Arrays.fill(chunk, (byte) ' ');
+                        try {
+                            for (int i = 0; i < 6000; i++) { // up to ~400 MB
+                                out.write(chunk);
+                                out.flush();
+                                bigBytesWritten.addAndGet(chunk.length);
+                            }
+                        } catch (IOException closed) {
+                            streamClosed.countDown();
+                        }
+                    }
+                    case BIG_HEADER -> {
+                        out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000000\r\n\r\n"
+                                .getBytes(StandardCharsets.US_ASCII));
+                        out.flush();
+                        try {
+                            for (int i = 0; i < 600; i++) {
+                                Thread.sleep(100);
+                                out.write(' ');
+                                out.flush();
+                            }
+                        } catch (IOException closed) {
+                            streamClosed.countDown();
+                        }
+                    }
                     case HEADER_DRIP -> {
                         out.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.US_ASCII));
                         for (int i = 0; i < 100_000 && !s.isClosed(); i++) {
@@ -109,10 +141,14 @@ class JwksVerifierFetchBoundsTest {
                         out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100000\r\n\r\n"
                                 .getBytes(StandardCharsets.US_ASCII));
                         out.flush();
-                        for (int i = 0; i < 100_000 && !s.isClosed(); i++) {
-                            out.write(' ');
-                            out.flush();
-                            Thread.sleep(200);
+                        try {
+                            for (int i = 0; i < 100_000 && !s.isClosed(); i++) {
+                                out.write(' ');
+                                out.flush();
+                                Thread.sleep(200);
+                            }
+                        } catch (IOException closed) {
+                            streamClosed.countDown();
                         }
                     }
                     default -> {
@@ -193,6 +229,65 @@ class JwksVerifierFetchBoundsTest {
             JwksVerifier v = new JwksVerifier(server.url());
             String t = token(key, "held");
             assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertEquals(false, accepts(v, t)));
+            assertTrue(server.streamClosed.await(3, java.util.concurrent.TimeUnit.SECONDS),
+                    "the abandoned exchange must be cancelled: the server sees the connection close shortly after the deadline");
+        }
+    }
+
+    @Test
+    void aBodyLargerThanTheCapIsAFailedRefreshAndItsConnectionIsClosedEarly() throws Exception {
+        OctetKeyPair key = newKey();
+        try (RawServer server = new RawServer(new JWKSet(List.of(key.toPublicJWK())).toString())) {
+            server.mode.set(Mode.BIG_BODY);
+            JwksVerifier v = new JwksVerifier(server.url());
+            String t = token(key, "held");
+            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertEquals(false, accepts(v, t)));
+            assertTrue(server.streamClosed.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                    "the client must stop reading past the cap and close the connection");
+            assertTrue(server.bigBytesWritten.get() < 100L * 1024 * 1024,
+                    "far less than the whole body was transferred: " + server.bigBytesWritten.get());
+        }
+    }
+
+    @Test
+    void aDeclaredContentLengthAboveTheCapIsRefusedAtOnce() throws Exception {
+        OctetKeyPair key = newKey();
+        try (RawServer server = new RawServer(new JWKSet(List.of(key.toPublicJWK())).toString())) {
+            server.mode.set(Mode.BIG_HEADER);
+            JwksVerifier v = new JwksVerifier(server.url());
+            String t = token(key, "held");
+            assertTimeoutPreemptively(Duration.ofSeconds(3), () -> assertEquals(false, accepts(v, t)));
+            assertTrue(server.streamClosed.await(3, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void aCallersOwnInterruptWhileWaitingIsAnAuthErrorThatRecordsNothingAndKeepsTheFlag() throws Exception {
+        OctetKeyPair key = newKey();
+        try (RawServer server = new RawServer(new JWKSet(List.of(key.toPublicJWK())).toString())) {
+            server.mode.set(Mode.HANG);
+            JwksVerifier v = new JwksVerifier(server.url());
+            String t = token(key, "held");
+            AtomicReference<Throwable> thrown = new AtomicReference<>();
+            AtomicReference<Boolean> flag = new AtomicReference<>();
+            Thread caller = new Thread(() -> {
+                try {
+                    v.verifyAccessToken(t, TENANT);
+                } catch (Throwable e) {
+                    thrown.set(e);
+                    flag.set(Thread.currentThread().isInterrupted());
+                }
+            });
+            caller.start();
+            long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (server.connections.get() < 1 && System.nanoTime() < until) {
+                Thread.sleep(10);
+            }
+            caller.interrupt();
+            caller.join(3000);
+            assertTrue(thrown.get() instanceof AuthError, String.valueOf(thrown.get()));
+            assertTrue(thrown.get().getMessage().contains("interrupted"), thrown.get().getMessage());
+            assertEquals(true, flag.get(), "the interrupt flag is restored");
         }
     }
 

@@ -1138,17 +1138,102 @@ public final class JwksVerifier {
         return key;
     }
 
+    /** Test seam: blocks until the fetch in flight, if any, has finished and recorded its outcome. */
+    void awaitInFlightForTesting() {
+        java.util.concurrent.CompletableFuture<Void> f;
+        synchronized (stateLock) {
+            f = inFlight;
+        }
+        if (f != null) {
+            try {
+                f.get(FETCH_DEADLINE.toMillis() + 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Exception ignored) {
+                // the fetch records its own outcome
+            }
+        }
+    }
+
     /** Total deadline of one JWKS fetch, connect to last byte; the fetch is abandoned (cancelled) past it. */
     static final Duration FETCH_DEADLINE = Duration.ofSeconds(4);
 
     private static final int MAX_JWKS_BYTES = 50 * 1024;
 
-    private static final java.net.http.HttpClient FETCH_CLIENT = java.net.http.HttpClient.newBuilder()
-            .version(java.net.http.HttpClient.Version.HTTP_1_1)
-            .connectTimeout(Duration.ofSeconds(2))
-            .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
-            .proxy(java.net.ProxySelector.getDefault())
-            .build();
+    private static final java.net.http.HttpClient FETCH_CLIENT = newFetchClient();
+
+    private static java.net.http.HttpClient newFetchClient() {
+        java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(2))
+                .followRedirects(java.net.http.HttpClient.Redirect.NEVER);
+        if (java.net.ProxySelector.getDefault() != null) {
+            builder.proxy(java.net.ProxySelector.getDefault()); // system proxy settings keep applying
+        }
+        if (java.net.Authenticator.getDefault() != null) {
+            builder.authenticator(java.net.Authenticator.getDefault()); // so do authenticating proxies
+        }
+        return builder.build();
+    }
+
+    /**
+     * Reads at most {@link #MAX_JWKS_BYTES} of a {@code 200} body, counting BYTES; a body past the cap, or one
+     * whose declared {@code Content-Length} is above it, is refused by cancelling the subscription, which closes
+     * the connection, so a huge response is neither buffered nor fully received. Any other status is refused
+     * without reading the body. The body future completes with {@code null} for a refused response.
+     */
+    private static java.net.http.HttpResponse.BodyHandler<byte[]> boundedBody() {
+        return info -> {
+            boolean refuse = info.statusCode() != 200
+                    || info.headers().firstValueAsLong("Content-Length").orElse(0L) > MAX_JWKS_BYTES;
+            return new java.net.http.HttpResponse.BodySubscriber<byte[]>() {
+                private final java.util.concurrent.CompletableFuture<byte[]> result =
+                        new java.util.concurrent.CompletableFuture<>();
+                private final java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+                private java.util.concurrent.Flow.Subscription subscription;
+                private long count;
+
+                @Override
+                public void onSubscribe(java.util.concurrent.Flow.Subscription s) {
+                    subscription = s;
+                    if (refuse) {
+                        s.cancel();
+                        result.complete(null);
+                    } else {
+                        s.request(Long.MAX_VALUE);
+                    }
+                }
+
+                @Override
+                public void onNext(List<java.nio.ByteBuffer> items) {
+                    for (java.nio.ByteBuffer item : items) {
+                        count += item.remaining();
+                        if (count > MAX_JWKS_BYTES) {
+                            subscription.cancel(); // closes the connection
+                            result.complete(null);
+                            return;
+                        }
+                        byte[] bytes = new byte[item.remaining()];
+                        item.get(bytes);
+                        buffer.write(bytes, 0, bytes.length);
+                    }
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    result.completeExceptionally(t);
+                }
+
+                @Override
+                public void onComplete() {
+                    result.complete(buffer.toByteArray());
+                }
+
+                @Override
+                public java.util.concurrent.CompletionStage<byte[]> getBody() {
+                    return result;
+                }
+            };
+        };
+    }
 
     /**
      * Starts a fetch if the window allows one and none is in flight; returns the future of the fetch now in flight
@@ -1168,13 +1253,15 @@ public final class JwksVerifier {
             started = new java.util.concurrent.CompletableFuture<>();
             inFlight = started;
         }
-        java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<String>> request = null;
+        java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<byte[]>> request = null;
         try {
             java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(jwksUrl.toURI())
                     .timeout(FETCH_DEADLINE).header("Accept", "application/json").GET().build();
-            request = FETCH_CLIENT.sendAsync(req, java.net.http.HttpResponse.BodyHandlers.ofString());
-            final java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<String>> sent = request;
-            request.orTimeout(FETCH_DEADLINE.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            request = FETCH_CLIENT.sendAsync(req, boundedBody());
+            final java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<byte[]>> sent = request;
+            // The timeout goes on a COPY: orTimeout completes the future it is applied to, and cancelling an
+            // already-completed future is a no-op, so the exchange would never be abandoned.
+            sent.copy().orTimeout(FETCH_DEADLINE.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)
                     .whenComplete((response, failure) -> {
                         try {
                             if (failure != null) {
@@ -1207,14 +1294,15 @@ public final class JwksVerifier {
      * ({@code {"keys":[]}}, {@code {"keys":[{}]}}, {@code [0]}) is a FAILED refresh: the held keys stay and the
      * anchor does not move.
      */
-    private void adopt(java.net.http.HttpResponse<String> response, long nowNanos) {
+    private void adopt(java.net.http.HttpResponse<byte[]> response, long nowNanos) {
         if (response.statusCode() != 200) {
             return;
         }
-        String body = response.body();
-        if (body == null || body.length() > MAX_JWKS_BYTES) {
+        byte[] bytes = response.body(); // null: refused by the bounded handler (over the cap)
+        if (bytes == null || bytes.length > MAX_JWKS_BYTES) {
             return;
         }
+        String body = new String(bytes, StandardCharsets.UTF_8);
         try {
             JsonNode doc = KEYS_MAPPER.readTree(body);
             JsonNode keys = doc == null ? null : doc.get("keys");

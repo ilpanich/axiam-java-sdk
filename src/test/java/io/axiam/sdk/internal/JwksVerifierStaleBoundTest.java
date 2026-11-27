@@ -105,7 +105,7 @@ class JwksVerifierStaleBoundTest {
             } catch (AuthError e) {
                 return false;
             } finally {
-                Thread.sleep(120); // a refresh due behind a held-kid verification runs in the background
+                verifier.awaitInFlightForTesting(); // a refresh due behind a held-kid verification runs behind it
             }
         }
 

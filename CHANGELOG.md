@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or `EventType.AUDIT_EVENT`). Migration: add `EventType.<your type>` and your tenant id after `queue`; an
   application that consumed both types runs two consumers. `Hmac.verify(key, body)` is kept but deprecated (it
   accepts either layout); use the new `Hmac.verify(key, body, EventType)`.
-- **Contract 1.69 §8 and §12.4 (D-8, D-9, D-10; axiam#883).** (A) Every discard is one event; see "Changed" for the `consume` signature. Every discard now logs exactly one warning with `timestamp`,
+- **Contract 1.69 §8 and §12.4 (D-8, D-9, D-10; axiam#883).** (A) Every discard now logs exactly one warning with `timestamp`,
   `exchange`, `routing_key`, `tenant_id` (the consumer's own) and `reason` (`malformed`, `unsigned`,
   `signature`, `key_version`, `stale`, `replay`) in the normative order of rule 4, and never a signature,
   nonce, key or body. (B) The consumer checks the layout of its configured type only: another signed type's
@@ -29,8 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until TTL + 300 s and not after. The remaining stale-if-error behaviour already conformed and is pinned by
   `JwksVerifierStaleBoundTest`. The JWKS fetch now runs detached from the caller on one total deadline (4 s, DNS to
   last byte; `java.net.http.HttpClient`), is single-flight, never makes a verification with a usable held set
-  wait, counts every failure toward the 60 s window, and treats only a `200` as success.
-
+  wait, counts every failure toward the 60 s window, and treats only a `200` as success. The body is read through a
+  bounded handler (at most 50 KiB, counted in bytes; a larger body, or a larger `Content-Length`, is refused and the
+  connection closed). **Behaviour change:** the JWKS request no longer follows HTTP redirects (`Redirect.NEVER`);
+  the system `ProxySelector` and `Authenticator` still apply.
 - Monthly dependency refresh (2026-11): `amqp-client` 5.38.0; the optional/provided Spring integration now compiles against Spring Framework 7.1.0 and Spring Boot 4.2.0 (`spring-webmvc`, `spring-boot-starter-security`; `spring-test` in tests); the Spring Boot example moves to `spring-boot-starter-parent` 4.2.0. Java support unchanged (21 floor, 25 LTS, 27 newest).
 
 ### Security
