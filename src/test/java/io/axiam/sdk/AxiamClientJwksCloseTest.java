@@ -14,35 +14,32 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** {@code close()} releases the OIDC jwks_uri verifiers' HTTP clients; a rebound handle's close leaves shared ones. */
 class AxiamClientJwksCloseTest {
 
-    private static java.util.Set<Thread> selectorThreads() {
-        return Thread.getAllStackTraces().keySet().stream()
-                .filter(t -> t.isAlive() && t.getName().contains("SelectorManager"))
-                .collect(java.util.stream.Collectors.toSet());
-    }
-
-    /** Selector threads alive now that were not in {@code snapshot}: robust to unrelated threads exiting. */
-    private static java.util.Set<Thread> newThreads(java.util.Set<Thread> snapshot) {
-        java.util.Set<Thread> now = selectorThreads();
-        now.removeAll(snapshot);
-        return now;
-    }
-
-    private static void assertAllDead(java.util.Set<Thread> threads) throws InterruptedException {
-        for (Thread t : threads) {
-            t.join(5_000);
-            org.junit.jupiter.api.Assertions.assertFalse(t.isAlive(), "selector thread must end after close()");
+    /** The primary handle's OIDC verifier clients, reached reflectively: test-only, no production seam is public. */
+    @SuppressWarnings("unchecked")
+    private static java.util.List<java.net.http.HttpClient> oidcVerifierClients(AxiamClient client) throws Exception {
+        java.lang.reflect.Field f = AxiamClient.class.getDeclaredField("oidcJwksVerifiers");
+        f.setAccessible(true);
+        java.util.List<java.net.http.HttpClient> clients = new java.util.ArrayList<>();
+        for (Object verifier : ((Map<String, Object>) f.get(client)).values()) {
+            java.lang.reflect.Method m = verifier.getClass().getDeclaredMethod("fetchClientForTesting");
+            m.setAccessible(true);
+            Object c = m.invoke(verifier);
+            if (c != null) {
+                clients.add((java.net.http.HttpClient) c);
+            }
         }
+        return clients;
     }
 
     @Test
     void closingThePrimaryHandleReleasesTheOidcVerifierThreadButARebindDoesNot() throws Exception {
         OctetKeyPair key = OidcTestSupport.generateEd25519KeyPair("logout-kid");
-        java.util.Set<Thread> before = selectorThreads();
         try (MockWebServer server = new MockWebServer()) {
             String base = server.url("/").toString();
             server.enqueue(OidcTestSupport.discoveryResponse(base));
@@ -60,17 +57,19 @@ class AxiamClientJwksCloseTest {
             AxiamClient primary = AxiamClient.builder(base, "33333333-3333-3333-3333-333333333333")
                     .oidcClientId("my-app").build();
             primary.verifyLogoutToken(token, null);
-            java.util.Set<Thread> started = newThreads(before);
+            java.util.List<java.net.http.HttpClient> started = oidcVerifierClients(primary);
             assertEquals(1, started.size());
 
             AxiamClient rebound = primary.actingTenant(UUID.randomUUID());
             rebound.close();
-            for (Thread t : started) {
-                assertTrue(t.isAlive(), "a rebound handle must not close the primary's verifiers");
+            for (java.net.http.HttpClient c : started) {
+                assertFalse(c.isTerminated(), "a rebound handle must not close the primary's verifiers");
             }
 
             primary.close();
-            assertAllDead(started);
+            for (java.net.http.HttpClient c : started) {
+                assertTrue(c.awaitTermination(java.time.Duration.ofSeconds(5)), "primary close() terminates it");
+            }
         }
     }
 }

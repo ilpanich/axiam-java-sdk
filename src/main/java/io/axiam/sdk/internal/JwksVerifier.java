@@ -1252,6 +1252,13 @@ public final class JwksVerifier implements AutoCloseable {
         }
     }
 
+    /** Test seam: the lazily built fetch client, or {@code null} when none has been built (or after close). */
+    java.net.http.@Nullable HttpClient fetchClientForTesting() {
+        synchronized (clientLock) {
+            return fetchClient;
+        }
+    }
+
     /**
      * Releases the fetch client and its selector thread, abandoning any exchange in flight. Idempotent. After this
      * every refresh fails (the verifier fails closed once its held keys are stale); it never reopens.
