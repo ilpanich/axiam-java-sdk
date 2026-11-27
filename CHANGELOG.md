@@ -7,42 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **Source-incompatible change to a released API (contract 1.69, D-9; axiam#883).** The untyped
-  `AmqpConsumer.consume(channel, queue, signingKey, handler, logger[, skew])` overloads, released in 1.3.0 and
-  1.3.1, are removed: a consumer must be configured with the one signed type it consumes and its own tenant,
-  `AmqpConsumer.consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, handler, logger[, skew])`
-  (or `EventType.AUDIT_EVENT`). Migration: add `EventType.<your type>` and your tenant id after `queue`; an
-  application that consumed both types runs two consumers. `Hmac.verify(key, body)` is kept but deprecated (it
-  accepts either layout); use the new `Hmac.verify(key, body, EventType)`.
-- **Contract 1.69 §8 and §12.4 (D-8, D-9, D-10; axiam#883).** (A) Every discard now logs exactly one warning with `timestamp`,
-  `exchange`, `routing_key`, `tenant_id` (the consumer's own) and `reason` (`malformed`, `unsigned`,
-  `signature`, `key_version`, `stale`, `replay`) in the normative order of rule 4, and never a signature,
-  nonce, key or body. (B) The consumer checks the layout of its configured type only: another signed type's
-  genuine message is `malformed` at step 2c, before the HMAC, even with a changed signature digit; a verified
-  body that does not decode (ill-typed member, `issued_at` not RFC 3339, `nonce` not a UUID) is `malformed`
-  before the `key_version`, `stale` and `replay` gates, and the nonce is recorded only after all of them pass.
-  (C) A BOM-prefixed body (or any non-`{` first byte) is `malformed` and never stripped, and no body, however
-  hostile, escapes the event consumer or the requester. (D) `JwksVerifier` treats a `200` whose JWKS holds no
-  key (`{"keys":[]}`) as a failed refresh: the held keys stay and the age anchor does not move, so they verify
-  until TTL + 300 s and not after. The remaining stale-if-error behaviour already conformed and is pinned by
-  `JwksVerifierStaleBoundTest`. The JWKS fetch now runs detached from the caller on one total deadline (4 s, DNS to
-  last byte; `java.net.http.HttpClient`), is single-flight, never makes a verification with a usable held set
-  wait, counts every failure toward the 60 s window, and treats only a `200` as success. The body is read through a
-  bounded handler (at most 50 KiB, counted in bytes; a larger body, or a larger `Content-Length`, is refused and the
-  connection closed). **Behaviour change:** the JWKS request no longer follows HTTP redirects (`Redirect.NEVER`);
-  the system `ProxySelector` and `Authenticator` still apply.
-- Monthly dependency refresh (2026-11): `amqp-client` 5.38.0; the optional/provided Spring integration now compiles against Spring Framework 7.1.0 and Spring Boot 4.2.0 (`spring-webmvc`, `spring-boot-starter-security`; `spring-test` in tests); the Spring Boot example moves to `spring-boot-starter-parent` 4.2.0. Java support unchanged (21 floor, 25 LTS, 27 newest).
-
 ### Security
+
 Security release (security audit 2026-11-14; contract 1.68). **Three behaviour changes need
 attention before you upgrade: the login glue's browser binding and `returnTo` rule (C7, C6), and
 `@AxiamRequireRole` (N15). See "Migration" below.** CONTRACT.md, openapi.json and
 management-registry.json are re-vendored from contract 1.68, and the generated management models
 are regenerated (`AuditLogEntry`).
-
-### Security
 
 - **C7: the "Login with AXIAM" Spring glue binds the callback to the browser that started the login
   (CONTRACT §12.8 rule 1).** `AxiamOidcLoginRoutes` sets a random `__Host-axiam_oidc_bind` cookie at
@@ -90,13 +61,48 @@ are regenerated (`AuditLogEntry`).
 
 ### Changed
 
+- **Source-incompatible change to a released API (contract 1.69, D-9; axiam#883).** The untyped
+  `AmqpConsumer.consume(channel, queue, signingKey, handler, logger[, skew])` overloads, released in 1.3.0 and
+  1.3.1, are removed: a consumer must be configured with the one signed type it consumes and its own tenant,
+  `AmqpConsumer.consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, handler, logger[, skew])`
+  (or `EventType.AUDIT_EVENT`). Migration: add `EventType.<your type>` and your tenant id after `queue`; an
+  application that consumed both types runs two consumers. `Hmac.verify(key, body)` is kept but deprecated (it
+  accepts either layout); use the new `Hmac.verify(key, body, EventType)`.
+- **Contract 1.69 §8 and §12.4 (D-8, D-9, D-10; axiam#883).** (A) Every discard now logs exactly one warning with `timestamp`,
+  `exchange`, `routing_key`, `tenant_id` (the consumer's own) and `reason` (`malformed`, `unsigned`,
+  `signature`, `key_version`, `stale`, `replay`) in the normative order of rule 4, and never a signature,
+  nonce, key or body. (B) The consumer checks the layout of its configured type only: another signed type's
+  genuine message is `malformed` at step 2c, before the HMAC, even with a changed signature digit; a verified
+  body that does not decode (ill-typed member, `issued_at` not RFC 3339, `nonce` not a UUID) is `malformed`
+  before the `key_version`, `stale` and `replay` gates, and the nonce is recorded only after all of them pass.
+  (C) A BOM-prefixed body (or any non-`{` first byte) is `malformed` and never stripped, and no body, however
+  hostile, escapes the event consumer or the requester. (D) `JwksVerifier` treats a `200` whose JWKS holds no
+  key (`{"keys":[]}`) as a failed refresh: the held keys stay and the age anchor does not move, so they verify
+  until TTL + 300 s and not after. The remaining stale-if-error behaviour already conformed and is pinned by
+  `JwksVerifierStaleBoundTest`. The JWKS fetch now runs detached from the caller on one total deadline (4 s, DNS to
+  last byte; `java.net.http.HttpClient`), is single-flight, never makes a verification with a usable held set
+  wait, counts every failure toward the 60 s window, and treats only a `200` as success. The body is read through a
+  bounded handler (at most 50 KiB, counted in bytes; a larger body, or a larger `Content-Length`, is refused and the
+  connection closed). **Behaviour change:** the JWKS request no longer follows HTTP redirects (`Redirect.NEVER`);
+  the system `ProxySelector` and `Authenticator` still apply.
+- Monthly dependency refresh (2026-11): `amqp-client` 5.38.0; the optional/provided Spring integration now compiles against Spring Framework 7.1.0 and Spring Boot 4.2.0 (`spring-webmvc`, `spring-boot-starter-security`; `spring-test` in tests); the Spring Boot example moves to `spring-boot-starter-parent` 4.2.0. Java support unchanged (21 floor, 25 LTS, 27 newest).
+
 - The Spring authentication filter publishes `ROLE_<name>` for each `roles` entry and
   `SCOPE_<scope>` for each `scope` entry. The bare scope authorities (`users:read`) are gone.
 - The AMQP consumer passes the handler the verified canonical bytes (compact JSON in wire order,
   `hmac_signature` removed), not the delivery body.
 - `Hmac.verify` is stricter: a repeated key or trailing content makes a body fail verification.
 
-### Fixed (follow-up review of 1.4.0, JAV-R1-1 … JAV-R1-8; contract 1.69)
+### Removed
+
+- The AMQP authz requester no longer offers an opt-out for unsigned responses
+  (`Options.withAllowUnsignedResponses()` and `Decision.unsigned()`, added earlier in 1.4.0 and never
+  released): no AXIAM server sends one to a reply queue, so the option could admit only a forged
+  response (CONTRACT 1.69 §8, server #881). The requester requires a 1.68 server; against an older
+  one every check times out (JAV-R1-5). The README says so. `Options` is now
+  `(logger, timeout, clock, executor)`.
+
+### Fixed
 
 - **JAV-R1-1 (security): `LoginResult.user().roles()` no longer carries OAuth2 scopes.** It was the
   `scope` claim split on whitespace, so a token whose scope was named `admin` gave a user for whom
@@ -159,15 +165,6 @@ are regenerated (`AuditLogEntry`).
   kid is verified without taking the refresh lock unless a fetch is due. The
   login callback also clears the binding cookie when a hook throws an `Error`, and
   `MemoryOidcStateStore` evicts and sweeps in O(1) (insertion-ordered).
-
-### Removed
-
-- The AMQP authz requester no longer offers an opt-out for unsigned responses
-  (`Options.withAllowUnsignedResponses()` and `Decision.unsigned()`, added earlier in 1.4.0 and never
-  released): no AXIAM server sends one to a reply queue, so the option could admit only a forged
-  response (CONTRACT 1.69 §8, server #881). The requester requires a 1.68 server; against an older
-  one every check times out (JAV-R1-5). The README says so. `Options` is now
-  `(logger, timeout, clock, executor)`.
 
 ### Migration
 
