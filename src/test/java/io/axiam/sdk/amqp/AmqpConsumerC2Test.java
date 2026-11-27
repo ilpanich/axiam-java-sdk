@@ -73,11 +73,16 @@ class AmqpConsumerC2Test {
     }
 
     private static Outcome run(byte[] body) throws Exception {
+        return run(EventType.AUTHZ_REQUEST, body);
+    }
+
+    private static Outcome run(EventType type, byte[] body) throws Exception {
         List<AckNack> calls = new ArrayList<>();
         List<byte[]> seen = new ArrayList<>();
         Channel channel = AmqpTestDoubles.recordingChannel(calls);
         Logger logger = AmqpTestDoubles.recordingLogger(new ArrayList<>());
-        DeliverCallback callback = AmqpConsumer.deliverCallback(channel, KEY, seen::add, logger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(channel, type, "11111111-1111-1111-1111-111111111111", KEY, seen::add,
+                logger,
                 Duration.ofSeconds(300), CLOCK, new NonceStore(Duration.ofSeconds(600)));
         callback.handle("tag", AmqpTestDoubles.delivery(1L, body));
         return new Outcome(seen, calls);
@@ -198,7 +203,7 @@ class AmqpConsumerC2Test {
         String sig = sign(canonical);
         String wire = canonical.substring(0, canonical.length() - 1) + ",\"hmac_signature\":\"" + sig + "\"}";
 
-        Outcome o = run(wire.getBytes(StandardCharsets.UTF_8));
+        Outcome o = run(EventType.AUDIT_EVENT, wire.getBytes(StandardCharsets.UTF_8));
 
         assertTrue(o.handlerRan(), name + ": a genuine body must verify and reach the handler");
         assertEquals("ack", o.calls().get(0).type(), name);

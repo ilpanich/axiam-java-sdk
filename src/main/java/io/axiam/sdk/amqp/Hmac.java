@@ -42,6 +42,10 @@ public final class Hmac {
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .build();
+    /** Step (1)/(2) reader: one object, nothing after it, repeated names tolerated (they are refused at (3)). */
+    private static final ObjectMapper LENIENT = JsonMapper.builder()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
     private static final String ALGO = "HmacSHA256";
 
     private Hmac() {
@@ -65,31 +69,66 @@ public final class Hmac {
         return verifiedCanonical(signingKey, body) != null;
     }
 
+    /** Why a delivery was discarded (CONTRACT.md &sect;8 rule 4; the closed vocabulary of the discard event). */
+    enum Reason {
+        MALFORMED("malformed"), UNSIGNED("unsigned"), SIGNATURE("signature"), KEY_VERSION("key_version"),
+        STALE("stale"), REPLAY("replay");
+
+        private final String wire;
+
+        Reason(String wire) {
+            this.wire = wire;
+        }
+
+        String wire() {
+            return wire;
+        }
+    }
+
+    /** The result of {@link #inspect}: the verified canonical bytes, or the first reason that applies. */
+    record Inspection(byte @Nullable [] canonical, @Nullable Reason reason) {
+    }
+
+    private static Inspection refused(Reason reason) {
+        return new Inspection(null, reason);
+    }
+
     /**
-     * Verifies {@code body} and returns the canonical bytes the HMAC covered &mdash; the one byte
-     * sequence a caller may build its view of the message from (C2).
-     *
-     * <p>The received body is never what a handler should read: it can carry whitespace, a
-     * repeated key or trailing content that the verifier's tree resolved one way and a different
-     * reader resolves another. The returned bytes are exactly the {@code HMAC-SHA256} input
-     * (the body minus {@code hmac_signature}, compact, in wire order), so what is delivered is what
-     * was signed. A body with a repeated key at any depth, or with content after the JSON object,
-     * is refused.
-     *
-     * @param signingKey the per-tenant AMQP signing secret
-     * @param body       the raw AMQP delivery body bytes
-     * @return the verified canonical bytes, or {@code null} when the body does not verify
+     * Verifies {@code body} for the one configured {@code type} and returns either the canonical bytes the HMAC
+     * covered &mdash; the one byte sequence a caller may build its view of the message from (C2) &mdash; or the
+     * first discard reason that applies, in the normative order of CONTRACT.md &sect;8 rule 4 (positions (1) to
+     * (4); the decode and the v2 gates, (5) to (8), belong to the caller):
+     * (1) not one JSON object (first byte not {@code {}, a byte-order mark included, or it does not parse, trailing
+     * content included) is {@code malformed}; (2) no top-level {@code hmac_signature} is {@code unsigned};
+     * (3) anything else steps 2a to 2c refuse &mdash; a repeated member name, a signature that is not the trailing
+     * 64-hex string, a layout that is not {@code type}'s (the typed check) &mdash; is {@code malformed}, before the
+     * HMAC is computed; (4) a failing HMAC is {@code signature}.
      */
-    static byte @Nullable [] verifiedCanonical(byte[] signingKey, byte[] body) {
+    static Inspection inspect(byte[] signingKey, byte[] body, EventType type) {
         try {
-            // Rule a: exactly one JSON object, nothing after it, no repeated member name at any depth.
-            // The first byte must be `{`: Jackson would skip a leading UTF-8 byte order mark.
+            // (1) Exactly one JSON object, nothing after it. The first byte must be `{`: Jackson would skip a
+            // leading UTF-8 byte order mark, and a BOM is refused, never stripped (D-10).
             if (body.length == 0 || body[0] != '{') {
-                return null;
+                return refused(Reason.MALFORMED);
             }
-            JsonNode root = MAPPER.readTree(body);
+            JsonNode root;
+            try {
+                root = LENIENT.readTree(body);
+            } catch (Exception e) {
+                return refused(Reason.MALFORMED);
+            }
             if (!(root instanceof ObjectNode)) {
-                return null;
+                return refused(Reason.MALFORMED);
+            }
+            // (2) No top-level hmac_signature at all: unsigned, whatever else the body lacks or repeats.
+            if (!root.has("hmac_signature")) {
+                return refused(Reason.UNSIGNED);
+            }
+            // (3) Rule a: no member name repeated at any depth.
+            try {
+                root = MAPPER.readTree(body);
+            } catch (Exception e) {
+                return refused(Reason.MALFORMED);
             }
             // Rule b: the body ends in `,"hmac_signature":"<64 hex>"}`; the canonical bytes are the
             // received bytes before that member, then `}`. Nothing is re-serialized (#882): an
@@ -97,16 +136,16 @@ public final class Hmac {
             // would otherwise refuse a genuine message.
             int suffix = SIGNATURE_MEMBER.length + SIGNATURE_HEX_LENGTH + 2;
             if (body.length <= suffix) {
-                return null;
+                return refused(Reason.MALFORMED);
             }
             int start = body.length - suffix;
             for (int i = 0; i < SIGNATURE_MEMBER.length; i++) {
                 if (body[start + i] != SIGNATURE_MEMBER[i]) {
-                    return null;
+                    return refused(Reason.MALFORMED);
                 }
             }
             if (body[body.length - 2] != '"' || body[body.length - 1] != '}') {
-                return null;
+                return refused(Reason.MALFORMED);
             }
             String sigHex = new String(body, start + SIGNATURE_MEMBER.length, SIGNATURE_HEX_LENGTH,
                     java.nio.charset.StandardCharsets.ISO_8859_1);
@@ -115,75 +154,47 @@ public final class Hmac {
             // hmac_signature is a repeated key and was refused above).
             JsonNode sigNode = root.get("hmac_signature");
             if (sigNode == null || !sigNode.isTextual() || !sigNode.asText().equals(sigHex)) {
-                return null;
+                return refused(Reason.MALFORMED);
             }
             byte[] canonical = new byte[start + 1];
             System.arraycopy(body, 0, canonical, 0, start);
             canonical[start] = '}';
 
-            // Rule c (MUST): the canonical bytes' top-level member names, compared exactly, are one
-            // signed type's declared members in declaration order, optional ones present in place or
-            // absent, nothing else. Every tenant-subkey-signed shape (AuthzResponse, the reactor
-            // messages, the cache-invalidation broadcast) shares this key; without this check a
-            // decoder that fills absent fields with defaults could take one of them for an event.
-            if (!hasDeclaredLayout(MAPPER.readTree(canonical))) {
-                return null;
+            // Rule c (MUST), typed (D-9): the canonical bytes' top-level member names, compared exactly, are
+            // THIS type's declared members in declaration order, optional ones present in place or absent,
+            // nothing else. Every tenant-subkey-signed shape shares the key, so another type's genuine message
+            // passes the HMAC; only the layout tells it apart, and it is refused here, before the HMAC.
+            List<String> names = new ArrayList<>();
+            MAPPER.readTree(canonical).fieldNames().forEachRemaining(names::add);
+            if (!type.hasLayout(names)) {
+                return refused(Reason.MALFORMED);
             }
 
+            // (4) The HMAC, compared in constant time.
             Mac mac = Mac.getInstance(ALGO);
             mac.init(new SecretKeySpec(signingKey, ALGO));
             byte[] computed = mac.doFinal(canonical);
 
-            return MessageDigest.isEqual(computed, expected) ? canonical : null; // constant-time compare
+            return MessageDigest.isEqual(computed, expected)
+                    ? new Inspection(canonical, null) : refused(Reason.SIGNATURE);
         } catch (Exception e) {
-            return null; // parse failure / bad hex / bad key length -> reject, never throw
+            return refused(Reason.MALFORMED); // bad hex / bad key length / anything unforeseen: never throw
         }
-    }
-
-    /** A declared member: its wire name and whether the server omits it when absent. */
-    private record Member(String name, boolean optional) {
-    }
-
-    private static Member req(String name) {
-        return new Member(name, false);
-    }
-
-    private static Member opt(String name) {
-        return new Member(name, true);
     }
 
     /**
-     * The signed event types' members in declaration order (crates/axiam-amqp {@code messages.rs};
-     * CONTRACT &sect;8 "Exact signed field order"), {@code hmac_signature} excluded.
+     * Whether {@code body}'s trailing signature verifies over its canonical bytes for <em>either</em> signed
+     * event layout. A signature primitive for tests and tooling: an event consumer never uses it, because a
+     * consumer accepts exactly one configured type ({@link #inspect}).
      */
-    private static final List<List<Member>> LAYOUTS = List.of(
-            // AuthzRequest
-            List.of(req("correlation_id"), req("tenant_id"), req("subject_id"), req("action"),
-                    req("resource_id"), opt("scope"), req("key_version"), req("nonce"), req("issued_at")),
-            // AuditEventMessage
-            List.of(req("tenant_id"), req("actor_id"), req("actor_type"), req("action"), opt("resource_id"),
-                    req("outcome"), opt("ip_address"), opt("metadata"), req("key_version"), req("nonce"),
-                    req("issued_at")));
-
-    private static boolean hasDeclaredLayout(JsonNode canonicalRoot) {
-        List<String> names = new ArrayList<>();
-        canonicalRoot.fieldNames().forEachRemaining(names::add);
-        for (List<Member> layout : LAYOUTS) {
-            int i = 0;
-            boolean ok = true;
-            for (Member member : layout) {
-                if (i < names.size() && names.get(i).equals(member.name())) {
-                    i++;
-                } else if (!member.optional()) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok && i == names.size()) {
-                return true;
+    static byte @Nullable [] verifiedCanonical(byte[] signingKey, byte[] body) {
+        for (EventType type : EventType.values()) {
+            Inspection i = inspect(signingKey, body, type);
+            if (i.canonical() != null) {
+                return i.canonical();
             }
         }
-        return false;
+        return null;
     }
 
     private static final byte[] SIGNATURE_MEMBER =

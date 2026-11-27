@@ -1269,6 +1269,19 @@ order (optional members present in place or absent, nothing else). A tenant-sign
 cache-invalidation message or a reordered body is nacked without requeue and never reaches the handler.
 There is no lenient mode for an unsigned message.
 
+**Typed consume and the discard event (1.4.0; contract 1.69, D-8, D-9, D-10).** A consumer is configured with
+the *one* signed type it consumes and its own tenant:
+`AmqpConsumer.consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, handler, logger)`. The
+layout check is against that type's members only, so a genuine, correctly signed `AuditEventMessage` delivered
+to an `AUTHZ_REQUEST` consumer (and the reverse) is refused as `malformed` before the HMAC is computed. An
+application that consumes both types runs two consumers. **API change:** `consume` gained the `EventType` and
+`tenantId` parameters (the untyped overloads are gone; 1.4.0 is unreleased). Every discard logs exactly one
+warning-level event with `timestamp`, `exchange`, `routing_key`, `tenant_id` (the consumer's own, never read
+from the body) and `reason`, one of `malformed`, `unsigned`, `signature`, `key_version`, `stale`, `replay`,
+chosen in the order of §8 rule 4; it never carries a signature, a nonce, a key or any part of the body. A body
+that starts with anything but `{`, a UTF-8 byte-order mark included, is `malformed` (never stripped), and no
+body can make either consumer throw or stop.
+
 ### Asking for an authorization decision over AMQP (`io.axiam.sdk.amqp.AuthzRequester`, 1.4.0)
 
 `AuthzRequester` publishes a signed `AuthzRequest` on `axiam.authz.request` and

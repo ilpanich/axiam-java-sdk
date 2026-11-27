@@ -105,8 +105,7 @@ class ReplayProtectionTest {
         NonceStore nonceStore = new NonceStore(Duration.ofSeconds(600));
 
         AtomicInteger handlerInvocations = new AtomicInteger();
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(1L, body));
@@ -135,8 +134,7 @@ class ReplayProtectionTest {
         NonceStore nonceStore = new NonceStore(Duration.ofSeconds(600));
 
         AtomicInteger handlerInvocations = new AtomicInteger();
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(2L, body));
@@ -169,8 +167,7 @@ class ReplayProtectionTest {
         NonceStore nonceStore = new NonceStore(Duration.ofSeconds(600));
 
         AtomicInteger handlerInvocations = new AtomicInteger();
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(3L, body));
@@ -200,8 +197,7 @@ class ReplayProtectionTest {
         NonceStore nonceStore = new NonceStore(Duration.ofSeconds(600));
 
         AtomicInteger handlerInvocations = new AtomicInteger();
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", subkey, body2 -> handlerInvocations.incrementAndGet(), fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(4L, body));

@@ -55,7 +55,7 @@ class AmqpConsumerCoverageTest {
         List<String> calls = new ArrayList<>();
         Channel channel = recordingChannel(calls);
 
-        AmqpConsumer.consume(channel, "axiam.events", new byte[32], body -> { }, fakeLogger(new ArrayList<>()));
+        AmqpConsumer.consume(channel, "axiam.events", EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", new byte[32], body -> { }, fakeLogger(new ArrayList<>()));
 
         assertTrue(calls.contains("basicQos:" + AmqpConsumer.DEFAULT_PREFETCH),
                 "consume() must set the CF-03 default prefetch QoS");
@@ -68,7 +68,7 @@ class AmqpConsumerCoverageTest {
         List<String> calls = new ArrayList<>();
         Channel channel = recordingChannel(calls);
 
-        AmqpConsumer.consume(channel, "axiam.audit", new byte[32], body -> { },
+        AmqpConsumer.consume(channel, "axiam.audit", EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", new byte[32], body -> { },
                 fakeLogger(new ArrayList<>()), Duration.ofSeconds(120));
 
         assertTrue(calls.stream().anyMatch(c -> c.startsWith("basicConsume:axiam.audit:false")),
@@ -84,8 +84,7 @@ class AmqpConsumerCoverageTest {
         byte[] wrongKey = new byte[32]; // will not match the fixture signature
 
         AtomicInteger handlerInvocations = new AtomicInteger();
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                channel, wrongKey, body -> handlerInvocations.incrementAndGet(), fakeLogger(new ArrayList<>()));
+        DeliverCallback callback = AmqpConsumer.deliverCallback(channel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", wrongKey, body -> handlerInvocations.incrementAndGet(), fakeLogger(new ArrayList<>()));
 
         JsonNode root = loadFixture();
         byte[] body = MAPPER.writeValueAsBytes(wireNode(root.get("authz_request")));
@@ -158,8 +157,7 @@ class AmqpConsumerCoverageTest {
         NonceStore nonceStore = new NonceStore(Duration.ofSeconds(600));
 
         AtomicInteger handlerInvocations = new AtomicInteger();
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                channel, subkey, b -> handlerInvocations.incrementAndGet(), fakeLogger(warnings),
+        DeliverCallback callback = AmqpConsumer.deliverCallback(channel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", subkey, b -> handlerInvocations.incrementAndGet(), fakeLogger(warnings),
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("tag", delivery(2L, body));

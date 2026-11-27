@@ -6,6 +6,7 @@ import com.rabbitmq.client.ConnectionFactory;
 
 import io.axiam.sdk.amqp.AmqpConsumer;
 import io.axiam.sdk.amqp.ErrDrop;
+import io.axiam.sdk.amqp.EventType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +45,9 @@ public final class AmqpConsumerExample {
         try (Connection connection = factory.newConnection();
              Channel channel = connection.createChannel()) {
 
-            AmqpConsumer.consume(channel, queue, signingKey, body -> {
+            // A consumer is typed (§8 step 2c) and knows its own tenant (the discard event's tenant_id).
+            String tenantId = getenv("AXIAM_TENANT_ID", "00000000-0000-0000-0000-000000000000");
+            AmqpConsumer.consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, body -> {
                 String payload = new String(body, StandardCharsets.UTF_8);
                 if (payload.isBlank()) {
                     // ErrDrop: poison-message sentinel — nacked WITHOUT

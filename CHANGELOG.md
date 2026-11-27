@@ -121,6 +121,21 @@ are regenerated (`AuditLogEntry`).
   `signature`), and an answer arriving after `close()` is nacked without requeue, not decoded, and raises
   no event. Tests feed the reference vectors' `wire_json` and pin the producer's `AuthzRequest` bytes
   against it.
+- **Contract 1.69 §8 and §12.4 (D-8, D-9, D-10; axiam#883).** (A) **API change:**
+  `AmqpConsumer.consume` takes the one `EventType` it consumes and the consumer's own `tenantId`
+  (`consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, handler, logger)`); the untyped
+  overloads are removed (1.4.0 is unreleased). Every discard now logs exactly one warning with `timestamp`,
+  `exchange`, `routing_key`, `tenant_id` (the consumer's own) and `reason` (`malformed`, `unsigned`,
+  `signature`, `key_version`, `stale`, `replay`) in the normative order of rule 4, and never a signature,
+  nonce, key or body. (B) The consumer checks the layout of its configured type only: another signed type's
+  genuine message is `malformed` at step 2c, before the HMAC, even with a changed signature digit; a verified
+  body that does not decode (ill-typed member, `issued_at` not RFC 3339, `nonce` not a UUID) is `malformed`
+  before the `key_version`, `stale` and `replay` gates, and the nonce is recorded only after all of them pass.
+  (C) A BOM-prefixed body (or any non-`{` first byte) is `malformed` and never stripped, and no body, however
+  hostile, escapes the event consumer or the requester. (D) `JwksVerifier` treats a `200` whose JWKS holds no
+  key (`{"keys":[]}`) as a failed refresh: the held keys stay and the age anchor does not move, so they verify
+  until TTL + 300 s and not after. The remaining stale-if-error behaviour already conformed and is pinned by
+  `JwksVerifierStaleBoundTest`.
 - **JAV-R1-8: `OidcStateEntry.toString()` no longer prints `bindingDigest`** (nor the verifier).
 - **#880: back-channel logout tokens carry a `kid` from contract 1.69.** `verifyLogoutToken` already
   selected by `kid` and refused a kid-less token; tests now use a server-shaped token (header exactly

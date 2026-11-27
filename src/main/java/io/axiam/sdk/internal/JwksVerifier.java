@@ -158,6 +158,9 @@ public final class JwksVerifier {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final com.fasterxml.jackson.databind.ObjectMapper KEYS_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private final URL jwksUrl;
     private final ResourceRetriever http = new DefaultResourceRetriever(500, 500, 50 * 1024);
 
@@ -1118,11 +1121,40 @@ public final class JwksVerifier {
             // upstream cannot keep verifying through an outage, however long. The first fetch of a verifier's life is allowed (lastFetchNanos is 0).
             boolean throttled = !due;
             if (!throttled) {
+                long previousFetchNanos = lastFetchNanos;
                 lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
                 try {
                     String body = http.retrieveResource(jwksUrl).getContent();
-                    loaded = new Loaded(com.nimbusds.jose.jwk.JWKSet.parse(body), nowNanos);
-                } catch (IOException | ParseException | RuntimeException e) {
+                    // §12.4 rule 2 (contract 1.69; D-10): the entries are read one by one. A JWKS "holding at
+                    // least one key" has an entry that is a JWK object with a string kty, usable by this SDK
+                    // or not (an unusable one is skipped, not a reason to refuse the set). No such entry
+                    // ({"keys":[]}, {"keys":[{}]}, [0], [null]) is a FAILED refresh: the held keys stay and
+                    // the anchor does not move.
+                    com.fasterxml.jackson.databind.JsonNode doc = KEYS_MAPPER.readTree(body);
+                    com.fasterxml.jackson.databind.JsonNode keys = doc == null ? null : doc.get("keys");
+                    if (keys != null && keys.isArray()) {
+                        List<JWK> usable = new java.util.ArrayList<>();
+                        int wellFormed = 0;
+                        for (com.fasterxml.jackson.databind.JsonNode entry : keys) {
+                            if (!entry.isObject() || !entry.path("kty").isTextual()) {
+                                continue;
+                            }
+                            wellFormed++;
+                            try {
+                                usable.add(JWK.parse(entry.toString()));
+                            } catch (ParseException | RuntimeException skipped) {
+                                // well-formed but not usable here: counts, is not kept
+                            }
+                        }
+                        if (wellFormed > 0) {
+                            loaded = new Loaded(new com.nimbusds.jose.jwk.JWKSet(usable), nowNanos);
+                        }
+                    }
+                } catch (IOException | RuntimeException e) {
+                    if (e instanceof java.io.InterruptedIOException || Thread.currentThread().isInterrupted()) {
+                        // The caller's cancellation is not a failed refresh and opens no cooldown window.
+                        lastFetchNanos = previousFetchNanos;
+                    }
                     // Keep whatever was loaded before (stale-if-error); the window already counts
                     // this attempt. Nothing about the response is logged.
                 }
@@ -1150,7 +1182,9 @@ public final class JwksVerifier {
     /** Whether the window allows a JWKS fetch now (the first fetch of a verifier's life always does). */
     private boolean fetchDue(long nowNanos) {
         long last = lastFetchNanos;
-        return last == 0L || nowNanos - last >= UNKNOWN_KID_REFETCH_COOLDOWN.toNanos();
+        // A clock that moved backwards (negative elapsed time) means a refresh is due, never fresh.
+        long elapsed = nowNanos - last;
+        return last == 0L || elapsed < 0 || elapsed >= UNKNOWN_KID_REFETCH_COOLDOWN.toNanos();
     }
 
     /**
@@ -1165,7 +1199,7 @@ public final class JwksVerifier {
         com.nimbusds.jose.jwk.JWKSet set = snapshot.set();
         long age = nowNanos - snapshot.atNanos();
         long limit = allowStale ? JWKS_TTL.toNanos() + JWKS_MAX_STALE.toNanos() : JWKS_TTL.toNanos();
-        return age < limit ? set : null;
+        return age >= 0 && age < limit ? set : null; // negative age: refresh due, never fresh
     }
 
     private static OctetKeyPair firstOctetKeyPair(List<JWK> jwks) {

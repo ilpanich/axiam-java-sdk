@@ -65,18 +65,26 @@ class AmqpContract169AlignTest {
     }
 
     private static Outcome consume(byte[] body) throws Exception {
+        return consume(EventType.AUTHZ_REQUEST, body);
+    }
+
+    private static Outcome consume(EventType type, byte[] body) throws Exception {
         List<AckNack> calls = new ArrayList<>();
         List<byte[]> seen = new ArrayList<>();
         Channel channel = AmqpTestDoubles.recordingChannel(calls);
         Logger logger = AmqpTestDoubles.recordingLogger(new ArrayList<>());
-        DeliverCallback cb = AmqpConsumer.deliverCallback(channel, subkey(), seen::add, logger,
+        DeliverCallback cb = AmqpConsumer.deliverCallback(channel, type, TENANT, subkey(), seen::add, logger,
                 Duration.ofSeconds(300), CLOCK, new NonceStore(Duration.ofSeconds(600)));
         cb.handle("tag", AmqpTestDoubles.delivery(1L, body));
         return new Outcome(seen, calls);
     }
 
     private static void assertRefused(String name, byte[] body) throws Exception {
-        Outcome o = consume(body);
+        assertRefused(EventType.AUTHZ_REQUEST, name, body);
+    }
+
+    private static void assertRefused(EventType type, String name, byte[] body) throws Exception {
+        Outcome o = consume(type, body);
         assertTrue(o.seen().isEmpty(), name + ": the handler must never run");
         assertEquals(1, o.calls().size(), name);
         assertEquals("nack", o.calls().get(0).type(), name);
@@ -90,7 +98,7 @@ class AmqpContract169AlignTest {
         for (String name : List.of("authz_request", "audit_event")) {
             JsonNode v = fixture().get(name);
             byte[] wire = v.get("wire_json").asText().getBytes(StandardCharsets.UTF_8);
-            Outcome o = consume(wire);
+            Outcome o = consume("audit_event".equals(name) ? EventType.AUDIT_EVENT : EventType.AUTHZ_REQUEST, wire);
             assertEquals(1, o.seen().size(), name);
             assertEquals("ack", o.calls().get(0).type(), name);
             assertArrayEquals(v.get("canonical_signed_json").asText().getBytes(StandardCharsets.UTF_8),
@@ -103,7 +111,7 @@ class AmqpContract169AlignTest {
         String canonical = fixture().get("audit_event").get("canonical_signed_json").asText()
                 .replace("\"action\":\"user.login\"", "\"action\":\"a<b>&c \u00e9 \\u0041\"")
                 .replace("{\"method\":\"password\"}", "{\"q\":\"<>&\u65e5\\u0042\"}");
-        Outcome o = consume(sign(canonical));
+        Outcome o = consume(EventType.AUDIT_EVENT, sign(canonical));
         assertEquals(1, o.seen().size());
         assertEquals(canonical, new String(o.seen().get(0), StandardCharsets.UTF_8));
     }
@@ -118,7 +126,7 @@ class AmqpContract169AlignTest {
                 + NONCE + "\",\"issued_at\":\"2026-07-10T12:00:00Z\"}";
         assertRefused("authz request reordered", sign(reordered));
         String audit = fixture().get("audit_event").get("canonical_signed_json").asText();
-        assertRefused("audit event, outcome before action",
+        assertRefused(EventType.AUDIT_EVENT, "audit event, outcome before action",
                 sign(audit.replace("\"action\":\"user.login\",\"resource_id\":\"77777777-7777-7777-7777-777777777777\","
                         + "\"outcome\":\"Success\",",
                         "\"outcome\":\"Success\",\"action\":\"user.login\",\"resource_id\":"
@@ -128,10 +136,10 @@ class AmqpContract169AlignTest {
     @Test
     void anExtraUnknownMemberOrAMissingRequiredMemberIsRefused() throws Exception {
         String audit = fixture().get("audit_event").get("canonical_signed_json").asText();
-        assertRefused("extra member", sign(audit.replace(",\"key_version\"", ",\"extra\":1,\"key_version\"")));
-        assertRefused("missing required actor_id",
+        assertRefused(EventType.AUDIT_EVENT, "extra member", sign(audit.replace(",\"key_version\"", ",\"extra\":1,\"key_version\"")));
+        assertRefused(EventType.AUDIT_EVENT, "missing required actor_id",
                 sign(audit.replace("\"actor_id\":\"66666666-6666-6666-6666-666666666666\",", "")));
-        assertRefused("case-variant member name", sign(audit.replace("\"outcome\"", "\"Outcome\"")));
+        assertRefused(EventType.AUDIT_EVENT, "case-variant member name", sign(audit.replace("\"outcome\"", "\"Outcome\"")));
     }
 
     @Test
