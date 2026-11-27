@@ -207,6 +207,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private final OkHttpClient httpClient;
     private final RefreshGuard refreshGuard;
     private final JwksVerifier jwksVerifier;
+    /** The §6.1 client identity, kept only to hand to a same-origin JWKS fetch. */
+    private final byte @Nullable [] clientCertPem;
+    private final byte @Nullable [] clientKeyPem;
     private final SessionState session;
 
     /**
@@ -700,7 +703,6 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
         this.refreshGuard = new RefreshGuard();
-        this.jwksVerifier = new JwksVerifier(this.baseUrl);
         this.session = new SessionState(cookieManager, this.baseUrl, this.tenantId, b.orgSlug, b.orgId);
 
         X509TrustManager trustManager = buildTrustManager(b.customCaPem);
@@ -711,6 +713,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         // half-configured pair, so a non-null keyManagers is the identity.
         this.presentsClientCertificate = keyManagers != null;
         SSLContext sslContext = buildStrictSslContext(trustManager, keyManagers);
+        // The JWKS fetch behind local verification trusts what REST and gRPC trust (§6), customCa included.
+        this.clientCertPem = b.clientCertPem;
+        this.clientKeyPem = b.clientKeyPem;
+        this.jwksVerifier = new JwksVerifier(this.baseUrl, JwksVerifier.LocalVerificationPolicy.defaults(), null,
+                b.customCaPem, b.clientCertPem, b.clientKeyPem);
 
         OkHttpClient.Builder clientBuilder = b.overrideHttpClient != null
                 ? b.overrideHttpClient.newBuilder()
@@ -772,6 +779,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.oauth2HttpClient = other.oauth2HttpClient;
         this.refreshGuard = other.refreshGuard;
         this.jwksVerifier = other.jwksVerifier;
+        this.clientCertPem = other.clientCertPem;
+        this.clientKeyPem = other.clientKeyPem;
         this.session = other.session;
         this.principalTenantId = other.principalTenantId;
         this.oidcClientId = other.oidcClientId;
@@ -4387,7 +4396,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /** Lazily builds (and reuses) the JWKS verifier for a {@code jwks_uri} (§12.3 rule 6) —
      * one verifier per URI, never process-global, and never re-derived from {@code baseUrl}. */
     private JwksVerifier oidcJwksVerifierFor(String jwksUri) {
-        return oidcJwksVerifiers.computeIfAbsent(jwksUri, JwksVerifier::forJwksUri);
+        return oidcJwksVerifiers.computeIfAbsent(jwksUri, uri -> JwksVerifier.forJwksUri(uri, baseUrl, customCaPem, clientCertPem, clientKeyPem));
     }
 
     // ------------------------------------------------------------------

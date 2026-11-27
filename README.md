@@ -218,6 +218,8 @@ axiam.tenant-id=acme-tenant
 axiam.expected-issuer=https://axiam.example.com
 axiam.expected-audience=axiam:user
 axiam.clock-skew-seconds=60
+# Optional: PEM CA bundle trusted (in addition to the system roots) for the JWKS fetch and the default clients.
+axiam.custom-ca-path=/etc/axiam/ca.pem
 ```
 
 ```java
@@ -398,7 +400,9 @@ chain plus its PKCS#8 private key — via `clientCertificate(...)`. The same
 identity is applied to **both** the REST and gRPC transports of the client, and
 strict server verification is never relaxed (a client certificate is purely
 additive; the system trust store, plus any `customCa(...)`, still validates the
-server):
+server). The JWKS fetch behind local verification honours `customCa(...)` too,
+and presents the client certificate only to a JWKS on the same origin as the
+base URL, never to a `jwks_uri` on another host:
 
 ```java
 byte[] certPem = Files.readAllBytes(Path.of("client-cert.pem")); // chain, leaf first

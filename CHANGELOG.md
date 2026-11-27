@@ -104,6 +104,17 @@ are regenerated (`AuditLogEntry`).
 
 ### Fixed
 
+- **The JWKS fetch ignored `customCa` (#140).** `JwksVerifier` fetched keys through a JVM-wide static
+  `HttpClient` built at class load, so a private CA configured on `AxiamClient` reached REST and gRPC
+  but not local verification, which failed closed, and the proxy selector and authenticator were frozen
+  at first load. Each verifier now builds its own client: `AxiamClient` (including its OIDC
+  `jwks_uri` verifiers) and the Spring auto-configuration pass `customCa` to it, the proxy settings are
+  read at construction, and the §6.1 client identity is presented only to a JWKS on the same origin as
+  the base URL. Hostname and certificate verification are unchanged; no public input accepts a TLS
+  context. New optional Spring property `axiam.custom-ca-path` (PEM file) feeds the auto-configured
+  filter and clients; the `@Bean` methods `axiamAuthenticationFilter`, `axiamClient` and
+  `axiamOidcClient` each gained a trailing `String customCaPath` parameter.
+
 - **JAV-R1-1 (security): `LoginResult.user().roles()` no longer carries OAuth2 scopes.** It was the
   `scope` claim split on whitespace, so a token whose scope was named `admin` gave a user for whom
   `roles().contains("admin")` was true (N15 one layer up from the Spring guard). `AxiamUser.roles` and

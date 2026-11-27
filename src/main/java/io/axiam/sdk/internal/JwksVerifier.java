@@ -38,6 +38,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
+import javax.net.ssl.SSLContext;
+
 /**
  * Local JWT verification against the organization-wide EdDSA JWKS (D-19,
  * CONTRACT.md &sect;9's local-verify companion). Sources keys from
@@ -229,7 +231,7 @@ public final class JwksVerifier {
      *                the JWKS URL is derived as {@code {baseUrl}/oauth2/jwks}
      */
     public JwksVerifier(String baseUrl) {
-        this(deriveJwksUrl(baseUrl), LocalVerificationPolicy.defaults(), null);
+        this(deriveJwksUrl(baseUrl), LocalVerificationPolicy.defaults(), null, null);
     }
 
     /**
@@ -245,7 +247,7 @@ public final class JwksVerifier {
      *                issuer check, no audience check, RECOMMENDED skew"
      */
     public JwksVerifier(String baseUrl, LocalVerificationPolicy policy) {
-        this(deriveJwksUrl(baseUrl), policy, null);
+        this(deriveJwksUrl(baseUrl), policy, null, null);
     }
 
     /**
@@ -263,7 +265,25 @@ public final class JwksVerifier {
      * @param revocationFeed the feed to consult, or {@code null} for none
      */
     public JwksVerifier(String baseUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
-        this(deriveJwksUrl(baseUrl), policy, revocationFeed);
+        this(deriveJwksUrl(baseUrl), policy, revocationFeed, null);
+    }
+
+    /**
+     * As {@link #JwksVerifier(String, LocalVerificationPolicy, RevocationFeed)}, fetching the JWKS with the client's
+     * TLS inputs (CONTRACT.md &sect;6): {@code customCaPem} is trusted in addition to the system roots, and the
+     * &sect;6.1 client identity, when given, is presented, exactly as REST and gRPC do. Certificate and hostname
+     * verification stay on; there is no input that relaxes them.
+     *
+     * @param baseUrl        the AXIAM server base URL (trailing slash tolerated)
+     * @param policy         the &sect;10.1 rule 5&ndash;7 policy
+     * @param revocationFeed the feed to consult, or {@code null} for none
+     * @param customCaPem    PEM CA bundle to trust in addition to the system roots, or {@code null}
+     * @param clientCertPem  PEM client certificate chain (all-or-nothing with the key), or {@code null}
+     * @param clientKeyPem   PEM PKCS#8 client key, or {@code null}
+     */
+    public JwksVerifier(String baseUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed,
+            byte @Nullable [] customCaPem, byte @Nullable [] clientCertPem, byte @Nullable [] clientKeyPem) {
+        this(deriveJwksUrl(baseUrl), policy, revocationFeed, fetchTls(customCaPem, clientCertPem, clientKeyPem));
     }
 
     /**
@@ -335,10 +355,57 @@ public final class JwksVerifier {
      */
     public static JwksVerifier forJwksUri(String jwksUri) {
         try {
-            return new JwksVerifier(URI.create(jwksUri).toURL(), LocalVerificationPolicy.defaults(), null);
+            return new JwksVerifier(URI.create(jwksUri).toURL(), LocalVerificationPolicy.defaults(), null, null);
         } catch (MalformedURLException | IllegalArgumentException e) {
             throw new AuthError("invalid jwks_uri in discovery document: " + jwksUri);
         }
+    }
+
+    /**
+     * As {@link #forJwksUri(String)}, fetching with the client's TLS inputs. {@code customCaPem} always applies.
+     * The &sect;6.1 client identity is presented only when {@code jwksUri} has the same origin (scheme, host,
+     * port) as {@code baseUrl}: &sect;12.3 rule 6 lets {@code jwks_uri} name another host, and a certificate
+     * issued for AXIAM is not something to hand to it.
+     *
+     * @param jwksUri       the JWKS document URI, as advertised by the discovery document's {@code jwks_uri} field
+     * @param baseUrl       the configured AXIAM server base URL
+     * @param customCaPem   PEM CA bundle to trust in addition to the system roots, or {@code null}
+     * @param clientCertPem PEM client certificate chain, or {@code null}
+     * @param clientKeyPem  PEM PKCS#8 client key, or {@code null}
+     * @return a new verifier sourcing keys from {@code jwksUri}
+     * @throws AuthError if {@code jwksUri} is not a valid URL
+     */
+    public static JwksVerifier forJwksUri(String jwksUri, String baseUrl, byte @Nullable [] customCaPem,
+            byte @Nullable [] clientCertPem, byte @Nullable [] clientKeyPem) {
+        try {
+            URL url = URI.create(jwksUri).toURL();
+            boolean sameOrigin = sameOrigin(url, URI.create(baseUrl).toURL());
+            SSLContext tls = fetchTls(customCaPem, sameOrigin ? clientCertPem : null, sameOrigin ? clientKeyPem : null);
+            return new JwksVerifier(url, LocalVerificationPolicy.defaults(), null, tls);
+        } catch (MalformedURLException | IllegalArgumentException e) {
+            throw new AuthError("invalid jwks_uri in discovery document: " + jwksUri);
+        }
+    }
+
+    /** The TLS context of a fetch, or {@code null} (JVM default) when the client configures neither CA nor identity. */
+    private static @Nullable SSLContext fetchTls(byte @Nullable [] customCaPem, byte @Nullable [] clientCertPem,
+            byte @Nullable [] clientKeyPem) {
+        boolean noCa = customCaPem == null || customCaPem.length == 0;
+        if (noCa && clientCertPem == null && clientKeyPem == null) {
+            return null;
+        }
+        return TlsSupport.sslContext(TlsSupport.trustManager(customCaPem), TlsSupport.keyManagers(clientCertPem, clientKeyPem));
+    }
+
+    /** Same scheme, host (case-insensitive) and effective port. */
+    static boolean sameOrigin(URL a, URL b) {
+        return a.getProtocol().equalsIgnoreCase(b.getProtocol())
+                && a.getHost().equalsIgnoreCase(b.getHost())
+                && effectivePort(a) == effectivePort(b);
+    }
+
+    private static int effectivePort(URL u) {
+        return u.getPort() != -1 ? u.getPort() : u.getDefaultPort();
     }
 
     /**
@@ -356,7 +423,9 @@ public final class JwksVerifier {
         return policy;
     }
 
-    private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
+    private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed,
+            @Nullable SSLContext sslContext) {
+        this.fetchClient = newFetchClient(sslContext);
         this.policy = policy;
         this.revocationFeed = revocationFeed;
         // TTL 300s, forced-refetch cooldown 60s — matches the Rust
@@ -1158,13 +1227,20 @@ public final class JwksVerifier {
 
     private static final int MAX_JWKS_BYTES = 50 * 1024;
 
-    private static final java.net.http.HttpClient FETCH_CLIENT = newFetchClient();
+    /**
+     * This verifier's own fetch client: built per instance so the TLS context it was given applies, and so the
+     * system proxy selector and authenticator are read at construction, not frozen at class load.
+     */
+    private final java.net.http.HttpClient fetchClient;
 
-    private static java.net.http.HttpClient newFetchClient() {
+    private static java.net.http.HttpClient newFetchClient(@Nullable SSLContext sslContext) {
         java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
                 .version(java.net.http.HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(2))
                 .followRedirects(java.net.http.HttpClient.Redirect.NEVER);
+        if (sslContext != null) {
+            builder.sslContext(sslContext); // adds trust anchors / identity; the client's hostname check stays on
+        }
         if (java.net.ProxySelector.getDefault() != null) {
             builder.proxy(java.net.ProxySelector.getDefault()); // system proxy settings keep applying
         }
@@ -1257,7 +1333,7 @@ public final class JwksVerifier {
         try {
             java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(jwksUrl.toURI())
                     .timeout(FETCH_DEADLINE).header("Accept", "application/json").GET().build();
-            request = FETCH_CLIENT.sendAsync(req, boundedBody());
+            request = fetchClient.sendAsync(req, boundedBody());
             final java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<byte[]>> sent = request;
             // The timeout goes on a COPY: orTimeout completes the future it is applied to, and cancelling an
             // already-completed future is a no-op, so the exchange would never be abandoned.
