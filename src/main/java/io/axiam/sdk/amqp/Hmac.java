@@ -11,7 +11,9 @@ import org.jspecify.annotations.Nullable;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
 
 /**
  * HMAC-SHA256 verify-before-handler primitive for inbound AMQP messages
@@ -25,7 +27,9 @@ import java.util.HexFormat;
  * rebuilt form then refuses a genuine message or, worse, lets a handler read
  * something other than what was verified (C2). A body whose signature is not the
  * trailing member, is {@code null} or is not a string, has a repeated key at any
- * depth, or has content after the object, is refused.
+ * depth, or has content after the object, is refused. So is a body whose canonical members are not
+ * exactly an {@code AuthzRequest}'s or an {@code AuditEventMessage}'s declared members in declaration
+ * order (rule 2c): another tenant-signed shape cannot pass for an event.
  */
 public final class Hmac {
 
@@ -113,6 +117,15 @@ public final class Hmac {
             System.arraycopy(body, 0, canonical, 0, start);
             canonical[start] = '}';
 
+            // Rule c (MUST): the canonical bytes' top-level member names, compared exactly, are one
+            // signed type's declared members in declaration order, optional ones present in place or
+            // absent, nothing else. Every tenant-subkey-signed shape (AuthzResponse, the reactor
+            // messages, the cache-invalidation broadcast) shares this key; without this check a
+            // decoder that fills absent fields with defaults could take one of them for an event.
+            if (!hasDeclaredLayout(MAPPER.readTree(canonical))) {
+                return null;
+            }
+
             Mac mac = Mac.getInstance(ALGO);
             mac.init(new SecretKeySpec(signingKey, ALGO));
             byte[] computed = mac.doFinal(canonical);
@@ -121,6 +134,52 @@ public final class Hmac {
         } catch (Exception e) {
             return null; // parse failure / bad hex / bad key length -> reject, never throw
         }
+    }
+
+    /** A declared member: its wire name and whether the server omits it when absent. */
+    private record Member(String name, boolean optional) {
+    }
+
+    private static Member req(String name) {
+        return new Member(name, false);
+    }
+
+    private static Member opt(String name) {
+        return new Member(name, true);
+    }
+
+    /**
+     * The signed event types' members in declaration order (crates/axiam-amqp {@code messages.rs};
+     * CONTRACT &sect;8 "Exact signed field order"), {@code hmac_signature} excluded.
+     */
+    private static final List<List<Member>> LAYOUTS = List.of(
+            // AuthzRequest
+            List.of(req("correlation_id"), req("tenant_id"), req("subject_id"), req("action"),
+                    req("resource_id"), opt("scope"), req("key_version"), req("nonce"), req("issued_at")),
+            // AuditEventMessage
+            List.of(req("tenant_id"), req("actor_id"), req("actor_type"), req("action"), opt("resource_id"),
+                    req("outcome"), opt("ip_address"), opt("metadata"), req("key_version"), req("nonce"),
+                    req("issued_at")));
+
+    private static boolean hasDeclaredLayout(JsonNode canonicalRoot) {
+        List<String> names = new ArrayList<>();
+        canonicalRoot.fieldNames().forEachRemaining(names::add);
+        for (List<Member> layout : LAYOUTS) {
+            int i = 0;
+            boolean ok = true;
+            for (Member member : layout) {
+                if (i < names.size() && names.get(i).equals(member.name())) {
+                    i++;
+                } else if (!member.optional()) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok && i == names.size()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static final byte[] SIGNATURE_MEMBER =

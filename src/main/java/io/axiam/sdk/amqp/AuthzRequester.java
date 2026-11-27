@@ -632,6 +632,12 @@ public final class AuthzRequester implements AutoCloseable {
 
     /** Verifies one delivery and completes the matching request, or discards it. */
     void handle(ResponseDelivery delivery) {
+        if (closed) {
+            // After Close an answer is not decoded or dispatched and raises no event (CONTRACT 1.69 §8,
+            // consumer obligation 4): the requester no longer holds the requests it would match.
+            delivery.nackWithoutRequeue();
+            return;
+        }
         Verified verified;
         try {
             verified = verifyResponse(delivery.body());
@@ -743,6 +749,14 @@ public final class AuthzRequester implements AutoCloseable {
         byte[] canonical = new byte[start + 1];
         System.arraycopy(body, 0, canonical, 0, start);
         canonical[start] = '}';
+
+        // Discard order 3 (before the HMAC, CONTRACT 1.69 §8): the members the binding reads must be
+        // present and strings, whatever the signature says; a response that lacks one is malformed, not a
+        // signature failure.
+        if (text(root, "correlation_id") == null || text(root, "tenant_id") == null
+                || text(root, "nonce") == null) {
+            throw new Discard(Reason.MALFORMED);
+        }
 
         // Rule 2: HMAC-SHA256 under the requester's own tenant subkey, in constant time.
         if (!MessageDigest.isEqual(hmac(canonical), received)) {

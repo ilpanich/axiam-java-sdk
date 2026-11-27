@@ -111,6 +111,16 @@ are regenerated (`AuditLogEntry`).
   float such as `1e21`, a non-ASCII value) failed verification. It now cuts the trailing
   `,"hmac_signature":"<64 hex>"` member from the received bytes and verifies and delivers those; a
   signature that is not the last member, is `null` or is not a string is refused.
+- **Contract 1.69 §8 alignment (axiam#882, axiam#883).** The AMQP event consumer now performs the
+  step-2c layout check: after cutting the signature, the canonical bytes' top-level member names must be
+  exactly an `AuthzRequest`'s or an `AuditEventMessage`'s declared members in declaration order (optional
+  members present in place or absent, nothing else), else the message is nacked without requeue and the
+  handler never runs. A validly signed `AuthzResponse`, cache-invalidation-shaped or reordered message can
+  no longer pass for an event. The requester's discard order is now the normative one: a response missing
+  or mistyping `correlation_id`, `tenant_id` or `nonce` is `malformed` before the HMAC is tried (it was
+  `signature`), and an answer arriving after `close()` is nacked without requeue, not decoded, and raises
+  no event. Tests feed the reference vectors' `wire_json` and pin the producer's `AuthzRequest` bytes
+  against it.
 - **JAV-R1-8: `OidcStateEntry.toString()` no longer prints `bindingDigest`** (nor the verifier).
 - **#880: back-channel logout tokens carry a `kid` from contract 1.69.** `verifyLogoutToken` already
   selected by `kid` and refused a kid-less token; tests now use a server-shaped token (header exactly

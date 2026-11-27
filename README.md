@@ -1263,6 +1263,12 @@ reader of the received bytes sees a value the signature never covered. A handler
 that parsed the body as JSON needs no change; one that read `hmac_signature` from
 the bytes, or compared the bytes to the delivery, no longer finds it.
 
+**Layout check (§8 rule 2c).** After the signature is cut, the canonical bytes' top-level member
+names must be exactly an `AuthzRequest`'s or an `AuditEventMessage`'s declared members in declaration
+order (optional members present in place or absent, nothing else). A tenant-signed `AuthzResponse`, a
+cache-invalidation message or a reordered body is nacked without requeue and never reaches the handler.
+There is no lenient mode for an unsigned message.
+
 ### Asking for an authorization decision over AMQP (`io.axiam.sdk.amqp.AuthzRequester`, 1.4.0)
 
 `AuthzRequester` publishes a signed `AuthzRequest` on `axiam.authz.request` and

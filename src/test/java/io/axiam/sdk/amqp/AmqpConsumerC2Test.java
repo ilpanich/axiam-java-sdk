@@ -190,8 +190,11 @@ class AmqpConsumerC2Test {
      */
     private static void assertGenuineBodyVerifiesAndIsDeliveredAsSigned(String name, String metadataJson)
             throws Exception {
-        String base = canonical("documents:read");
-        String canonical = base.substring(0, base.length() - 1) + ",\"metadata\":" + metadataJson + "}";
+        // An AuditEventMessage, the type whose `metadata` member carries arbitrary JSON (§8 rule 2c: a
+        // member outside the declared layout is refused).
+        String canonical = "{\"tenant_id\":\"" + SIGNED_TENANT + "\",\"actor_id\":\"" + SIGNED_SUBJECT
+                + "\",\"actor_type\":\"User\",\"action\":\"documents:read\",\"outcome\":\"Success\",\"metadata\":"
+                + metadataJson + "," + TAIL + "}";
         String sig = sign(canonical);
         String wire = canonical.substring(0, canonical.length() - 1) + ",\"hmac_signature\":\"" + sig + "\"}";
 
@@ -247,7 +250,11 @@ class AmqpConsumerC2Test {
 
     @Test
     void pin882_aNestedDuplicateMemberIsNackedAndTheHandlerNeverRuns() throws Exception {
-        String canonical = canonical("documents:read").replaceAll("}$", ",\"metadata\":{\"a\":1,\"a\":2}}");
+        // An AuditEventMessage whose metadata repeats a member: the layout is right, so only the
+        // duplicate-member rule can refuse it.
+        String canonical = "{\"tenant_id\":\"" + SIGNED_TENANT + "\",\"actor_id\":\"" + SIGNED_SUBJECT
+                + "\",\"actor_type\":\"User\",\"action\":\"documents:read\",\"outcome\":\"Success\","
+                + "\"metadata\":{\"a\":1,\"a\":2}," + TAIL + "}";
         String wire = canonical.replaceAll("}$", ",\"hmac_signature\":\"" + sign(canonical) + "\"}");
         assertNackedAndHandlerNeverRan(run(wire.getBytes(StandardCharsets.UTF_8)));
     }
