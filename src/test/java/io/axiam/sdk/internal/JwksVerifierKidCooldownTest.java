@@ -180,12 +180,14 @@ class JwksVerifierKidCooldownTest {
             for (int i = 0; i < 10; i++) {
                 assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
             }
+            Thread.sleep(150); // the due retry runs in the background; the verifications above did not wait for it
             assertEquals(3, fetches.get(), "one fetch per window");
 
-            // The endpoint recovers: the next window's attempt loads the set again.
+            // The endpoint recovers: the next window's attempt (started in the background) loads the set again.
             status.set(200);
             now.addAndGet(61 * second);
             assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject());
+            Thread.sleep(150);
             assertEquals(4, fetches.get());
         }
     }
@@ -223,11 +225,15 @@ class JwksVerifierKidCooldownTest {
             now.addAndGet(301 * second);
             for (int t = 301; t <= 595; t += 6) {
                 assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject(), "t=" + t);
+                if ((t - 301) % 60 == 0) {
+                    Thread.sleep(150); // the due refresh runs in the background; let it settle
+                }
                 now.addAndGet(6 * second);
             }
             now.addAndGet(-2 * second); // the loop ends at t=601; step back to t=599
             assertEquals("user-1", verifier.verifyAccessToken(cached, TENANT).getSubject(), "t=599");
             now.addAndGet(2 * second);
+            Thread.sleep(150);
             assertEquals(6, fetches.get(), "one fetch per window");
 
             // t=601: older than TTL + the stale bound: fail closed, a kid removed upstream no longer verifies.

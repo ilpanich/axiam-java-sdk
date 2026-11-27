@@ -13,8 +13,6 @@ import com.nimbusds.jose.jwk.JWKSelector;
 import com.nimbusds.jose.jwk.KeyType;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.OctetKeyPair;
-import com.nimbusds.jose.util.DefaultResourceRetriever;
-import com.nimbusds.jose.util.ResourceRetriever;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -39,7 +37,6 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Local JWT verification against the organization-wide EdDSA JWKS (D-19,
@@ -162,7 +159,6 @@ public final class JwksVerifier {
             new com.fasterxml.jackson.databind.ObjectMapper();
 
     private final URL jwksUrl;
-    private final ResourceRetriever http = new DefaultResourceRetriever(500, 500, 50 * 1024);
 
     /** A JWKS and the monotonic time it was loaded, published together so a reader never pairs them wrongly. */
     private record Loaded(com.nimbusds.jose.jwk.JWKSet set, long atNanos) {
@@ -204,7 +200,10 @@ public final class JwksVerifier {
      * only the fetch/refetch decision below; the EdDSA signature
      * verification in {@link #verifySignatureOnlyUnchecked(String)} is unaffected.
      */
-    private final ReentrantLock refreshLock = new ReentrantLock();
+    private final Object stateLock = new Object();
+
+    /** The fetch now in flight, or {@code null}; guarded by {@link #stateLock}. */
+    private java.util.concurrent.@Nullable CompletableFuture<Void> inFlight;
 
     /**
      * CONTRACT.md &sect;12.4 rule 2: the per-verifier window within which an unknown {@code kid}
@@ -215,7 +214,7 @@ public final class JwksVerifier {
     /** Monotonic clock for the cooldown; replaceable by tests in this package. */
     private volatile java.util.function.LongSupplier clock = System::nanoTime;
 
-    /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #refreshLock}. */
+    /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #stateLock}. */
     private volatile long lastFetchNanos;
 
     /** Test seam: replaces the monotonic clock behind the unknown-kid cooldown. */
@@ -1089,93 +1088,157 @@ public final class JwksVerifier {
                 .build();
         JWKSelector selector = new JWKSelector(matcher);
 
-        // Fast path, no lock: a set within the TTL answers; a set past the TTL but within the stale
-        // bound answers too while no fetch is due (R2-2), so past the TTL verification does not
-        // serialize on the lock. When a fetch is due the lock is taken below.
-        long now0 = clock.getAsLong();
-        com.nimbusds.jose.jwk.JWKSet fast = usableSet(now0, !fetchDue(now0));
-        if (fast != null) {
-            OctetKeyPair fastKey = firstOctetKeyPair(selector.select(fast));
-            if (fastKey != null) {
-                return fastKey;
+        // §12.4 rule 2 and the fetch-concurrency rules (contract 1.69; D-10). No lock is held across network
+        // I/O and the fetch runs detached from the caller on its own deadline:
+        //  - a set within the TTL answers a kid it holds, with no fetch;
+        //  - a set past the TTL but within TTL + JWKS_MAX_STALE (the held set is "usable") answers a kid it holds
+        //    too, and never waits: if a refresh is due it is started in the background and, whether it succeeds or
+        //    not, this verification is answered from the held set;
+        //  - only a caller whose kid the usable set does not hold (an unknown kid, a cold cache, a set past the
+        //    bound) waits for the single in-flight fetch, bounded by FETCH_DEADLINE.
+        // At most ONE fetch per UNKNOWN_KID_REFETCH_COOLDOWN window, whether the cache is warm, expired or cold,
+        // and EVERY failed attempt counts (the window is stamped when the attempt starts).
+        long now = clock.getAsLong();
+        com.nimbusds.jose.jwk.JWKSet usable = usableSet(now, true);
+        OctetKeyPair held = usable == null ? null : firstOctetKeyPair(selector.select(usable));
+        if (held != null) {
+            if (usableSet(now, false) == null) {
+                startFetchIfDue(now); // stale: refresh in the background; this verification does not wait
+            }
+            return held;
+        }
+
+        java.util.concurrent.CompletableFuture<Void> fetch = startFetchIfDue(now);
+        boolean throttled = fetch == null;
+        if (fetch != null) {
+            try {
+                fetch.get(FETCH_DEADLINE.toMillis() + 500, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+                // The caller's own cancellation: nothing is recorded; the fetch (not ours to cancel) carries on.
+                Thread.currentThread().interrupt();
+                throw new AuthError("JWKS verification interrupted");
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                // The fetch itself records its own failure; fall through to whatever is held.
             }
         }
 
-        refreshLock.lock();
+        // The set is trusted only within TTL + the stale bound (R2-1); past that, fail closed.
+        com.nimbusds.jose.jwk.JWKSet set = usableSet(clock.getAsLong(), true);
+        if (set == null) {
+            // Never loaded, or too old to trust: nothing to verify against.
+            throw new AuthError(throttled
+                    ? "JWKS unavailable: the last fetch failed and the next attempt is not yet due "
+                            + "(CONTRACT.md §12.4 rule 2)"
+                    : "JWKS fetch failed");
+        }
+        OctetKeyPair key = firstOctetKeyPair(selector.select(set));
+        if (key == null) {
+            throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
+        }
+        return key;
+    }
+
+    /** Total deadline of one JWKS fetch, connect to last byte; the fetch is abandoned (cancelled) past it. */
+    static final Duration FETCH_DEADLINE = Duration.ofSeconds(4);
+
+    private static final int MAX_JWKS_BYTES = 50 * 1024;
+
+    private static final java.net.http.HttpClient FETCH_CLIENT = java.net.http.HttpClient.newBuilder()
+            .version(java.net.http.HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofSeconds(2))
+            .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
+            .proxy(java.net.ProxySelector.getDefault())
+            .build();
+
+    /**
+     * Starts a fetch if the window allows one and none is in flight; returns the future of the fetch now in flight
+     * (started here or already running), or {@code null} when the window forbids a new one. Single-flight: the small
+     * state lock guards only the stamp and the future, never any I/O.
+     */
+    private java.util.concurrent.@Nullable CompletableFuture<Void> startFetchIfDue(long nowNanos) {
+        java.util.concurrent.CompletableFuture<Void> started;
+        synchronized (stateLock) {
+            if (inFlight != null) {
+                return inFlight;
+            }
+            if (!fetchDue(nowNanos)) {
+                return null;
+            }
+            lastFetchNanos = nowNanos == 0L ? 1L : nowNanos; // stamped at the start: a failure counts, however it ends
+            started = new java.util.concurrent.CompletableFuture<>();
+            inFlight = started;
+        }
+        java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<String>> request = null;
         try {
-            long nowNanos = clock.getAsLong();
-            boolean due = fetchDue(nowNanos);
-            com.nimbusds.jose.jwk.JWKSet recheck = usableSet(nowNanos, !due);
-            if (recheck != null) {
-                OctetKeyPair recheckKey = firstOctetKeyPair(selector.select(recheck));
-                if (recheckKey != null) {
-                    return recheckKey;
-                }
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(jwksUrl.toURI())
+                    .timeout(FETCH_DEADLINE).header("Accept", "application/json").GET().build();
+            request = FETCH_CLIENT.sendAsync(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            final java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<String>> sent = request;
+            request.orTimeout(FETCH_DEADLINE.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .whenComplete((response, failure) -> {
+                        try {
+                            if (failure != null) {
+                                sent.cancel(true); // abandon a drip-fed or stalled exchange at the deadline
+                            } else {
+                                adopt(response, nowNanos);
+                            }
+                        } catch (RuntimeException ignored) {
+                            // a failed refresh: the held keys stay, the anchor does not move
+                        } finally {
+                            synchronized (stateLock) {
+                                inFlight = null;
+                            }
+                            started.complete(null);
+                        }
+                    });
+        } catch (RuntimeException | java.net.URISyntaxException e) {
+            synchronized (stateLock) {
+                inFlight = null;
             }
+            started.complete(null);
+        }
+        return started;
+    }
 
-            // CONTRACT.md §12.4 rule 2 (C5, JAV-R1-3): at most ONE JWKS fetch per cooldown window,
-            // whether the cache is warm, expired or cold, and a failed attempt counts. Only the
-            // NETWORK CALL is throttled: a kid the last good set holds is still verified from that
-            // set while the window holds (L-1), so one transient failure near the TTL does not
-            // refuse every token; but only up to TTL + JWKS_MAX_STALE old (R2-1), so a key removed
-            // upstream cannot keep verifying through an outage, however long. The first fetch of a verifier's life is allowed (lastFetchNanos is 0).
-            boolean throttled = !due;
-            if (!throttled) {
-                long previousFetchNanos = lastFetchNanos;
-                lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
+    /**
+     * Adopts a fetched JWKS. Only a {@code 200} is a successful fetch (no conditional request is sent, so no
+     * {@code 304}); the entries are read one by one: a JWKS "holding at least one key" has an entry that is a JWK
+     * object with a string {@code kty}, usable by this SDK or not (an unusable one is skipped). No such entry
+     * ({@code {"keys":[]}}, {@code {"keys":[{}]}}, {@code [0]}) is a FAILED refresh: the held keys stay and the
+     * anchor does not move.
+     */
+    private void adopt(java.net.http.HttpResponse<String> response, long nowNanos) {
+        if (response.statusCode() != 200) {
+            return;
+        }
+        String body = response.body();
+        if (body == null || body.length() > MAX_JWKS_BYTES) {
+            return;
+        }
+        try {
+            JsonNode doc = KEYS_MAPPER.readTree(body);
+            JsonNode keys = doc == null ? null : doc.get("keys");
+            if (keys == null || !keys.isArray()) {
+                return;
+            }
+            List<JWK> usable = new java.util.ArrayList<>();
+            int wellFormed = 0;
+            for (JsonNode entry : keys) {
+                if (!entry.isObject() || !entry.path("kty").isTextual()) {
+                    continue;
+                }
+                wellFormed++;
                 try {
-                    String body = http.retrieveResource(jwksUrl).getContent();
-                    // §12.4 rule 2 (contract 1.69; D-10): the entries are read one by one. A JWKS "holding at
-                    // least one key" has an entry that is a JWK object with a string kty, usable by this SDK
-                    // or not (an unusable one is skipped, not a reason to refuse the set). No such entry
-                    // ({"keys":[]}, {"keys":[{}]}, [0], [null]) is a FAILED refresh: the held keys stay and
-                    // the anchor does not move.
-                    com.fasterxml.jackson.databind.JsonNode doc = KEYS_MAPPER.readTree(body);
-                    com.fasterxml.jackson.databind.JsonNode keys = doc == null ? null : doc.get("keys");
-                    if (keys != null && keys.isArray()) {
-                        List<JWK> usable = new java.util.ArrayList<>();
-                        int wellFormed = 0;
-                        for (com.fasterxml.jackson.databind.JsonNode entry : keys) {
-                            if (!entry.isObject() || !entry.path("kty").isTextual()) {
-                                continue;
-                            }
-                            wellFormed++;
-                            try {
-                                usable.add(JWK.parse(entry.toString()));
-                            } catch (ParseException | RuntimeException skipped) {
-                                // well-formed but not usable here: counts, is not kept
-                            }
-                        }
-                        if (wellFormed > 0) {
-                            loaded = new Loaded(new com.nimbusds.jose.jwk.JWKSet(usable), nowNanos);
-                        }
-                    }
-                } catch (IOException | RuntimeException e) {
-                    if (e instanceof java.io.InterruptedIOException || Thread.currentThread().isInterrupted()) {
-                        // The caller's cancellation is not a failed refresh and opens no cooldown window.
-                        lastFetchNanos = previousFetchNanos;
-                    }
-                    // Keep whatever was loaded before (stale-if-error); the window already counts
-                    // this attempt. Nothing about the response is logged.
+                    usable.add(JWK.parse(entry.toString()));
+                } catch (ParseException | RuntimeException skipped) {
+                    // well-formed but not usable here: counts, is not kept
                 }
             }
-
-            // The set is trusted only within TTL + the stale bound (R2-1); past that, fail closed.
-            com.nimbusds.jose.jwk.JWKSet set = usableSet(nowNanos, true);
-            if (set == null) {
-                // Never loaded, or too old to trust: nothing to verify against.
-                throw new AuthError(throttled
-                        ? "JWKS unavailable: the last fetch failed and the next attempt is not yet due "
-                                + "(CONTRACT.md §12.4 rule 2)"
-                        : "JWKS fetch failed");
+            if (wellFormed > 0) {
+                loaded = new Loaded(new com.nimbusds.jose.jwk.JWKSet(usable), nowNanos);
             }
-            OctetKeyPair key = firstOctetKeyPair(selector.select(set));
-            if (key == null) {
-                throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
-            }
-            return key;
-        } finally {
-            refreshLock.unlock();
+        } catch (IOException e) {
+            // not a JWKS document
         }
     }
 

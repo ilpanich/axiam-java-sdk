@@ -104,6 +104,8 @@ class JwksVerifierStaleBoundTest {
                 return true;
             } catch (AuthError e) {
                 return false;
+            } finally {
+                Thread.sleep(120); // a refresh due behind a held-kid verification runs in the background
             }
         }
 
@@ -179,6 +181,7 @@ class JwksVerifierStaleBoundTest {
         try (Fixture f = new Fixture()) {
             f.mode.set(Mode.RSA_ONLY);
             f.at(TTL + 1);
+            assertEquals(true, f.accepts("held"), "served from the held set while the refresh runs behind it");
             assertEquals(false, f.accepts("held"), "the RSA-only set replaced the held set (a success)");
             f.mode.set(Mode.SET);
             f.at(TTL + 70);

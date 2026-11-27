@@ -160,10 +160,12 @@ class AmqpDiscardEventTest {
         String signature = fixture().get("authz_request").get("hmac_signature_hex").asText();
         String nonce = "55555555-5555-5555-5555-555555555555";
         String bodyTenant = "11111111-1111-1111-1111-111111111111";
-        for (byte[] body : List.of(
-                bytes(wire("audit_event")),                                              // malformed
-                bytes(wire.substring(0, wire.indexOf(",\"hmac_signature\"")) + "}"),     // unsigned
-                bytes(withChangedSignatureDigit(wire)))) {                               // signature
+        record Case(byte[] body, String reason) { }
+        for (Case c : List.of(
+                new Case(bytes(wire("audit_event")), "malformed"),
+                new Case(bytes(wire.substring(0, wire.indexOf(",\"hmac_signature\"")) + "}"), "unsigned"),
+                new Case(bytes(withChangedSignatureDigit(wire)), "signature"))) {
+            byte[] body = c.body();
             Harness h = new Harness(EventType.AUTHZ_REQUEST);
             h.deliver(body);
             assertEquals(1, h.warnings.size());
@@ -172,11 +174,26 @@ class AmqpDiscardEventTest {
             assertTrue(line.contains("routing_key=events.rk"), line);
             assertTrue(line.contains("tenant_id=" + OWN_TENANT), line);
             assertTrue(line.contains("timestamp=2026-07-10T12:00:00Z"), line);
+            assertTrue(line.endsWith("reason=" + c.reason() + ")"), c.reason() + ": " + line);
             assertFalse(line.contains(bodyTenant), "tenant_id is never read from the body: " + line);
             assertFalse(line.contains(signature), line);
             assertFalse(line.contains(nonce), line);
             assertFalse(line.contains(wire.substring(wire.length() - 20)), line);
         }
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    void typedVerifyReturnsTheCanonicalBytesOfItsTypeOnly_andTheUntypedOneAcceptsEither() throws Exception {
+        byte[] authz = bytes(wire("authz_request"));
+        assertArrayEquals(bytes(fixture().get("authz_request").get("canonical_signed_json").asText()),
+                Hmac.verify(subkey(), authz, EventType.AUTHZ_REQUEST));
+        assertEquals(null, Hmac.verify(subkey(), authz, EventType.AUDIT_EVENT));
+        assertEquals(null, Hmac.verify(subkey(), bytes(withChangedSignatureDigit(wire("audit_event"))),
+                EventType.AUDIT_EVENT));
+        assertEquals(null, Hmac.verify(subkey(), withBom(authz), EventType.AUTHZ_REQUEST));
+        assertTrue(Hmac.verify(subkey(), authz));
+        assertTrue(Hmac.verify(subkey(), bytes(wire("audit_event"))));
     }
 
     @Test

@@ -1274,8 +1274,9 @@ the *one* signed type it consumes and its own tenant:
 `AmqpConsumer.consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, handler, logger)`. The
 layout check is against that type's members only, so a genuine, correctly signed `AuditEventMessage` delivered
 to an `AUTHZ_REQUEST` consumer (and the reverse) is refused as `malformed` before the HMAC is computed. An
-application that consumes both types runs two consumers. **API change:** `consume` gained the `EventType` and
-`tenantId` parameters (the untyped overloads are gone; 1.4.0 is unreleased). Every discard logs exactly one
+application that consumes both types runs two consumers. **Source-incompatible change to a released API** (the untyped `consume` overloads shipped in 1.3.0 and 1.3.1;
+contract 1.69, D-9 forces it): `consume` gained the `EventType` and `tenantId` parameters. Migration: add
+`EventType.AUTHZ_REQUEST` (or `AUDIT_EVENT`) and your tenant id after `queue`. Every discard logs exactly one
 warning-level event with `timestamp`, `exchange`, `routing_key`, `tenant_id` (the consumer's own, never read
 from the body) and `reason`, one of `malformed`, `unsigned`, `signature`, `key_version`, `stale`, `replay`,
 chosen in the order of §8 rule 4; it never carries a signature, a nonce, a key or any part of the body. A body

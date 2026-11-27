@@ -64,7 +64,11 @@ public final class Hmac {
      * @param signingKey the per-tenant AMQP signing secret
      * @param body       the raw AMQP delivery body bytes
      * @return {@code true} if the signature is valid, {@code false} otherwise
+     * @deprecated not a consumer gate: it accepts either signed event layout, whereas a consumer checks the one
+     *             type it is configured for (CONTRACT.md &sect;8 step 2c, contract 1.69). Use
+     *             {@link #verify(byte[], byte[], EventType)}.
      */
+    @Deprecated
     public static boolean verify(byte[] signingKey, byte[] body) {
         return verifiedCanonical(signingKey, body) != null;
     }
@@ -91,6 +95,20 @@ public final class Hmac {
 
     private static Inspection refused(Reason reason) {
         return new Inspection(null, reason);
+    }
+
+    /**
+     * Typed verification: returns the canonical bytes the HMAC covered when {@code body} is a correctly signed
+     * message with {@code type}'s layout, else {@code null} (another type's layout, an unsigned or malformed body,
+     * a wrong signature). Never throws.
+     *
+     * @param signingKey the per-tenant AMQP signing secret
+     * @param body       the raw AMQP delivery body bytes
+     * @param type       the one signed event type expected
+     * @return the verified canonical bytes, or {@code null}
+     */
+    public static byte @Nullable [] verify(byte[] signingKey, byte[] body, EventType type) {
+        return inspect(signingKey, body, type).canonical();
     }
 
     /**
