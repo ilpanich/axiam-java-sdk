@@ -301,22 +301,27 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /**
      * CONTRACT.md &sect;9: the {@code oidc_refresh} single-flight, keyed PER refresh token and effective
      * tenant — the key is a SHA-256 digest, never the raw token. Each flight owns its outcome holder and
-     * vacates its key once published, so the map does not grow.
+     * vacates its key once published, so the map does not grow. Built by the primary handle and shared by
+     * every {@link #actingTenant(UUID)}/{@link #clearActingTenant()} handle over the same session, so the same
+     * token and resolved tenant from two handles at once is one flight and one wire call.
      */
-    private final SingleFlight<OidcTokenSet> oidcRefreshFlights = new SingleFlight<>();
+    private final SingleFlight<OidcTokenSet> oidcRefreshFlights;
 
     /**
      * Runs the leader's wire call for {@link #oidcRefreshAsync(Sensitive)}. Async callers join on their
      * own thread and get a future; only a flight's leader takes a thread here, and none ever blocks on
-     * another flight, so distinct tokens are never starved by a burst of the same one. Owned by this
-     * handle and shut down by {@link #close()}.
+     * another flight, so distinct tokens are never starved by a burst of the same one. Shared with the
+     * rebound handles like {@link #httpClient}, and shut down only when the primary handle closes.
      */
-    private final java.util.concurrent.ExecutorService oidcRefreshExecutor =
-            java.util.concurrent.Executors.newCachedThreadPool(runnable -> {
-                Thread thread = new Thread(runnable, "axiam-oidc-refresh");
-                thread.setDaemon(true);
-                return thread;
-            });
+    private final java.util.concurrent.ExecutorService oidcRefreshExecutor;
+
+    private static java.util.concurrent.ExecutorService newOidcRefreshExecutor() {
+        return java.util.concurrent.Executors.newCachedThreadPool(runnable -> {
+            Thread thread = new Thread(runnable, "axiam-oidc-refresh");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
 
     /** Number of live {@code oidc_refresh} flights; test seam. */
     int oidcRefreshSlotCount() {
@@ -754,6 +759,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
         this.refreshGuard = new RefreshGuard();
+        this.oidcRefreshFlights = new SingleFlight<>();
+        this.oidcRefreshExecutor = newOidcRefreshExecutor();
         this.session = new SessionState(cookieManager, this.baseUrl, this.tenantId, b.orgSlug, b.orgId);
 
         X509TrustManager trustManager = buildTrustManager(b.customCaPem);
@@ -829,6 +836,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.pollHttpClient = other.pollHttpClient;
         this.oauth2HttpClient = other.oauth2HttpClient;
         this.refreshGuard = other.refreshGuard;
+        this.oidcRefreshFlights = other.oidcRefreshFlights; // one flight map per session (§9)
+        this.oidcRefreshExecutor = other.oidcRefreshExecutor;
         this.jwksVerifier = other.jwksVerifier;
         this.clientCertPem = other.clientCertPem;
         this.clientKeyPem = other.clientKeyPem;
@@ -922,7 +931,6 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
         // Every handle owns its own lazily-built OIDC jwks_uri verifiers; each holds an HTTP client with a thread.
         oidcJwksVerifiers.values().forEach(JwksVerifier::close);
-        oidcRefreshExecutor.shutdown(); // per handle; a running wire call finishes and publishes to its callers
         if (!isPrimaryHandle) {
             // A rebound handle (actingTenant(UUID)/clearActingTenant()) does not own
             // httpClient — every other handle over this same session is still using
@@ -932,6 +940,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
         decisionMemo.clear();
         jwksVerifier.close(); // shared with rebound handles, so only the primary handle closes it
+        oidcRefreshExecutor.shutdown(); // likewise shared; a running wire call finishes and publishes to its callers
         httpClient.dispatcher().executorService().shutdown();
         httpClient.connectionPool().evictAll();
         okhttp3.Cache cache = httpClient.cache();
@@ -2646,6 +2655,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         UUID tenant;
         String key;
         try {
+            ensureOpen(); // this handle may be closed while the shared executor is not (a closed rebound handle)
             tenant = resolveOauth2TenantId(null);
             key = oidcRefreshKey(tenant, refreshToken);
         } catch (RuntimeException e) {

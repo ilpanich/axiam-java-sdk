@@ -392,4 +392,70 @@ class OidcRefreshKeyingTest {
             assertEquals(0, rig.server.getRequestCount());
         }
     }
+
+    /**
+     * Rebound handles share the session's flights. The {@code /oauth2} tenant resolves from the client's
+     * configured tenant (§12.3 rule 4), not from the acting tenant, so a handle rebound with
+     * {@code actingTenant(X)} and the root both resolve to the root's default when the tenant is omitted.
+     */
+    @Test
+    void theSameTokenAndTenantFromReboundHandlesIsOneFlightAndOneWireCall() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient root = rig.client()) {
+            AxiamClient rebound = root.actingTenant(OTHER_TENANT);
+            AxiamClient cleared = rebound.clearActingTenant();
+            UUID dflt = UUID.fromString(DEFAULT_TENANT);
+            CompletableFuture<OidcTokenSet> fromRoot = async(() -> root.oidcRefresh("hold-T"));
+            assertTrue(rig.firstArrived.await(10, TimeUnit.SECONDS));
+            CompletableFuture<OidcTokenSet> fromRebound = async(() -> rebound.oidcRefresh("hold-T"));
+            CompletableFuture<OidcTokenSet> fromReboundExplicit = async(
+                    () -> rebound.oidcRefresh(io.axiam.sdk.Sensitive.of("hold-T"), null, dflt, null));
+            CompletableFuture<OidcTokenSet> fromClearedAsync = cleared.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("hold-T"));
+            awaitUsers(root, 4);
+            rig.gate.countDown();
+            String expected = "access-for-hold-T-at-" + DEFAULT_TENANT;
+            for (CompletableFuture<OidcTokenSet> f : List.of(fromRoot, fromRebound, fromReboundExplicit, fromClearedAsync)) {
+                assertEquals(expected, access(get(f)));
+            }
+            assertEquals(List.of("hold-T@" + DEFAULT_TENANT), rig.calls, "one wire call across the handles");
+        }
+    }
+
+    @Test
+    void theSameTokenWithDifferentTenantsFromReboundHandlesIsTwoFlights() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient root = rig.client()) {
+            AxiamClient rebound = root.actingTenant(OTHER_TENANT);
+            CompletableFuture<OidcTokenSet> fromRoot = async(() -> root.oidcRefresh("hold-T"));
+            assertTrue(rig.firstArrived.await(10, TimeUnit.SECONDS));
+            CompletableFuture<OidcTokenSet> fromRebound = async(
+                    () -> rebound.oidcRefresh(io.axiam.sdk.Sensitive.of("hold-T"), null, OTHER_TENANT, null));
+            awaitCalls(rig, 2); // the second tenant's call is on the wire while the first is held
+            assertFalse(fromRoot.isDone());
+            rig.gate.countDown();
+            assertEquals("access-for-hold-T-at-" + DEFAULT_TENANT, access(get(fromRoot)));
+            assertEquals("access-for-hold-T-at-" + OTHER_TENANT, access(get(fromRebound)));
+            assertEquals(java.util.Set.of("hold-T@" + DEFAULT_TENANT, "hold-T@" + OTHER_TENANT),
+                    java.util.Set.copyOf(rig.calls));
+            assertEquals(2, rig.calls.size());
+        }
+    }
+
+    @Test
+    void closingAReboundHandleLeavesTheSharedRefreshExecutorToTheRoot() throws Exception {
+        try (Rig rig = new Rig()) {
+            AxiamClient root = rig.client();
+            AxiamClient rebound = root.actingTenant(OTHER_TENANT);
+            AxiamClient other = root.clearActingTenant();
+            rebound.close();
+            java.util.concurrent.ExecutionException closedHandle = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> get(rebound.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("A"))));
+            assertTrue(closedHandle.getCause() instanceof io.axiam.sdk.errors.NetworkError, String.valueOf(closedHandle.getCause()));
+            assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(get(root.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("A")))));
+            assertEquals("access-for-B-at-" + DEFAULT_TENANT, access(get(other.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("B")))));
+            root.close();
+            java.util.concurrent.ExecutionException afterRoot = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> get(other.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("C"))));
+            assertTrue(afterRoot.getCause() instanceof io.axiam.sdk.errors.NetworkError, String.valueOf(afterRoot.getCause()));
+            assertEquals(2, rig.calls.size(), rig.calls.toString());
+        }
+    }
 }

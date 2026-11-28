@@ -207,7 +207,12 @@ are regenerated (`AuditLogEntry`).
   calling thread and returns a future, and only the one wire call runs, on a daemon thread the client
   owns and shuts down on `close()`. Before, async callers beyond the pool's size could each send the same
   single-use token, ending the session, and could starve refreshes of other tokens.
-  `RefreshGuard.runExclusive`, which nothing called any more, is removed.
+  `RefreshGuard.runExclusive`, which nothing called any more, is removed. Every `actingTenant(...)` /
+  `clearActingTenant()` handle now shares its session's `oidc_refresh` flights and refresh thread, so the
+  same token and resolved tenant from two handles at once is one wire call (before, each handle had its
+  own flights and the second call replayed the token); different tenants remain separate flights. The
+  refresh thread is shut down when the primary handle closes; a closed rebound handle's
+  `oidcRefreshAsync` fails as a closed client.
 
 ### Migration
 
