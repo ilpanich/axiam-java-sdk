@@ -2598,6 +2598,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     @Override
     public OidcTokenSet oidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration) {
+        ensureOpen(); // §18.1 rule 4: use after close is an error, before any slot or request
         // §12.3 rule 4: always tenant-scoped. Resolve ONCE, before any slot, discovery or wire call; the same
         // canonical UUID is the key's tenant AND the request's tenant_id (doOidcRefresh never re-resolves).
         UUID tenant = resolveOauth2TenantId(tenantId);

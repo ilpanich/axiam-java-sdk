@@ -449,13 +449,15 @@ class OidcRefreshKeyingTest {
             java.util.concurrent.ExecutionException closedHandle = assertThrows(java.util.concurrent.ExecutionException.class,
                     () -> get(rebound.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("A"))));
             assertTrue(closedHandle.getCause() instanceof io.axiam.sdk.errors.NetworkError, String.valueOf(closedHandle.getCause()));
+            assertThrows(io.axiam.sdk.errors.NetworkError.class, () -> rebound.oidcRefresh("A-sync"));
             assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(get(root.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("A")))));
             assertEquals("access-for-B-at-" + DEFAULT_TENANT, access(get(other.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("B")))));
             root.close();
             java.util.concurrent.ExecutionException afterRoot = assertThrows(java.util.concurrent.ExecutionException.class,
                     () -> get(other.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("C"))));
             assertTrue(afterRoot.getCause() instanceof io.axiam.sdk.errors.NetworkError, String.valueOf(afterRoot.getCause()));
-            assertEquals(2, rig.calls.size(), rig.calls.toString());
+            assertThrows(io.axiam.sdk.errors.NetworkError.class, () -> root.oidcRefresh("C-sync"));
+            assertEquals(2, rig.calls.size(), rig.calls.toString()); // a closed handle, sync or async, sends nothing
         }
     }
 }

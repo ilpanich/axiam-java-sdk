@@ -101,6 +101,8 @@ are regenerated (`AuditLogEntry`).
   response (CONTRACT 1.69 §8, server #881). The requester requires a 1.68 server; against an older
   one every check times out (JAV-R1-5). The README says so. `Options` is now
   `(logger, timeout, clock, executor)`.
+- `RefreshGuard.runExclusive` (public in `io.axiam.sdk.internal` in 1.3.1, never part of the supported
+  API) is removed: since #142 the `oidc_refresh` single-flight no longer uses it, and nothing else did.
 
 ### Fixed
 
@@ -207,7 +209,8 @@ are regenerated (`AuditLogEntry`).
   calling thread and returns a future, and only the one wire call runs, on a daemon thread the client
   owns and shuts down on `close()`. Before, async callers beyond the pool's size could each send the same
   single-use token, ending the session, and could starve refreshes of other tokens.
-  `RefreshGuard.runExclusive`, which nothing called any more, is removed. Every `actingTenant(...)` /
+  A closed client's `oidcRefresh` fails with `NetworkError` before any request, as `oidcRefreshAsync`
+  does. `RefreshGuard.runExclusive` is removed (see Removed). Every `actingTenant(...)` /
   `clearActingTenant()` handle now shares its session's `oidc_refresh` flights and refresh thread, so the
   same token and resolved tenant from two handles at once is one wire call (before, each handle had its
   own flights and the second call replayed the token); different tenants remain separate flights. The
