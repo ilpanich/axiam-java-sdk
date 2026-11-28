@@ -131,6 +131,68 @@ class AuthClientInterceptorTrustManagerTest {
     }
 
     @Test
+    void everyCertificateOfABundleIsTrustedAndAnUnrelatedOneStillRefused() throws Exception {
+        byte[] ca1 = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-bundle-1");
+        byte[] ca2 = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-bundle-2");
+        byte[] other = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-bundle-other");
+        byte[] bundle = new byte[ca1.length + ca2.length];
+        System.arraycopy(ca1, 0, bundle, 0, ca1.length);
+        System.arraycopy(ca2, 0, bundle, ca1.length, ca2.length);
+        X509TrustManager tm = invokeBuildTrustManager(bundle);
+
+        assertDoesNotThrow(() -> tm.checkServerTrusted(new X509Certificate[]{parseCert(ca1)}, "RSA"));
+        assertDoesNotThrow(() -> tm.checkServerTrusted(new X509Certificate[]{parseCert(ca2)}, "RSA"),
+                "the SECOND certificate of the bundle must be trusted, as on REST and JWKS");
+        X509Certificate stranger = parseCert(other);
+        assertThrows(CertificateException.class,
+                () -> tm.checkServerTrusted(new X509Certificate[]{stranger}, "RSA"));
+    }
+
+    @Test
+    void endpointIdentificationStillAppliesToABundleCertificate() throws Exception {
+        byte[] ca1 = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-bundle-eid-1");
+        TestCerts.Identity server = TestCerts.selfSignedIdentity(tempDir, "axiam-grpc-bundle-eid-2"); // SAN localhost
+        byte[] bundle = new byte[ca1.length + server.certPem().length];
+        System.arraycopy(ca1, 0, bundle, 0, ca1.length);
+        System.arraycopy(server.certPem(), 0, bundle, ca1.length, server.certPem().length);
+        X509TrustManager tm = invokeBuildTrustManager(bundle);
+
+        SSLContext serverCtx = SSLContext.getInstance("TLS");
+        serverCtx.init(io.axiam.sdk.internal.TlsSupport.keyManagers(server.certPem(), server.keyPem()), null, null);
+        SSLContext clientCtx = SSLContext.getInstance("TLS");
+        clientCtx.init(null, new javax.net.ssl.TrustManager[]{tm}, null);
+
+        try (javax.net.ssl.SSLServerSocket listener = (javax.net.ssl.SSLServerSocket) serverCtx
+                .getServerSocketFactory().createServerSocket(0, 5, java.net.InetAddress.getByName("0.0.0.0"))) {
+            Thread acceptor = new Thread(() -> {
+                for (int i = 0; i < 2; i++) {
+                    try (javax.net.ssl.SSLSocket sock = (javax.net.ssl.SSLSocket) listener.accept()) {
+                        sock.startHandshake();
+                    } catch (java.io.IOException ignored) {
+                        // the client may abort the handshake
+                    }
+                }
+            });
+            acceptor.setDaemon(true);
+            acceptor.start();
+
+            assertDoesNotThrow(() -> handshake(clientCtx, "127.0.0.1", listener.getLocalPort()));
+            assertThrows(javax.net.ssl.SSLHandshakeException.class,
+                    () -> handshake(clientCtx, "127.0.0.2", listener.getLocalPort()),
+                    "a trusted CA does not excuse a hostname the certificate does not name");
+        }
+    }
+
+    private static void handshake(SSLContext ctx, String host, int port) throws java.io.IOException {
+        try (javax.net.ssl.SSLSocket sock = (javax.net.ssl.SSLSocket) ctx.getSocketFactory().createSocket(host, port)) {
+            javax.net.ssl.SSLParameters params = sock.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            sock.setSSLParameters(params);
+            sock.startHandshake();
+        }
+    }
+
+    @Test
     void checkClientTrustedDelegatesOnlyToThePrimarySystemTrustManager() throws Exception {
         byte[] pem = TestCerts.selfSignedCertPem(tempDir, "axiam-grpc-test-ca-4");
         X509TrustManager tm = invokeBuildTrustManager(pem);

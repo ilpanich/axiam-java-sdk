@@ -5,6 +5,7 @@ import io.axiam.sdk.internal.JwksVerifier;
 import io.axiam.sdk.oidc.MemoryOidcStateStore;
 import io.axiam.sdk.oidc.OidcStateStore;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -22,6 +23,10 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.function.RouterFunction;
 import org.springframework.web.servlet.function.ServerResponse;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * Zero-config Spring Boot auto-registration for {@link AxiamAuthenticationFilter}
@@ -77,6 +82,9 @@ public class AxiamAutoConfiguration {
      *                         blank means the {@code aud} claim is not checked
      * @param clockSkewSeconds the &sect;10.1 rule 7 leeway in seconds
      *                         ({@code axiam.clock-skew-seconds} property)
+     * @param customCaPath     path of a PEM CA bundle the JWKS fetch also trusts
+     *                         ({@code axiam.custom-ca-path} property, CONTRACT.md &sect;6); blank means the
+     *                         system trust store only
      * @return the default {@link AxiamAuthenticationFilter} bean
      */
     @Bean
@@ -86,12 +94,27 @@ public class AxiamAutoConfiguration {
             @Value("${axiam.tenant-id}") String tenantId,
             @Value("${axiam.expected-issuer:}") String expectedIssuer,
             @Value("${axiam.expected-audience:}") String expectedAudience,
-            @Value("${axiam.clock-skew-seconds:60}") long clockSkewSeconds) {
+            @Value("${axiam.clock-skew-seconds:60}") long clockSkewSeconds,
+            @Value("${axiam.custom-ca-path:}") String customCaPath) {
         JwksVerifier.LocalVerificationPolicy policy = new JwksVerifier.LocalVerificationPolicy(
                 expectedIssuer.isBlank() ? null : expectedIssuer,
                 expectedAudience.isBlank() ? null : expectedAudience,
                 clockSkewSeconds);
-        return new AxiamAuthenticationFilter(new JwksVerifier(baseUrl, policy), tenantId);
+        byte[] customCaPem = readCustomCa(customCaPath);
+        return new AxiamAuthenticationFilter(
+                new JwksVerifier(baseUrl, policy, null, customCaPem, null, null), tenantId);
+    }
+
+    /** Reads the PEM CA bundle named by {@code axiam.custom-ca-path}; blank means none. The path, never the body, is named in an error. */
+    private static byte @Nullable [] readCustomCa(String customCaPath) {
+        if (customCaPath.isBlank()) {
+            return null;
+        }
+        try {
+            return Files.readAllBytes(Path.of(customCaPath));
+        } catch (IOException | RuntimeException e) {
+            throw new IllegalStateException("axiam.custom-ca-path is not a readable file: " + customCaPath, e);
+        }
     }
 
     /**
@@ -150,13 +173,20 @@ public class AxiamAutoConfiguration {
          *
          * @param baseUrl  the AXIAM server base URL ({@code axiam.base-url} property)
          * @param tenantId the configured tenant identifier ({@code axiam.tenant-id} property)
+         * @param customCaPath optional PEM CA bundle path ({@code axiam.custom-ca-path} property), or blank
          * @return the default {@link AxiamClient} bean
          */
         @Bean
         @ConditionalOnMissingBean(AxiamClient.class)
         public AxiamClient axiamClient(
-                @Value("${axiam.base-url}") String baseUrl, @Value("${axiam.tenant-id}") String tenantId) {
-            return AxiamClient.builder(baseUrl, tenantId).build();
+                @Value("${axiam.base-url}") String baseUrl, @Value("${axiam.tenant-id}") String tenantId,
+                @Value("${axiam.custom-ca-path:}") String customCaPath) {
+            AxiamClient.Builder builder = AxiamClient.builder(baseUrl, tenantId);
+            byte[] customCaPem = readCustomCa(customCaPath);
+            if (customCaPem != null) {
+                builder.customCa(customCaPem);
+            }
+            return builder.build();
         }
 
         /**
@@ -219,6 +249,7 @@ public class AxiamAutoConfiguration {
          * @param tenantId     the configured tenant identifier ({@code axiam.tenant-id} property)
          * @param clientId     the relying party's OAuth2 {@code client_id} ({@code axiam.oidc.client-id} property)
          * @param clientSecret the confidential client's {@code client_secret} ({@code axiam.oidc.client-secret} property), or blank for a public client
+         * @param customCaPath optional PEM CA bundle path ({@code axiam.custom-ca-path} property), or blank
          * @return the OIDC-configured {@link AxiamClient} bean
          */
         @Bean
@@ -227,8 +258,13 @@ public class AxiamAutoConfiguration {
                 @Value("${axiam.base-url}") String baseUrl,
                 @Value("${axiam.tenant-id}") String tenantId,
                 @Value("${axiam.oidc.client-id}") String clientId,
-                @Value("${axiam.oidc.client-secret:}") String clientSecret) {
+                @Value("${axiam.oidc.client-secret:}") String clientSecret,
+                @Value("${axiam.custom-ca-path:}") String customCaPath) {
             AxiamClient.Builder builder = AxiamClient.builder(baseUrl, tenantId).oidcClientId(clientId);
+            byte[] customCaPem = readCustomCa(customCaPath);
+            if (customCaPem != null) {
+                builder.customCa(customCaPem);
+            }
             if (!clientSecret.isBlank()) {
                 builder.oidcClientSecret(clientSecret);
             }

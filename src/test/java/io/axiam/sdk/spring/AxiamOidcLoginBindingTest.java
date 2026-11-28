@@ -28,6 +28,7 @@ import org.springframework.web.servlet.function.RouterFunction;
 import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -338,6 +339,207 @@ class AxiamOidcLoginBindingTest {
         }
     }
 
+    // --- JAV-R1-2 / GLUE-R1-1 and Decision 7: the Location header is the encoded form ---------
+
+    @Test
+    void aStoredReturnToJavaNetUriRefusesIsFollowedAsItsPercentEncodedForm() throws Exception {
+        // java.net.URI rejects each of these; isSafeReturnTo accepts them (no backslash, no control
+        // character). Decision 7: the adapter writes the percent-encoded form, pure ASCII; existing %XX
+        // kept, any other % becomes %25. The user is signed in and is never given a 500.
+        String[][] cases = {
+            {"/a b", "/a%20b"},
+            {"/%", "/%25"},
+            {"/a%20b", "/a%20b"},
+            {"/caf\u00e9", "/caf%C3%A9"},
+            {"/\u20ac", "/%E2%82%AC"},
+            {"/a|b\"c", "/a|b%22c"},
+            {"/a\ud800b", "/a%EF%BF%BDb"},
+            {"/%%41", "/%25%41"},
+            {"/a%2", "/a%252"},
+            {"/\ud800\ud800", "/%EF%BF%BD%EF%BF%BD"},
+            {"/\udc00\udc00", "/%EF%BF%BD%EF%BF%BD"},
+            {"/\ud83d\ude00", "/%F0%9F%98%80"},
+            {"/dashboard?tab=1&x=a b#frag", "/dashboard?tab=1&x=a%20b#frag"}};
+        for (String[] c : cases) {
+            try (Harness h = new Harness(HTTPS_CALLBACK)) {
+                Login login = h.login();
+                h.replaceReturnTo(login, c[0]);
+
+                MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+
+                assertEquals(302, response.getStatus(), c[0]);
+                assertEquals(c[1], response.getHeader("Location"), c[0]);
+                assertCleared(h, response);
+                assertEquals(1, h.successCalls.size(), "onSuccess runs once for " + c[0]);
+                for (char ch : response.getHeader("Location").toCharArray()) {
+                    assertTrue(ch > 0x20 && ch < 0x7F, "Location must be visible ASCII: " + c[1]);
+                }
+            }
+        }
+    }
+
+    @Test
+    void aCrLfDestinationAdmittedByThePredicateNeverReachesTheHeader() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> o.withAllowReturnTo(v -> v.startsWith("/a\r\n")))) {
+            Login login = h.login();
+            h.replaceReturnTo(login, "/a\r\nSet-Cookie: x=y");
+
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+
+            assertEquals(302, response.getStatus());
+            assertEquals("/a%0D%0ASet-Cookie:%20x=y", response.getHeader("Location"));
+            assertEquals(null, response.getHeader("X"), "no injected header");
+            for (String header : response.getHeaders("Set-Cookie")) {
+                assertFalse(header.startsWith("x=y"), header);
+            }
+            assertCleared(h, response);
+        }
+    }
+
+    @Test
+    void aConfiguredSuccessRedirectIsEncodedToo() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> new AxiamOidcLoginRoutes.Options(o.loginPath(),
+                o.callbackPath(), o.redirectUri(), null, "/h\u00f4me page", o.onSuccess()))) {
+            Login login = h.login();
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+            assertEquals(302, response.getStatus());
+            assertEquals("/h%C3%B4me%20page", response.getHeader("Location"));
+            assertCleared(h, response);
+        }
+    }
+
+    @Test
+    void aLoginWithAReturnToThatHasASpaceSignsInAndLandsOnTheEncodedPath() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK)) {
+            MockHttpServletResponse loginResponse = h.dispatch("GET", "/oidc/login?returnTo=%2Fa%20b", null);
+            String state = null;
+            for (String pair : URI.create(loginResponse.getHeader("Location")).getRawQuery().split("&")) {
+                if (pair.startsWith("state=")) {
+                    state = pair.substring(6);
+                } else if (pair.startsWith("nonce=")) {
+                    h.nonce.set(pair.substring(6));
+                }
+            }
+            String setCookie = h.bindingSetCookie(loginResponse);
+            Cookie cookie = new Cookie(setCookie.substring(0, setCookie.indexOf('=')), cookieValue(setCookie));
+
+            MockHttpServletResponse response = h.callback(state, "code-1", cookie);
+
+            assertEquals(302, response.getStatus());
+            assertEquals("/a%20b", response.getHeader("Location"));
+            assertCleared(h, response);
+        }
+    }
+
+    // --- GLUE-R1-4, GLUE-R1-5, N4 -----------------------------------------------------
+
+    @Test
+    void aRefusalWithAnotherBrowsersCookieConsumesTheState() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK)) {
+            Login victim = h.login();
+            Login attacker = h.login();
+
+            assertEquals(401, h.callback(attacker.state, "code-1", victim.cookie()).getStatus());
+
+            // GLUE-R1-4: the entry was consumed by the refused callback, so the rightful cookie
+            // cannot retry it either, and nothing was exchanged.
+            MockHttpServletResponse retry = h.callback(attacker.state, "code-1", attacker.cookie());
+            assertEquals(401, retry.getStatus());
+            assertTrue(retry.getContentAsString().contains(UNIFORM_401));
+            assertEquals(0, h.tokenRequests.get());
+            assertNull(h.store.consume(attacker.state));
+        }
+    }
+
+    @Test
+    void aSuccessHookThatThrowsStillClearsTheCookie() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> new AxiamOidcLoginRoutes.Options(o.loginPath(),
+                o.callbackPath(), o.redirectUri(), null, null, t -> {
+                    throw new IllegalStateException("application hook failed");
+                }))) {
+            Login login = h.login();
+
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+
+            assertEquals(500, response.getStatus());
+            assertCleared(h, response);
+            assertFalse(response.getContentAsString().contains("application hook failed"),
+                    "the failure text of an application hook is not echoed to the browser");
+        }
+    }
+
+    @Test
+    void aRequestAwareSuccessHookThatThrowsStillClearsTheCookie() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> o.withSuccessHandler((tokens, entry, request) -> {
+            throw new IllegalStateException("application hook failed");
+        }))) {
+            Login login = h.login();
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+            assertEquals(500, response.getStatus());
+            assertCleared(h, response);
+        }
+    }
+
+    @Test
+    void aStoreThatThrowsOnConsumeStillClearsTheCookie() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK)) {
+            Login login = h.login();
+            io.axiam.sdk.oidc.OidcStateStore broken = new io.axiam.sdk.oidc.OidcStateStore() {
+                @Override
+                public void save(OidcStateEntry entry) {
+                    h.store.save(entry);
+                }
+
+                @Override
+                public OidcStateEntry consume(String state) {
+                    throw new IllegalStateException("store down");
+                }
+            };
+            RouterFunction<ServerResponse> brokenRoutes = AxiamOidcLoginRoutes.routes(h.client, broken,
+                    new AxiamOidcLoginRoutes.Options("/oidc/login", "/oidc/callback", HTTPS_CALLBACK));
+            MockHttpServletResponse response = h.dispatchOn(brokenRoutes, "GET",
+                    "/oidc/callback?state=" + login.state + "&code=c", login.cookie());
+            assertEquals(500, response.getStatus());
+            assertCleared(h, response);
+        }
+    }
+
+    @Test
+    void aSuccessHookThatThrowsAnErrorStillClearsTheCookie() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> new AxiamOidcLoginRoutes.Options(o.loginPath(),
+                o.callbackPath(), o.redirectUri(), null, null, t -> {
+                    throw new AssertionError("hook failed with an Error");
+                }))) {
+            Login login = h.login();
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+            assertEquals(500, response.getStatus());
+            assertCleared(h, response);
+        }
+    }
+
+    @Test
+    void aPredicateThatThrowsAnErrorAcceptsNothing() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK, o -> o.withAllowReturnTo(v -> {
+            throw new AssertionError("boom");
+        }))) {
+            Login login = h.login();
+            h.replaceReturnTo(login, "https://evil.example/x");
+            MockHttpServletResponse response = h.callback(login.state, "code-1", login.cookie());
+            assertEquals(200, response.getStatus());
+            assertNull(response.getHeader("Location"));
+        }
+    }
+
+    @Test
+    void theStateEntryToStringKeepsTheBindingDigestOut() throws Exception {
+        try (Harness h = new Harness(HTTPS_CALLBACK)) {
+            Login login = h.login();
+            OidcStateEntry entry = h.store.consume(login.state);
+            assertNotNull(entry);
+            assertFalse(entry.toString().contains(entry.bindingDigest()), entry.toString());
+        }
+    }
+
     // --- helpers -----------------------------------------------------------------
 
     private static void assertCleared(Harness h, MockHttpServletResponse response) {
@@ -401,10 +603,28 @@ class AxiamOidcLoginBindingTest {
                     return OidcTestSupport.discoveryResponse(base);
                 }
             });
+            prewarm(base);
             this.client = AxiamClient.builder(base, TENANT).oidcClientId("my-app").build();
             this.routes = AxiamOidcLoginRoutes.routes(client, store, customize.apply(
                     new AxiamOidcLoginRoutes.Options(
                             "/oidc/login", "/oidc/callback", redirectUri, null, null, successCalls::add)));
+        }
+
+        /**
+         * Warms the mock server's JWKS and discovery handlers. The SDK reads the JWKS with a 500 ms
+         * timeout, and the first request to a cold mock server can exceed it (a rare 401 on the first
+         * callback of a run).
+         */
+        private static void prewarm(String base) {
+            okhttp3.OkHttpClient http = new okhttp3.OkHttpClient();
+            for (String path : new String[] {"oauth2/jwks", ".well-known/openid-configuration"}) {
+                try (okhttp3.Response ignored = http.newCall(new okhttp3.Request.Builder().url(base + path).build())
+                        .execute()) {
+                    // the response is irrelevant
+                } catch (IOException e) {
+                    // best effort
+                }
+            }
         }
 
         /** Runs the login route and returns the state, nonce and binding cookie it issued. */
@@ -457,6 +677,11 @@ class AxiamOidcLoginBindingTest {
         }
 
         MockHttpServletResponse dispatch(String method, String uri, Cookie cookie) throws Exception {
+            return dispatchOn(routes, method, uri, cookie);
+        }
+
+        MockHttpServletResponse dispatchOn(RouterFunction<ServerResponse> routes, String method, String uri,
+                Cookie cookie) throws Exception {
             String path = uri.contains("?") ? uri.substring(0, uri.indexOf('?')) : uri;
             MockHttpServletRequest request = new MockHttpServletRequest(method, path);
             if (uri.contains("?")) {

@@ -8,9 +8,9 @@
  * constructed per {@code AxiamClient} and shared by every transport (D-07's
  * "one guard" requirement).
  *
- * <p>{@link io.axiam.sdk.internal.JwksVerifier} is the nimbus
- * {@code RemoteJWKSet}-backed, EdDSA-pinned local JWT verifier (D-19) with
- * the mandatory cross-tenant claim-check helper.
+ * <p>{@link io.axiam.sdk.internal.JwksVerifier} is the
+ * EdDSA-pinned local JWT verifier (D-19), with a self-managed JWKS cache (TTL, one fetch per
+ * window, bounded stale-if-error), and the mandatory cross-tenant claim-check helper.
  *
  * <p>{@link io.axiam.sdk.internal.Retry} is the hand-rolled bounded
  * exponential-backoff-with-jitter helper for idempotent operations only

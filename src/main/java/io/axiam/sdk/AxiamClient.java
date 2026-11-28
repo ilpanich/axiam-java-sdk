@@ -207,6 +207,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     private final OkHttpClient httpClient;
     private final RefreshGuard refreshGuard;
     private final JwksVerifier jwksVerifier;
+    /** The §6.1 client identity, kept only to hand to a same-origin JWKS fetch. */
+    private final byte @Nullable [] clientCertPem;
+    private final byte @Nullable [] clientKeyPem;
     private final SessionState session;
 
     /**
@@ -295,7 +298,63 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * starts refusing calls), but leaves the shared transport running for every other handle.
      */
     private final boolean isPrimaryHandle;
-    private final SingleFlight<OidcTokenSet> oidcRefreshSingleFlight = new SingleFlight<>();
+    /**
+     * CONTRACT.md &sect;9: the {@code oidc_refresh} single-flight, keyed PER refresh token and effective
+     * tenant — the key is a SHA-256 digest, never the raw token. Each flight owns its outcome holder and
+     * vacates its key once published, so the map does not grow. Built by the primary handle and shared by
+     * every {@link #actingTenant(UUID)}/{@link #clearActingTenant()} handle over the same session, so the same
+     * token and resolved tenant from two handles at once is one flight and one wire call.
+     */
+    private final SingleFlight<OidcTokenSet> oidcRefreshFlights;
+
+    /**
+     * Runs the leader's wire call for {@link #oidcRefreshAsync(Sensitive)}. Async callers join on their
+     * own thread and get a future; only a flight's leader takes a thread here, and none ever blocks on
+     * another flight, so distinct tokens are never starved by a burst of the same one. Shared with the
+     * rebound handles like {@link #httpClient}, and shut down only when the primary handle closes.
+     */
+    private final java.util.concurrent.ExecutorService oidcRefreshExecutor;
+
+    private static java.util.concurrent.ExecutorService newOidcRefreshExecutor() {
+        return java.util.concurrent.Executors.newCachedThreadPool(runnable -> {
+            Thread thread = new Thread(runnable, "axiam-oidc-refresh");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    /** Number of live {@code oidc_refresh} flights; test seam. */
+    int oidcRefreshSlotCount() {
+        return oidcRefreshFlights.size();
+    }
+
+    /** Callers that have claimed a live flight (leaders and joiners); test seam. */
+    int oidcRefreshUsers() {
+        return oidcRefreshFlights.callers();
+    }
+
+    /** The (digest) keys of the live flights; test seam. */
+    java.util.Set<String> oidcRefreshSlotKeys() {
+        return oidcRefreshFlights.keys();
+    }
+
+    /** The {@code oidc_refresh} single-flight itself, for its publish/vacate hooks; test seam. */
+    SingleFlight<OidcTokenSet> oidcRefreshFlight() {
+        return oidcRefreshFlights;
+    }
+
+    /** SHA-256 over the canonical (lower-case hyphenated) tenant, a separator that cannot occur in it, and the token. */
+    private static String oidcRefreshKey(UUID tenant, Sensitive refreshToken) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            md.update(tenant.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            md.update((byte) 0);
+            md.update(refreshToken.expose().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(md.digest());
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
 
     /**
      * CONTRACT.md &sect;5.2 rule 1 (contract 1.51) — the tenant THIS handle acts on,
@@ -700,7 +759,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
 
         CookieManager cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
         this.refreshGuard = new RefreshGuard();
-        this.jwksVerifier = new JwksVerifier(this.baseUrl);
+        this.oidcRefreshFlights = new SingleFlight<>();
+        this.oidcRefreshExecutor = newOidcRefreshExecutor();
         this.session = new SessionState(cookieManager, this.baseUrl, this.tenantId, b.orgSlug, b.orgId);
 
         X509TrustManager trustManager = buildTrustManager(b.customCaPem);
@@ -711,6 +771,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         // half-configured pair, so a non-null keyManagers is the identity.
         this.presentsClientCertificate = keyManagers != null;
         SSLContext sslContext = buildStrictSslContext(trustManager, keyManagers);
+        // The JWKS fetch behind local verification trusts what REST and gRPC trust (§6), customCa included.
+        this.clientCertPem = b.clientCertPem;
+        this.clientKeyPem = b.clientKeyPem;
+        this.jwksVerifier = new JwksVerifier(this.baseUrl, JwksVerifier.LocalVerificationPolicy.defaults(), null,
+                b.customCaPem, b.clientCertPem, b.clientKeyPem);
 
         OkHttpClient.Builder clientBuilder = b.overrideHttpClient != null
                 ? b.overrideHttpClient.newBuilder()
@@ -771,7 +836,11 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         this.pollHttpClient = other.pollHttpClient;
         this.oauth2HttpClient = other.oauth2HttpClient;
         this.refreshGuard = other.refreshGuard;
+        this.oidcRefreshFlights = other.oidcRefreshFlights; // one flight map per session (§9)
+        this.oidcRefreshExecutor = other.oidcRefreshExecutor;
         this.jwksVerifier = other.jwksVerifier;
+        this.clientCertPem = other.clientCertPem;
+        this.clientKeyPem = other.clientKeyPem;
         this.session = other.session;
         this.principalTenantId = other.principalTenantId;
         this.oidcClientId = other.oidcClientId;
@@ -860,6 +929,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        // Every handle owns its own lazily-built OIDC jwks_uri verifiers; each holds an HTTP client with a thread.
+        oidcJwksVerifiers.values().forEach(JwksVerifier::close);
         if (!isPrimaryHandle) {
             // A rebound handle (actingTenant(UUID)/clearActingTenant()) does not own
             // httpClient — every other handle over this same session is still using
@@ -868,6 +939,8 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
             return;
         }
         decisionMemo.clear();
+        jwksVerifier.close(); // shared with rebound handles, so only the primary handle closes it
+        oidcRefreshExecutor.shutdown(); // likewise shared; a running wire call finishes and publishes to its callers
         httpClient.dispatcher().executorService().shutdown();
         httpClient.connectionPool().evictAll();
         okhttp3.Cache cache = httpClient.cache();
@@ -2525,13 +2598,16 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     @Override
     public OidcTokenSet oidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
             @Nullable OidcConfiguration configuration) {
-        // §9's single guard also serializes the cookie-session refresh() path
-        // (RefreshGuard.runExclusive shares that SAME lock), so an oidcRefresh
-        // and a concurrent cookie-session refresh can never interleave; the
-        // SingleFlight coalesces concurrent oidcRefresh callers into one wire
-        // call sharing its result (port-brief-addendum item 14).
-        return oidcRefreshSingleFlight.run(() ->
-                refreshGuard.runExclusive(() -> doOidcRefresh(refreshToken, scope, tenantId, configuration)));
+        ensureOpen(); // §18.1 rule 4: use after close is an error, before any slot or request
+        // §12.3 rule 4: always tenant-scoped. Resolve ONCE, before any slot, discovery or wire call; the same
+        // canonical UUID is the key's tenant AND the request's tenant_id (doOidcRefresh never re-resolves).
+        UUID tenant = resolveOauth2TenantId(tenantId);
+        String key = oidcRefreshKey(tenant, refreshToken);
+
+        // §9 rules 2/6a-6d apply per key; other keys run independently and concurrently, and no lock shared
+        // with the §1 cookie-session refresh is held across the wire call (rule 7). The leader runs the wire
+        // call on this thread; a joiner waits on this thread for its flight's own outcome.
+        return oidcRefreshFlights.run(key, () -> doOidcRefresh(refreshToken, scope, tenant, configuration));
     }
 
     private OidcTokenSet doOidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
@@ -2574,7 +2650,29 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return a future resolving to the refreshed token set
      */
     public CompletableFuture<OidcTokenSet> oidcRefreshAsync(Sensitive refreshToken) {
-        return CompletableFuture.supplyAsync(() -> oidcRefresh(refreshToken));
+        // Resolve the tenant and key, and join or start the flight, on the CALLER's thread: a joiner gets a
+        // future of its flight's outcome and never parks a pool thread. Only the leader's wire call takes a
+        // thread, from this handle's own executor rather than the common pool.
+        UUID tenant;
+        String key;
+        try {
+            ensureOpen(); // this handle may be closed while the shared executor is not (a closed rebound handle)
+            tenant = resolveOauth2TenantId(null);
+            key = oidcRefreshKey(tenant, refreshToken);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+        return oidcRefreshFlights.submit(key, () -> doOidcRefresh(refreshToken, null, tenant, null),
+                this::executeOidcRefresh);
+    }
+
+    /** Hands a leader's wire call to {@link #oidcRefreshExecutor}; after {@link #close()} that is a closed-client error. */
+    private void executeOidcRefresh(Runnable wireCall) {
+        try {
+            oidcRefreshExecutor.execute(wireCall);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            throw new NetworkError("client is closed: this AxiamClient was shut down with close()");
+        }
     }
 
     @Override
@@ -4387,7 +4485,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
     /** Lazily builds (and reuses) the JWKS verifier for a {@code jwks_uri} (§12.3 rule 6) —
      * one verifier per URI, never process-global, and never re-derived from {@code baseUrl}. */
     private JwksVerifier oidcJwksVerifierFor(String jwksUri) {
-        return oidcJwksVerifiers.computeIfAbsent(jwksUri, JwksVerifier::forJwksUri);
+        return oidcJwksVerifiers.computeIfAbsent(jwksUri, uri -> JwksVerifier.forJwksUri(uri, baseUrl, customCaPem, clientCertPem, clientKeyPem));
     }
 
     // ------------------------------------------------------------------
@@ -6388,18 +6486,15 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
                 return systemTm;
             }
 
-            KeyStore customStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            customStore.load(null, null);
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate customCert = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(customCaPem));
-            customStore.setCertificateEntry("custom-ca", customCert);
+            // Every certificate of the bundle, via the one parser REST and JWKS share.
+            KeyStore customStore = io.axiam.sdk.internal.TlsSupport.customCaStore(customCaPem);
 
             TrustManagerFactory customTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             customTmf.init(customStore);
             X509TrustManager customTm = firstX509(customTmf.getTrustManagers());
 
             return new CompositeX509TrustManager(systemTm, customTm);
-        } catch (GeneralSecurityException | IOException e) {
+        } catch (GeneralSecurityException e) {
             // §6: a non-PEM/invalid custom CA MUST return a clear error at
             // construction time.
             throw new NetworkError("invalid custom CA PEM: " + e.getMessage(), e);

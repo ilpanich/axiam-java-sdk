@@ -5,7 +5,6 @@ import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.KeySourceException;
 import com.nimbusds.jose.crypto.Ed25519Verifier;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.JWK;
@@ -14,10 +13,6 @@ import com.nimbusds.jose.jwk.JWKSelector;
 import com.nimbusds.jose.jwk.KeyType;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.OctetKeyPair;
-import com.nimbusds.jose.jwk.source.DefaultJWKSetCache;
-import com.nimbusds.jose.jwk.source.JWKSetCache;
-import com.nimbusds.jose.jwk.source.RemoteJWKSet;
-import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -42,18 +37,19 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
+
+import javax.net.ssl.SSLContext;
 
 /**
  * Local JWT verification against the organization-wide EdDSA JWKS (D-19,
  * CONTRACT.md &sect;9's local-verify companion). Sources keys from
- * {@code {baseUrl}/oauth2/jwks} via nimbus's {@link RemoteJWKSet}, cached
- * with {@link DefaultJWKSetCache} (TTL 300s) and rotated on an unknown
- * {@code kid} (built into {@link RemoteJWKSet#get}); the unknown-{@code kid}
- * refetch is bounded by this class's own per-verifier 60s cooldown
- * ({@link #UNKNOWN_KID_REFETCH_COOLDOWN}), because the library's cache does not
- * bound it.
+ * {@code {baseUrl}/oauth2/jwks}, cached for {@link #JWKS_TTL} (300s) and
+ * refetched on an unknown {@code kid}. Every network fetch, for an unknown
+ * {@code kid}, a TTL refresh or a retry after a failure, is bounded by this class's
+ * own per-verifier 60s window ({@link #UNKNOWN_KID_REFETCH_COOLDOWN}); only the
+ * fetch is throttled, never the verification of a {@code kid} the last good set
+ * holds, which is used even when a refresh has failed (stale-if-error) but only while it is at
+ * most {@link #JWKS_TTL} + {@link #JWKS_MAX_STALE} (600 s) old; past that the verifier fails closed.
  *
  * <p><strong>Implementation note (Assumption A5 resolved against the
  * installed nimbus-jose-jwt 10.7 sources):</strong> the "obvious" nimbus
@@ -72,12 +68,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * found")} even though the JWKS fetch and key match succeeded. Separately,
  * {@code DefaultJWSVerifierFactory.createJWSVerifier} has no EdDSA/OKP
  * branch at all (only HMAC/RSA/EC) even if a converted key did exist. This
- * class therefore builds the key lookup directly against the same
- * {@link RemoteJWKSet} + {@link DefaultJWKSetCache} (preserving D-19's
- * "Don't Hand-Roll: use RemoteJWKSet+DefaultJWKSetCache" mandate for
- * fetch/cache/rotation) and constructs {@link Ed25519Verifier} directly
- * from the matched {@link OctetKeyPair}, which nimbus DOES support
- * natively.
+ * class therefore builds the key lookup directly over a
+ * {@link com.nimbusds.jose.jwk.JWKSet} it fetches and caches itself (so the
+ * fetch window and stale-if-error are exact) and constructs
+ * {@link Ed25519Verifier} directly from the matched {@link OctetKeyPair},
+ * which nimbus DOES support natively.
  *
  * <p><strong>Algorithm pinning (T-20-06):</strong> the header {@code alg}
  * is checked against an explicit {@code EdDSA} allowlist BEFORE any JWKS
@@ -126,7 +121,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * {@link #assertTenant(JWTClaimsSet, String)} (and every other &sect;10.1
  * rule) for itself.
  */
-public final class JwksVerifier {
+public final class JwksVerifier implements AutoCloseable {
 
     /**
      * CONTRACT.md &sect;10.1 rule 7 &mdash; the RECOMMENDED clock-skew
@@ -162,7 +157,31 @@ public final class JwksVerifier {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final RemoteJWKSet<SecurityContext> jwkSource;
+    private static final com.fasterxml.jackson.databind.ObjectMapper KEYS_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private final URL jwksUrl;
+
+    /** A JWKS and the monotonic time it was loaded, published together so a reader never pairs them wrongly. */
+    private record Loaded(com.nimbusds.jose.jwk.JWKSet set, long atNanos) {
+    }
+
+    /** The last JWKS fetched successfully, or {@code null} if none has been (never loaded). */
+    private volatile @Nullable Loaded loaded;
+
+    /**
+     * How long {@link #loaded} is served without a refresh attempt. Past it, a refresh is attempted
+     * (throttled by {@link #UNKNOWN_KID_REFETCH_COOLDOWN}); if that fails the last good set is kept
+     * and still used (stale-if-error), so a transient JWKS failure never refuses every token.
+     */
+    static final Duration JWKS_TTL = Duration.ofSeconds(300);
+
+    /**
+     * How far past {@link #JWKS_TTL} a set that could not be refreshed is still trusted (R2-1). Beyond
+     * {@code JWKS_TTL + JWKS_MAX_STALE} the verifier fails closed, so a key removed upstream (a
+     * rotated-out compromised key) stops verifying within 600 s even while the endpoint is unreachable.
+     */
+    static final Duration JWKS_MAX_STALE = Duration.ofSeconds(300);
 
     private final LocalVerificationPolicy policy;
 
@@ -178,25 +197,27 @@ public final class JwksVerifier {
 
     /**
      * Serializes the forced-refetch path so a concurrent burst of
-     * unknown-{@code kid} verifications collapses to exactly one Nimbus
-     * refetch (D-08/D-09) &mdash; we do NOT rely on {@link RemoteJWKSet}'s
-     * own thread-safety for this guarantee (Assumption A3). The lock wraps
+     * unknown-{@code kid} verifications collapses to at most one fetch
+     * per window (D-08/D-09). The lock wraps
      * only the fetch/refetch decision below; the EdDSA signature
      * verification in {@link #verifySignatureOnlyUnchecked(String)} is unaffected.
      */
-    private final ReentrantLock refreshLock = new ReentrantLock();
+    private final Object stateLock = new Object();
+
+    /** The fetch now in flight, or {@code null}; guarded by {@link #stateLock}. */
+    private java.util.concurrent.@Nullable CompletableFuture<Void> inFlight;
 
     /**
      * CONTRACT.md &sect;12.4 rule 2: the per-verifier window within which an unknown {@code kid}
-     * causes no further JWKS fetch. A named constant, not left to {@link DefaultJWKSetCache}.
+     * causes no further JWKS fetch. A named constant.
      */
     static final Duration UNKNOWN_KID_REFETCH_COOLDOWN = Duration.ofSeconds(60);
 
     /** Monotonic clock for the cooldown; replaceable by tests in this package. */
     private volatile java.util.function.LongSupplier clock = System::nanoTime;
 
-    /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #refreshLock}. */
-    private long lastFetchNanos;
+    /** Monotonic time of the last JWKS fetch this verifier started; guarded by {@link #stateLock}. */
+    private volatile long lastFetchNanos;
 
     /** Test seam: replaces the monotonic clock behind the unknown-kid cooldown. */
     void setClockForTesting(java.util.function.LongSupplier nanoClock) {
@@ -210,7 +231,7 @@ public final class JwksVerifier {
      *                the JWKS URL is derived as {@code {baseUrl}/oauth2/jwks}
      */
     public JwksVerifier(String baseUrl) {
-        this(deriveJwksUrl(baseUrl), LocalVerificationPolicy.defaults(), null);
+        this(deriveJwksUrl(baseUrl), LocalVerificationPolicy.defaults(), null, null);
     }
 
     /**
@@ -226,7 +247,7 @@ public final class JwksVerifier {
      *                issuer check, no audience check, RECOMMENDED skew"
      */
     public JwksVerifier(String baseUrl, LocalVerificationPolicy policy) {
-        this(deriveJwksUrl(baseUrl), policy, null);
+        this(deriveJwksUrl(baseUrl), policy, null, null);
     }
 
     /**
@@ -244,7 +265,25 @@ public final class JwksVerifier {
      * @param revocationFeed the feed to consult, or {@code null} for none
      */
     public JwksVerifier(String baseUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
-        this(deriveJwksUrl(baseUrl), policy, revocationFeed);
+        this(deriveJwksUrl(baseUrl), policy, revocationFeed, null);
+    }
+
+    /**
+     * As {@link #JwksVerifier(String, LocalVerificationPolicy, RevocationFeed)}, fetching the JWKS with the client's
+     * TLS inputs (CONTRACT.md &sect;6): {@code customCaPem} is trusted in addition to the system roots, and the
+     * &sect;6.1 client identity, when given, is presented, exactly as REST and gRPC do. Certificate and hostname
+     * verification stay on; there is no input that relaxes them.
+     *
+     * @param baseUrl        the AXIAM server base URL (trailing slash tolerated)
+     * @param policy         the &sect;10.1 rule 5&ndash;7 policy
+     * @param revocationFeed the feed to consult, or {@code null} for none
+     * @param customCaPem    PEM CA bundle to trust in addition to the system roots, or {@code null}
+     * @param clientCertPem  PEM client certificate chain (all-or-nothing with the key), or {@code null}
+     * @param clientKeyPem   PEM PKCS#8 client key, or {@code null}
+     */
+    public JwksVerifier(String baseUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed,
+            byte @Nullable [] customCaPem, byte @Nullable [] clientCertPem, byte @Nullable [] clientKeyPem) {
+        this(deriveJwksUrl(baseUrl), policy, revocationFeed, fetchTls(customCaPem, clientCertPem, clientKeyPem));
     }
 
     /**
@@ -316,10 +355,57 @@ public final class JwksVerifier {
      */
     public static JwksVerifier forJwksUri(String jwksUri) {
         try {
-            return new JwksVerifier(URI.create(jwksUri).toURL(), LocalVerificationPolicy.defaults(), null);
+            return new JwksVerifier(URI.create(jwksUri).toURL(), LocalVerificationPolicy.defaults(), null, null);
         } catch (MalformedURLException | IllegalArgumentException e) {
             throw new AuthError("invalid jwks_uri in discovery document: " + jwksUri);
         }
+    }
+
+    /**
+     * As {@link #forJwksUri(String)}, fetching with the client's TLS inputs. {@code customCaPem} always applies.
+     * The &sect;6.1 client identity is presented only when {@code jwksUri} has the same origin (scheme, host,
+     * port) as {@code baseUrl}: &sect;12.3 rule 6 lets {@code jwks_uri} name another host, and a certificate
+     * issued for AXIAM is not something to hand to it.
+     *
+     * @param jwksUri       the JWKS document URI, as advertised by the discovery document's {@code jwks_uri} field
+     * @param baseUrl       the configured AXIAM server base URL
+     * @param customCaPem   PEM CA bundle to trust in addition to the system roots, or {@code null}
+     * @param clientCertPem PEM client certificate chain, or {@code null}
+     * @param clientKeyPem  PEM PKCS#8 client key, or {@code null}
+     * @return a new verifier sourcing keys from {@code jwksUri}
+     * @throws AuthError if {@code jwksUri} is not a valid URL
+     */
+    public static JwksVerifier forJwksUri(String jwksUri, String baseUrl, byte @Nullable [] customCaPem,
+            byte @Nullable [] clientCertPem, byte @Nullable [] clientKeyPem) {
+        try {
+            URL url = URI.create(jwksUri).toURL();
+            boolean sameOrigin = sameOrigin(url, URI.create(baseUrl).toURL());
+            SSLContext tls = fetchTls(customCaPem, sameOrigin ? clientCertPem : null, sameOrigin ? clientKeyPem : null);
+            return new JwksVerifier(url, LocalVerificationPolicy.defaults(), null, tls);
+        } catch (MalformedURLException | IllegalArgumentException e) {
+            throw new AuthError("invalid jwks_uri in discovery document: " + jwksUri);
+        }
+    }
+
+    /** The TLS context of a fetch, or {@code null} (JVM default) when the client configures neither CA nor identity. */
+    private static @Nullable SSLContext fetchTls(byte @Nullable [] customCaPem, byte @Nullable [] clientCertPem,
+            byte @Nullable [] clientKeyPem) {
+        boolean noCa = customCaPem == null || customCaPem.length == 0;
+        if (noCa && clientCertPem == null && clientKeyPem == null) {
+            return null;
+        }
+        return TlsSupport.sslContext(TlsSupport.trustManager(customCaPem), TlsSupport.keyManagers(clientCertPem, clientKeyPem));
+    }
+
+    /** Same scheme, host (case-insensitive) and effective port. */
+    static boolean sameOrigin(URL a, URL b) {
+        return a.getProtocol().equalsIgnoreCase(b.getProtocol())
+                && a.getHost().equalsIgnoreCase(b.getHost())
+                && effectivePort(a) == effectivePort(b);
+    }
+
+    private static int effectivePort(URL u) {
+        return u.getPort() != -1 ? u.getPort() : u.getDefaultPort();
     }
 
     /**
@@ -337,15 +423,16 @@ public final class JwksVerifier {
         return policy;
     }
 
-    private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed) {
+    private JwksVerifier(URL jwksUrl, LocalVerificationPolicy policy, @Nullable RevocationFeed revocationFeed,
+            @Nullable SSLContext sslContext) {
+        this.sslContext = sslContext;
         this.policy = policy;
         this.revocationFeed = revocationFeed;
         // TTL 300s, forced-refetch cooldown 60s — matches the Rust
         // (JWKS_CACHE_TTL=300s / FORCED_REFETCH_MIN_INTERVAL=60s), Go
         // (jwx minInterval=60s / maxInterval=300s), and Python
         // (PyJWKClient lifespan=300) reference SDKs' proven defaults.
-        JWKSetCache cache = new DefaultJWKSetCache(300, 60, TimeUnit.SECONDS);
-        this.jwkSource = new RemoteJWKSet<>(jwksUrl, null, cache);
+        this.jwksUrl = jwksUrl;
     }
 
     private static URL deriveJwksUrl(String baseUrl) {
@@ -1041,21 +1128,15 @@ public final class JwksVerifier {
     }
 
     /**
-     * Looks up the EdDSA/Ed25519 signing key matching {@code header}'s
-     * {@code kid} in the cached JWKS, sourced from {@link #jwkSource}
-     * ({@link RemoteJWKSet}, which itself forces exactly one refetch +
-     * retry when the sought {@code kid} is not found in the cached set —
-     * key-rotation support carried by the library, not hand-rolled).
+     * Looks up the EdDSA/Ed25519 signing key matching {@code header}'s {@code kid} in the loaded
+     * JWKS.
      *
-     * <p>D-08/D-09: a concurrent burst of unknown-{@code kid} lookups must
-     * collapse to exactly one Nimbus refetch. The fast path below matches
-     * against {@link RemoteJWKSet#getCachedJWKSet()} — which never triggers
-     * a network call — before ever acquiring {@link #refreshLock}. Only on
-     * a cache miss is the lock acquired; the cache is re-checked once more
-     * under the lock (another thread may have just refreshed it while this
-     * one waited), and {@link RemoteJWKSet#get} — the call that may
-     * perform the actual network refetch — is invoked only if the key is
-     * still missing.
+     * <p>D-08/D-09, L-1: the fast path matches against the loaded set while it is within
+     * {@link #JWKS_TTL}, without the lock and without the network. Otherwise (unknown {@code kid},
+     * expired set, nothing loaded) the lock is taken, the set re-checked, and at most one fetch is
+     * made per {@link #UNKNOWN_KID_REFETCH_COOLDOWN}, failures included. When the fetch is refused
+     * or fails, the last good set (however old) still answers for the kids it holds; only a
+     * verifier that has never loaded a set has nothing to verify against.
      */
     private OctetKeyPair selectKey(JWSHeader header) {
         // CONTRACT.md §10.1 rule 12 (contract 1.68; N14): the key is selected by the
@@ -1076,57 +1157,319 @@ public final class JwksVerifier {
                 .build();
         JWKSelector selector = new JWKSelector(matcher);
 
-        OctetKeyPair fastKey = selectFromCache(selector);
-        if (fastKey != null) {
-            return fastKey;
+        // §12.4 rule 2 and the fetch-concurrency rules (contract 1.69; D-10). No lock is held across network
+        // I/O and the fetch runs detached from the caller on its own deadline:
+        //  - a set within the TTL answers a kid it holds, with no fetch;
+        //  - a set past the TTL but within TTL + JWKS_MAX_STALE (the held set is "usable") answers a kid it holds
+        //    too, and never waits: if a refresh is due it is started in the background and, whether it succeeds or
+        //    not, this verification is answered from the held set;
+        //  - only a caller whose kid the usable set does not hold (an unknown kid, a cold cache, a set past the
+        //    bound) waits for the single in-flight fetch, bounded by FETCH_DEADLINE.
+        // At most ONE fetch per UNKNOWN_KID_REFETCH_COOLDOWN window, whether the cache is warm, expired or cold,
+        // and EVERY failed attempt counts (the window is stamped when the attempt starts).
+        long now = clock.getAsLong();
+        com.nimbusds.jose.jwk.JWKSet usable = usableSet(now, true);
+        OctetKeyPair held = usable == null ? null : firstOctetKeyPair(selector.select(usable));
+        if (held != null) {
+            if (usableSet(now, false) == null) {
+                startFetchIfDue(now); // stale: refresh in the background; this verification does not wait
+            }
+            return held;
         }
 
-        refreshLock.lock();
-        try {
-            OctetKeyPair recheckKey = selectFromCache(selector);
-            if (recheckKey != null) {
-                return recheckKey;
-            }
-
-            // CONTRACT.md §12.4 rule 2 (C5): at most ONE refetch per cooldown window, however
-            // many tokens present an unknown kid. nimbus's DefaultJWKSetCache refetches on
-            // every kid miss (its cooldown does not bound this path), so the window is kept
-            // here. A cold or expired cache is a plain load, but it starts the window too.
-            long nowNanos = clock.getAsLong();
-            boolean cold = jwkSource.getCachedJWKSet() == null;
-            if (!cold && lastFetchNanos != 0L && nowNanos - lastFetchNanos < UNKNOWN_KID_REFETCH_COOLDOWN.toNanos()) {
-                throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
-            }
-            lastFetchNanos = nowNanos == 0L ? 1L : nowNanos;
-
-            List<JWK> matches;
+        java.util.concurrent.CompletableFuture<Void> fetch = startFetchIfDue(now);
+        boolean throttled = fetch == null;
+        if (fetch != null) {
             try {
-                matches = jwkSource.get(selector, null);
-            } catch (KeySourceException e) {
-                throw new AuthError("JWKS fetch failed: " + e.getMessage());
+                fetch.get(FETCH_DEADLINE.toMillis() + 500, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+                // The caller's own cancellation: nothing is recorded; the fetch (not ours to cancel) carries on.
+                Thread.currentThread().interrupt();
+                throw new AuthError("JWKS verification interrupted");
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                // The fetch itself records its own failure; fall through to whatever is held.
             }
+        }
 
-            OctetKeyPair key = firstOctetKeyPair(matches);
-            if (key == null) {
-                throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
+        // The set is trusted only within TTL + the stale bound (R2-1); past that, fail closed.
+        com.nimbusds.jose.jwk.JWKSet set = usableSet(clock.getAsLong(), true);
+        if (set == null) {
+            // Never loaded, or too old to trust: nothing to verify against.
+            throw new AuthError(throttled
+                    ? "JWKS unavailable: the last fetch failed and the next attempt is not yet due "
+                            + "(CONTRACT.md §12.4 rule 2)"
+                    : "JWKS fetch failed");
+        }
+        OctetKeyPair key = firstOctetKeyPair(selector.select(set));
+        if (key == null) {
+            throw new AuthError("no matching EdDSA key found in JWKS (kid=" + header.getKeyID() + ")");
+        }
+        return key;
+    }
+
+    /** Test seam: blocks until the fetch in flight, if any, has finished and recorded its outcome. */
+    void awaitInFlightForTesting() {
+        java.util.concurrent.CompletableFuture<Void> f;
+        synchronized (stateLock) {
+            f = inFlight;
+        }
+        if (f != null) {
+            try {
+                f.get(FETCH_DEADLINE.toMillis() + 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Exception ignored) {
+                // the fetch records its own outcome
             }
-            return key;
-        } finally {
-            refreshLock.unlock();
+        }
+    }
+
+    /** Total deadline of one JWKS fetch, connect to last byte; the fetch is abandoned (cancelled) past it. */
+    static final Duration FETCH_DEADLINE = Duration.ofSeconds(4);
+
+    private static final int MAX_JWKS_BYTES = 50 * 1024;
+
+    /**
+     * This verifier's own fetch client: built per instance so the TLS context it was given applies, and so the
+     * system proxy selector and authenticator are read at construction, not frozen at class load.
+     */
+    private final @Nullable SSLContext sslContext;
+    private final Object clientLock = new Object();
+    private java.net.http.@Nullable HttpClient fetchClient; // guarded by clientLock; built on first fetch
+    private boolean closed; // guarded by clientLock
+
+    /**
+     * The fetch client, built on first use: an {@code HttpClient} starts a selector thread, so a verifier that never
+     * fetches must not own one. Only the build is under the lock, never any I/O.
+     */
+    private java.net.http.HttpClient fetchClient() {
+        synchronized (clientLock) {
+            if (closed) {
+                throw new IllegalStateException("JwksVerifier is closed");
+            }
+            if (fetchClient == null) {
+                fetchClient = newFetchClient(sslContext);
+            }
+            return fetchClient;
+        }
+    }
+
+    /** Test seam: the lazily built fetch client, or {@code null} when none has been built (or after close). */
+    java.net.http.@Nullable HttpClient fetchClientForTesting() {
+        synchronized (clientLock) {
+            return fetchClient;
         }
     }
 
     /**
-     * Matches {@code selector} against whatever is currently in
-     * {@link RemoteJWKSet#getCachedJWKSet()} WITHOUT triggering a network
-     * fetch (returns {@code null} on a cold/empty cache or no match).
+     * Releases the fetch client and its selector thread, abandoning any exchange in flight. Idempotent. After this
+     * every refresh fails (the verifier fails closed once its held keys are stale); it never reopens.
      */
-    private OctetKeyPair selectFromCache(JWKSelector selector) {
-        com.nimbusds.jose.jwk.JWKSet cached = jwkSource.getCachedJWKSet();
-        if (cached == null) {
+    @Override
+    public void close() {
+        java.net.http.HttpClient client;
+        synchronized (clientLock) {
+            closed = true;
+            client = fetchClient;
+            fetchClient = null;
+        }
+        if (client != null) {
+            client.shutdownNow();
+        }
+    }
+
+    private static java.net.http.HttpClient newFetchClient(@Nullable SSLContext sslContext) {
+        java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
+                .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(2))
+                .followRedirects(java.net.http.HttpClient.Redirect.NEVER);
+        if (sslContext != null) {
+            builder.sslContext(sslContext); // adds trust anchors / identity; the client's hostname check stays on
+        }
+        if (java.net.ProxySelector.getDefault() != null) {
+            builder.proxy(java.net.ProxySelector.getDefault()); // system proxy settings keep applying
+        }
+        if (java.net.Authenticator.getDefault() != null) {
+            builder.authenticator(java.net.Authenticator.getDefault()); // so do authenticating proxies
+        }
+        return builder.build();
+    }
+
+    /**
+     * Reads at most {@link #MAX_JWKS_BYTES} of a {@code 200} body, counting BYTES; a body past the cap, or one
+     * whose declared {@code Content-Length} is above it, is refused by cancelling the subscription, which closes
+     * the connection, so a huge response is neither buffered nor fully received. Any other status is refused
+     * without reading the body. The body future completes with {@code null} for a refused response.
+     */
+    private static java.net.http.HttpResponse.BodyHandler<byte[]> boundedBody() {
+        return info -> {
+            boolean refuse = info.statusCode() != 200
+                    || info.headers().firstValueAsLong("Content-Length").orElse(0L) > MAX_JWKS_BYTES;
+            return new java.net.http.HttpResponse.BodySubscriber<byte[]>() {
+                private final java.util.concurrent.CompletableFuture<byte[]> result =
+                        new java.util.concurrent.CompletableFuture<>();
+                private final java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+                private java.util.concurrent.Flow.Subscription subscription;
+                private long count;
+
+                @Override
+                public void onSubscribe(java.util.concurrent.Flow.Subscription s) {
+                    subscription = s;
+                    if (refuse) {
+                        s.cancel();
+                        result.complete(null);
+                    } else {
+                        s.request(Long.MAX_VALUE);
+                    }
+                }
+
+                @Override
+                public void onNext(List<java.nio.ByteBuffer> items) {
+                    for (java.nio.ByteBuffer item : items) {
+                        count += item.remaining();
+                        if (count > MAX_JWKS_BYTES) {
+                            subscription.cancel(); // closes the connection
+                            result.complete(null);
+                            return;
+                        }
+                        byte[] bytes = new byte[item.remaining()];
+                        item.get(bytes);
+                        buffer.write(bytes, 0, bytes.length);
+                    }
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    result.completeExceptionally(t);
+                }
+
+                @Override
+                public void onComplete() {
+                    result.complete(buffer.toByteArray());
+                }
+
+                @Override
+                public java.util.concurrent.CompletionStage<byte[]> getBody() {
+                    return result;
+                }
+            };
+        };
+    }
+
+    /**
+     * Starts a fetch if the window allows one and none is in flight; returns the future of the fetch now in flight
+     * (started here or already running), or {@code null} when the window forbids a new one. Single-flight: the small
+     * state lock guards only the stamp and the future, never any I/O.
+     */
+    private java.util.concurrent.@Nullable CompletableFuture<Void> startFetchIfDue(long nowNanos) {
+        java.util.concurrent.CompletableFuture<Void> started;
+        synchronized (stateLock) {
+            if (inFlight != null) {
+                return inFlight;
+            }
+            if (!fetchDue(nowNanos)) {
+                return null;
+            }
+            lastFetchNanos = nowNanos == 0L ? 1L : nowNanos; // stamped at the start: a failure counts, however it ends
+            started = new java.util.concurrent.CompletableFuture<>();
+            inFlight = started;
+        }
+        java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<byte[]>> request = null;
+        try {
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(jwksUrl.toURI())
+                    .timeout(FETCH_DEADLINE).header("Accept", "application/json").GET().build();
+            request = fetchClient().sendAsync(req, boundedBody());
+            final java.util.concurrent.CompletableFuture<java.net.http.HttpResponse<byte[]>> sent = request;
+            // The timeout goes on a COPY: orTimeout completes the future it is applied to, and cancelling an
+            // already-completed future is a no-op, so the exchange would never be abandoned.
+            sent.copy().orTimeout(FETCH_DEADLINE.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .whenComplete((response, failure) -> {
+                        try {
+                            if (failure != null) {
+                                sent.cancel(true); // abandon a drip-fed or stalled exchange at the deadline
+                            } else {
+                                adopt(response, nowNanos);
+                            }
+                        } catch (RuntimeException ignored) {
+                            // a failed refresh: the held keys stay, the anchor does not move
+                        } finally {
+                            synchronized (stateLock) {
+                                inFlight = null;
+                            }
+                            started.complete(null);
+                        }
+                    });
+        } catch (RuntimeException | java.net.URISyntaxException e) {
+            synchronized (stateLock) {
+                inFlight = null;
+            }
+            started.complete(null);
+        }
+        return started;
+    }
+
+    /**
+     * Adopts a fetched JWKS. Only a {@code 200} is a successful fetch (no conditional request is sent, so no
+     * {@code 304}); the entries are read one by one: a JWKS "holding at least one key" has an entry that is a JWK
+     * object with a string {@code kty}, usable by this SDK or not (an unusable one is skipped). No such entry
+     * ({@code {"keys":[]}}, {@code {"keys":[{}]}}, {@code [0]}) is a FAILED refresh: the held keys stay and the
+     * anchor does not move.
+     */
+    private void adopt(java.net.http.HttpResponse<byte[]> response, long nowNanos) {
+        if (response.statusCode() != 200) {
+            return;
+        }
+        byte[] bytes = response.body(); // null: refused by the bounded handler (over the cap)
+        if (bytes == null || bytes.length > MAX_JWKS_BYTES) {
+            return;
+        }
+        String body = new String(bytes, StandardCharsets.UTF_8);
+        try {
+            JsonNode doc = KEYS_MAPPER.readTree(body);
+            JsonNode keys = doc == null ? null : doc.get("keys");
+            if (keys == null || !keys.isArray()) {
+                return;
+            }
+            List<JWK> usable = new java.util.ArrayList<>();
+            int wellFormed = 0;
+            for (JsonNode entry : keys) {
+                if (!entry.isObject() || !entry.path("kty").isTextual()) {
+                    continue;
+                }
+                wellFormed++;
+                try {
+                    usable.add(JWK.parse(entry.toString()));
+                } catch (ParseException | RuntimeException skipped) {
+                    // well-formed but not usable here: counts, is not kept
+                }
+            }
+            if (wellFormed > 0) {
+                loaded = new Loaded(new com.nimbusds.jose.jwk.JWKSet(usable), nowNanos);
+            }
+        } catch (IOException e) {
+            // not a JWKS document
+        }
+    }
+
+    /** Whether the window allows a JWKS fetch now (the first fetch of a verifier's life always does). */
+    private boolean fetchDue(long nowNanos) {
+        long last = lastFetchNanos;
+        // A clock that moved backwards (negative elapsed time) means a refresh is due, never fresh.
+        long elapsed = nowNanos - last;
+        return last == 0L || elapsed < 0 || elapsed >= UNKNOWN_KID_REFETCH_COOLDOWN.toNanos();
+    }
+
+    /**
+     * The loaded JWKS if it is within {@link #JWKS_TTL}; or, when {@code allowStale}, within
+     * {@code JWKS_TTL + }{@link #JWKS_MAX_STALE}; else {@code null}.
+     */
+    private com.nimbusds.jose.jwk.@Nullable JWKSet usableSet(long nowNanos, boolean allowStale) {
+        Loaded snapshot = loaded; // one read: the set and its load time cannot be paired from two loads
+        if (snapshot == null) {
             return null;
         }
-        return firstOctetKeyPair(selector.select(cached));
+        com.nimbusds.jose.jwk.JWKSet set = snapshot.set();
+        long age = nowNanos - snapshot.atNanos();
+        long limit = allowStale ? JWKS_TTL.toNanos() + JWKS_MAX_STALE.toNanos() : JWKS_TTL.toNanos();
+        return age >= 0 && age < limit ? set : null; // negative age: refresh due, never fresh
     }
 
     private static OctetKeyPair firstOctetKeyPair(List<JWK> jwks) {

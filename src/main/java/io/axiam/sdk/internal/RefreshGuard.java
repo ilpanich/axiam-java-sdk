@@ -1,7 +1,5 @@
 package io.axiam.sdk.internal;
 
-import io.axiam.sdk.errors.AuthError;
-
 import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
@@ -44,15 +42,8 @@ import java.util.function.Supplier;
  * window in which the slot references an <strong>already-settled</strong>
  * future whose network call has long returned.
  *
- * <p>Consequently the slot's occupancy alone does <strong>not</strong> mean
- * "a refresh is on the wire". Anything that needs to know whether a refresh
- * is genuinely live — i.e. {@link #runExclusive} — must ask
- * {@link CompletableFuture#isDone()} as well; see
- * {@link #isRefreshLive(CompletableFuture)}. Treating a settled-but-uncleared
- * future as "busy" is what previously let {@link #runExclusive} burn its whole
- * bounded attempt budget in a few microseconds on a guard that was in fact
- * free, and fail a perfectly valid {@code oidcRefresh} with a spurious
- * "guard busy" {@link AuthError}.
+ * <p>The {@code oidc_refresh} single-flight is not this guard: it is keyed per refresh token and tenant
+ * and never holds this guard's lock across its wire call (CONTRACT.md &sect;9 rule 7).
  */
 public final class RefreshGuard {
 
@@ -62,40 +53,13 @@ public final class RefreshGuard {
     // being coalesced. Populated for the duration of the wire call AND for
     // the brief bookkeeping window after the outcome has been published (see
     // the class Javadoc) — so a non-null value does NOT by itself mean a
-    // refresh is still on the wire; use isRefreshLive(..) for that.
+    // refresh is still on the wire.
     private final AtomicReference<CompletableFuture<TokenPair>> inFlight = new AtomicReference<>();
 
     private volatile @Nullable TokenPair current;
 
-    /** Effective {@link #runExclusive} attempt budget; see {@link #RUN_EXCLUSIVE_MAX_ATTEMPTS}. */
-    private final int runExclusiveMaxAttempts;
-
-    /**
-     * Visible-for-testing seam: run on the refreshing thread immediately after
-     * {@link #refreshIfNeeded} has published its outcome to waiters and while
-     * that thread holds no lock — i.e. exactly inside the "settled future
-     * still occupying the slot" window described in the class Javadoc. Lets a
-     * test pin that window open deterministically instead of racing for it.
-     * Never set in production (always {@code null}).
-     */
-    @Nullable volatile Runnable afterPublishHook;
-
     /** Creates a new, empty refresh guard (no cached token yet). */
     public RefreshGuard() {
-        this(RUN_EXCLUSIVE_MAX_ATTEMPTS);
-    }
-
-    /**
-     * Visible-for-testing constructor that overrides the {@link #runExclusive}
-     * attempt budget. {@code 0} means "never wait out even one live refresh",
-     * which is how the bounded-failure branch is reached deterministically in
-     * tests; production code always uses the {@link #RefreshGuard()} default of
-     * {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS}.
-     *
-     * @param runExclusiveMaxAttempts attempt budget for {@link #runExclusive}
-     */
-    RefreshGuard(int runExclusiveMaxAttempts) {
-        this.runExclusiveMaxAttempts = runExclusiveMaxAttempts;
     }
 
     /**
@@ -181,155 +145,12 @@ public final class RefreshGuard {
             } finally {
                 // Reached with the outcome published and the slot still
                 // occupied, on both the success and the failure path.
-                afterPublish();
                 inFlight.compareAndSet(future, null);
                 lock.lock(); // re-acquire so the outer finally's unlock() is balanced
             }
         } finally {
             lock.unlock();
         }
-    }
-
-    /** Bounded retry count for {@link #runExclusive} waiting out a busy guard
-     * (port-brief-addendum item 14: "retry the guard (bounded — TS uses 3 attempts)"). */
-    private static final int RUN_EXCLUSIVE_MAX_ATTEMPTS = 3;
-
-    /**
-     * Runs an arbitrary refresh-shaped operation mutually exclusive with
-     * {@link #refreshIfNeeded} and with any other concurrent
-     * {@code runExclusive} call — the CONTRACT.md &sect;12 requirement that
-     * {@code oidcRefresh} "runs the wire call inside the existing &sect;9
-     * guard" so a cookie-session refresh and an {@code oidcRefresh} can never
-     * interleave.
-     *
-     * <p>Because {@link #refreshIfNeeded} deliberately releases {@link #lock}
-     * for the duration of its own HTTP call (see this class's header
-     * Javadoc), a plain {@code lock.lock()} around {@code op} would only
-     * exclude the brief bookkeeping windows around that call, not the call
-     * itself. So this method first waits out any <em>live</em> refresh, then
-     * takes {@link #lock} and re-checks under it before running {@code op};
-     * holding {@link #lock} across {@code op} in turn blocks any NEW
-     * {@link #refreshIfNeeded} call from starting until {@code op} completes,
-     * since that method takes the lock first thing.
-     *
-     * <p><strong>"Live" means not yet settled.</strong> A refresh counts as
-     * live only while its shared future is incomplete — see
-     * {@link #isRefreshLive(CompletableFuture)} and the class Javadoc on why
-     * the {@link #inFlight} slot outlives the wire call. Once that future has
-     * settled, {@code doRefresh} has already returned, so running {@code op}
-     * cannot overlap it and there is nothing left to wait for; the residual
-     * bookkeeping is finished by the refreshing thread, which will simply
-     * block on {@link #lock} behind {@code op}.
-     *
-     * <p><strong>Termination and the bounded budget.</strong> Every loop
-     * iteration does exactly one of three things: run {@code op} and return,
-     * exhaust the budget and throw, or spend one attempt <em>blocking</em> on
-     * a genuinely live refresh (either found before taking the lock, or found
-     * under the lock as a lost race against a refresh that started in
-     * between). Nothing else consumes an attempt and nothing spins, so the
-     * loop performs at most {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS}+1 iterations
-     * and burns no CPU while waiting — CONTRACT.md §9 rule 5's "bounded
-     * (never unbounded) wait ... exhausting that bound MUST raise
-     * {@code AuthError}". Because attempts are only ever spent on live
-     * refreshes, the {@link AuthError} below is reachable only under real
-     * sustained contention: {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} distinct
-     * cookie-session refresh wire calls monopolising the guard back-to-back.
-     *
-     * <p>Unlike {@link #refreshIfNeeded}, this does not compare against an
-     * observed access token or cache a {@link TokenPair} — it purely
-     * provides mutual exclusion.
-     *
-     * @param op  the operation to run exclusively; invoked at most once
-     * @param <T> the operation's result type
-     * @return {@code op}'s result
-     * @throws AuthError        if a live cookie-session refresh still holds the
-     *                          guard after
-     *                          {@value #RUN_EXCLUSIVE_MAX_ATTEMPTS} attempts
-     * @throws RuntimeException whatever {@code op} throws, propagated as-is
-     */
-    public <T> T runExclusive(Supplier<T> op) {
-        int attemptsSpent = 0;
-        while (true) {
-            CompletableFuture<TokenPair> busy = inFlight.get();
-            if (isRefreshLive(busy)) {
-                if (attemptsSpent++ >= runExclusiveMaxAttempts) {
-                    throw guardBusy();
-                }
-                // A cookie-session refresh is actively mid-flight (lock
-                // released for that duration by design) — block until it
-                // settles, ignoring its outcome, then re-check from the top.
-                awaitSettled(busy);
-                continue;
-            }
-            // The slot is either empty or holds a settled future whose wire
-            // call has already returned; neither can overlap op.
-            lock.lock();
-            try {
-                CompletableFuture<TokenPair> raced = inFlight.get();
-                if (isRefreshLive(raced)) {
-                    // Lost the race: a refreshIfNeeded call started between
-                    // our check above and acquiring the lock. Release the lock
-                    // (via the finally below) and wait it out on the next
-                    // iteration — real contention, so it costs an attempt.
-                    if (attemptsSpent++ >= runExclusiveMaxAttempts) {
-                        throw guardBusy();
-                    }
-                    continue;
-                }
-                return op.get();
-            } finally {
-                lock.unlock();
-            }
-        }
-    }
-
-    /**
-     * Whether {@code future} represents a refresh that is still on the wire.
-     * A {@code null} slot means no refresh at all; a settled future means the
-     * refresh's {@code doRefresh} call has already returned and only the
-     * slot-vacating bookkeeping is outstanding (class Javadoc).
-     *
-     * @param future the current {@link #inFlight} slot value, possibly {@code null}
-     * @return {@code true} only while a refresh wire call is genuinely outstanding
-     */
-    private static boolean isRefreshLive(@Nullable CompletableFuture<TokenPair> future) {
-        return future != null && !future.isDone();
-    }
-
-    /** Blocks until {@code future} settles, discarding its outcome. */
-    private static void awaitSettled(CompletableFuture<TokenPair> future) {
-        try {
-            future.join();
-        } catch (Throwable ignored) {
-            // Outcome is irrelevant here — only that it settled.
-        }
-    }
-
-    private static AuthError guardBusy() {
-        return new AuthError(
-                "oidcRefresh could not acquire the single-flight refresh guard (CONTRACT.md §9); "
-                        + "another refresh kept it busy.");
-    }
-
-    /** Invokes {@link #afterPublishHook} if a test installed one. */
-    private void afterPublish() {
-        Runnable hook = afterPublishHook;
-        if (hook != null) {
-            hook.run();
-        }
-    }
-
-    /**
-     * Visible-for-testing: whether the {@link #inFlight} result-sharing slot is
-     * currently populated, regardless of whether its future has settled. Used
-     * by the regression test to assert that the settled-but-uncleared window
-     * described in the class Javadoc really is open at the moment
-     * {@link #runExclusive} is exercised.
-     *
-     * @return {@code true} if the slot holds a future (live or settled)
-     */
-    boolean inFlightSlotOccupied() {
-        return inFlight.get() != null;
     }
 
     /**

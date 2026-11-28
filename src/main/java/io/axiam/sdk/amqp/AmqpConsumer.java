@@ -16,12 +16,22 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 
 /**
  * AMQP event consumer: verify-before-handler HMAC gate plus the CONTRACT.md
  * &sect;8 ack/nack matrix, built on the RabbitMQ Java client's built-in
  * automatic recovery (D-13).
+ *
+ * <p>A consumer is configured with the <strong>one</strong> {@link EventType} it consumes and the tenant whose
+ * subkey it verifies with (CONTRACT.md &sect;8 step 2c, contract 1.69; D-9). A body with another signed type's
+ * layout is refused as {@code malformed} before the HMAC and never reaches the application; an application that
+ * consumes both types runs two consumers. Every discard logs exactly one warning-level event carrying
+ * {@code timestamp}, {@code exchange}, {@code routing_key}, the consumer's own {@code tenant_id} and a
+ * {@code reason} from the closed vocabulary {@code malformed}, {@code unsigned}, {@code signature},
+ * {@code key_version}, {@code stale}, {@code replay} (D-8, rule 4), and never a signature, nonce, key or body.
  *
  * <p>{@link #consume} NEVER hands an unverified delivery to the caller's
  * {@code handler} &mdash; {@link Hmac} verifies first, and the handler call
@@ -61,7 +71,7 @@ public final class AmqpConsumer {
      * Default NEW-4 issued-at clock-skew tolerance: a v2 message's
      * {@code issued_at} must fall within &plusmn; this duration of "now" or
      * it is rejected as stale. Overridable via
-     * {@link #consume(Channel, String, byte[], Consumer, Logger, Duration)}.
+     * {@link #consume(Channel, String, EventType, String, byte[], Consumer, Logger, Duration)}.
      */
     public static final Duration DEFAULT_ALLOWED_CLOCK_SKEW = Duration.ofSeconds(300);
 
@@ -71,71 +81,57 @@ public final class AmqpConsumer {
     }
 
     /**
-     * Registers a manual-ack {@link DeliverCallback} on {@code channel} for
-     * {@code queue}: every delivery's HMAC-SHA256 signature is verified
-     * (&sect;8, via {@link Hmac#verify}) BEFORE {@code handler} is invoked,
-     * then the &sect;8 ack/nack matrix (see class Javadoc) is applied. Sets
+     * Registers a manual-ack {@link DeliverCallback} on {@code channel} for {@code queue}: every delivery is checked
+     * against {@code type}'s layout and its HMAC-SHA256 signature verified (&sect;8) BEFORE {@code handler} is
+     * invoked, then the &sect;8 ack/nack matrix (see class Javadoc) is applied. Sets
      * {@code basicQos(DEFAULT_PREFETCH)} (CF-03).
      *
-     * <p>This method does not itself configure automatic recovery on the
-     * underlying connection &mdash; call
-     * {@link #configureAutomaticRecovery(ConnectionFactory, Duration)} on the
-     * {@link ConnectionFactory} used to create {@code channel}'s connection
-     * before opening it.
+     * <p>This method does not itself configure automatic recovery on the underlying connection &mdash; call
+     * {@link #configureAutomaticRecovery(ConnectionFactory, Duration)} on the {@link ConnectionFactory} used to
+     * create {@code channel}'s connection before opening it.
      *
-     * @param channel    the AMQP channel to consume on; the caller owns its
-     *                   lifecycle (creation/closing)
+     * @param channel    the AMQP channel to consume on; the caller owns its lifecycle (creation/closing)
      * @param queue      the queue name to consume from
-     * @param signingKey the per-tenant AMQP HMAC signing secret (&sect;8.1
-     *                   &mdash; obtain from the AXIAM management API; never
-     *                   hardcode)
-     * @param handler    invoked ONLY after HMAC verification AND the NEW-4
-     *                   replay-protection checks (key_version, issued_at
-     *                   freshness, nonce uniqueness &mdash; see
-     *                   {@link #deliverCallback(Channel, byte[], Consumer, Logger, Duration, Clock, NonceStore)})
-     *                   succeed
-     * @param logger     receives the &sect;8.4 security event on HMAC
-     *                   verification failure or a NEW-4 replay-protection
-     *                   rejection; the event never contains the HMAC value
+     * @param type       the ONE signed event type this consumer consumes (contract 1.69, D-9)
+     * @param tenantId   the consumer's own tenant, the one whose subkey {@code signingKey} is; it is what every
+     *                   discard event reports as {@code tenant_id} (never a value read from a body)
+     * @param signingKey the per-tenant AMQP HMAC signing secret (&sect;8.1 &mdash; obtain from the AXIAM
+     *                   management API; never hardcode)
+     * @param handler    invoked ONLY after the layout check, the HMAC verification AND the NEW-4 checks
+     *                   (key_version, issued_at freshness, nonce uniqueness) succeed
+     * @param logger     receives the one &sect;8 rule 4 discard event per discarded delivery
      * @throws IOException if {@code basicQos}/{@code basicConsume} fails
      */
-    public static void consume(Channel channel, String queue, byte[] signingKey,
+    public static void consume(Channel channel, String queue, EventType type, String tenantId, byte[] signingKey,
                                 Consumer<byte[]> handler, Logger logger) throws IOException {
-        consume(channel, queue, signingKey, handler, logger, DEFAULT_ALLOWED_CLOCK_SKEW);
+        consume(channel, queue, type, tenantId, signingKey, handler, logger, DEFAULT_ALLOWED_CLOCK_SKEW);
     }
 
     /**
-     * Overload of {@link #consume(Channel, String, byte[], Consumer, Logger)}
-     * with a caller-supplied NEW-4 issued-at clock-skew tolerance in place of
-     * {@link #DEFAULT_ALLOWED_CLOCK_SKEW}. A single {@link NonceStore} (TTL =
-     * {@code 2 * allowedClockSkew}) is created for this registration and
-     * shared across every delivery it handles, so nonce replay is detected
-     * across the lifetime of the consumer, not just within one delivery.
+     * Overload of {@link #consume(Channel, String, EventType, String, byte[], Consumer, Logger)} with a
+     * caller-supplied NEW-4 issued-at clock-skew tolerance in place of {@link #DEFAULT_ALLOWED_CLOCK_SKEW}. A
+     * single {@link NonceStore} (TTL = {@code 2 * allowedClockSkew}) is created for this registration and shared
+     * across every delivery it handles, so nonce replay is detected across the lifetime of the consumer.
      *
-     * @param channel          the AMQP channel to consume on; the caller owns its
-     *                         lifecycle (creation/closing)
+     * @param channel          the AMQP channel to consume on
      * @param queue            the queue name to consume from
-     * @param signingKey       the per-tenant AMQP HMAC signing secret (&sect;8.1
-     *                         &mdash; obtain from the AXIAM management API; never
-     *                         hardcode)
-     * @param handler          invoked ONLY after HMAC verification AND the NEW-4
-     *                         replay-protection checks succeed (see
-     *                         {@link #consume(Channel, String, byte[], Consumer, Logger)})
-     * @param logger           receives the &sect;8.4 security event on HMAC
-     *                         verification failure or a NEW-4 replay-protection
-     *                         rejection; the event never contains the HMAC value
-     * @param allowedClockSkew the &plusmn; tolerance applied to a message's
-     *                         {@code issued_at} versus wall-clock now; must
-     *                         be positive
+     * @param type             the ONE signed event type this consumer consumes
+     * @param tenantId         the consumer's own tenant, reported in every discard event
+     * @param signingKey       the per-tenant AMQP HMAC signing secret
+     * @param handler          invoked only after every check passes
+     * @param logger           receives the discard events
+     * @param allowedClockSkew the &plusmn; tolerance applied to a message's {@code issued_at} versus wall-clock
+     *                         now; must be positive
      * @throws IOException if {@code basicQos}/{@code basicConsume} fails
      */
-    public static void consume(Channel channel, String queue, byte[] signingKey,
+    public static void consume(Channel channel, String queue, EventType type, String tenantId, byte[] signingKey,
                                 Consumer<byte[]> handler, Logger logger,
                                 Duration allowedClockSkew) throws IOException {
         channel.basicQos(DEFAULT_PREFETCH);
         NonceStore nonceStore = new NonceStore(allowedClockSkew.multipliedBy(2));
         DeliverCallback deliverCallback = deliverCallback(
-                channel, signingKey, handler, logger, allowedClockSkew, Clock.systemUTC(), nonceStore);
+                channel, type, tenantId, signingKey, handler, logger, allowedClockSkew, Clock.systemUTC(),
+                nonceStore, queue);
         CancelCallback cancelCallback = consumerTag -> {
             // No cancellation-specific handling required; the caller manages
             // channel/connection lifecycle.
@@ -144,78 +140,78 @@ public final class AmqpConsumer {
     }
 
     /**
-     * Builds the &sect;8 verify-before-handler / ack-nack-matrix
-     * {@link DeliverCallback} bound to {@code channel}, using
-     * {@link #DEFAULT_ALLOWED_CLOCK_SKEW}, the system clock, and a
-     * freshly-created (per-call) {@link NonceStore}. Package-private so
-     * {@code AmqpConsumerTest} can construct and invoke it directly against
-     * synthesized {@link Delivery} instances and a fake {@link Channel},
-     * proving every matrix branch without a live broker.
+     * Builds the &sect;8 verify-before-handler / ack-nack-matrix {@link DeliverCallback} bound to
+     * {@code channel}, using {@link #DEFAULT_ALLOWED_CLOCK_SKEW}, the system clock, and a freshly-created
+     * {@link NonceStore}. Package-private so tests can drive it with synthesized {@link Delivery} instances and a
+     * fake {@link Channel}, without a live broker.
      */
-    static DeliverCallback deliverCallback(Channel channel, byte[] signingKey,
+    static DeliverCallback deliverCallback(Channel channel, EventType type, String tenantId, byte[] signingKey,
                                             Consumer<byte[]> handler, Logger logger) {
-        return deliverCallback(channel, signingKey, handler, logger, DEFAULT_ALLOWED_CLOCK_SKEW,
+        return deliverCallback(channel, type, tenantId, signingKey, handler, logger, DEFAULT_ALLOWED_CLOCK_SKEW,
                 Clock.systemUTC(), new NonceStore(DEFAULT_ALLOWED_CLOCK_SKEW.multipliedBy(2)));
     }
 
-    /**
-     * Full-control overload of {@link #deliverCallback(Channel, byte[], Consumer, Logger)}
-     * exposing the NEW-4 clock-skew tolerance, {@link Clock} (for
-     * deterministic testing of issued-at freshness), and {@link NonceStore}
-     * (so a test, or {@link #consume}, can share ONE store across multiple
-     * deliveries to prove/enforce replay detection across the consumer's
-     * lifetime rather than per-delivery).
-     *
-     * <p>Verification order per delivery, matching CONTRACT.md &sect;8 plus
-     * NEW-4:
-     * <ol>
-     *   <li>{@link Hmac#verify} &mdash; on failure, nack (no requeue),
-     *       handler never invoked.</li>
-     *   <li>NEW-4 replay-protection, evaluated ONLY once the HMAC has
-     *       verified: {@code key_version < 2}, a stale/unparseable
-     *       {@code issued_at} (outside &plusmn;{@code allowedClockSkew} of
-     *       {@code clock.instant()}), a missing/blank {@code nonce}, or a
-     *       {@code nonce} already recorded in {@code nonceStore} &mdash; any
-     *       of these reject via the SAME nack-without-requeue path as an
-     *       invalid signature, and the handler is never invoked.</li>
-     *   <li>Otherwise the &sect;8 ack/nack matrix (class Javadoc) applies to
-     *       the handler's outcome.</li>
-     * </ol>
-     */
-    static DeliverCallback deliverCallback(Channel channel, byte[] signingKey,
+    /** As the full form, with the routing key exactly as the broker reported it. */
+    static DeliverCallback deliverCallback(Channel channel, EventType type, String tenantId, byte[] signingKey,
                                             Consumer<byte[]> handler, Logger logger,
                                             Duration allowedClockSkew, Clock clock, NonceStore nonceStore) {
+        return deliverCallback(channel, type, tenantId, signingKey, handler, logger, allowedClockSkew, clock,
+                nonceStore, null);
+    }
+
+    /**
+     * Full-control form: the NEW-4 clock-skew tolerance, {@link Clock} (deterministic freshness tests) and
+     * {@link NonceStore} (shared across deliveries so replay is detected for the consumer's lifetime).
+     * {@code queue}, when non-null, stands in for a routing key the broker did not report.
+     *
+     * <p>Per delivery, the reason of a discard is the first that applies (CONTRACT.md &sect;8 rule 4):
+     * (1) not one JSON object, a byte-order mark included &rarr; {@code malformed}; (2) no top-level
+     * {@code hmac_signature} &rarr; {@code unsigned}; (3) a repeated member, a signature that is not the trailing
+     * 64-hex member, or a layout that is not {@code type}'s &rarr; {@code malformed}, before the HMAC;
+     * (4) the HMAC fails &rarr; {@code signature}; (5) the verified bytes do not decode as {@code type}
+     * &rarr; {@code malformed}; (6) {@code key_version < 2} &rarr; {@code key_version}; (7) {@code issued_at}
+     * outside &plusmn;{@code allowedClockSkew} &rarr; {@code stale}; (8) a nonce already seen &rarr;
+     * {@code replay}. The nonce is recorded only once every gate has passed. A discard is a nack without
+     * requeue and one warning event; the handler is never invoked. No body, however malformed, can make the
+     * callback throw.
+     */
+    static DeliverCallback deliverCallback(Channel channel, EventType type, String tenantId, byte[] signingKey,
+                                            Consumer<byte[]> handler, Logger logger,
+                                            Duration allowedClockSkew, Clock clock, NonceStore nonceStore,
+                                            String queue) {
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(tenantId, "tenantId");
         return (consumerTag, delivery) -> {
             long deliveryTag = delivery.getEnvelope().getDeliveryTag();
             // C2: `verified` is the exact byte sequence the HMAC covered. Everything past this
-            // point — the replay checks and the handler — reads it and never the received body,
-            // so no value the signature does not cover can reach either.
-            byte[] verified = Hmac.verifiedCanonical(signingKey, delivery.getBody());
-
-            if (verified == null) {
-                // §8.4 security event: fact of failure + routing context
-                // ONLY. NEVER the received or expected HMAC value.
-                logger.warn(
-                        "axiam_sdk_security: AMQP HMAC verification failed; nacking without requeue "
-                                + "(exchange={}, routingKey={})",
-                        delivery.getEnvelope().getExchange(), delivery.getEnvelope().getRoutingKey());
-                channel.basicNack(deliveryTag, false, false); // multiple=false, requeue=false
-                return; // handler is structurally unreachable for an unverified message
+            // point reads it and never the received body.
+            Hmac.Reason reason;
+            byte[] verified = null;
+            try {
+                Hmac.Inspection inspection = Hmac.inspect(signingKey, delivery.getBody(), type);
+                reason = inspection.reason();
+                verified = inspection.canonical();
+                if (reason == null) {
+                    reason = gates(verified, type, allowedClockSkew, clock, nonceStore);
+                }
+            } catch (RuntimeException unforeseen) {
+                reason = Hmac.Reason.MALFORMED; // default-deny; nothing escapes the delivery loop
             }
 
-            String replayRejectReason = replayProtectionFailureReason(verified, allowedClockSkew, clock, nonceStore);
-            if (replayRejectReason != null) {
-                // NEW-4 §8.4-style security event: reason + routing context
-                // ONLY, never the HMAC value (this check runs strictly after
-                // HMAC verification succeeded, so there is no signature to
-                // leak here either way).
+            if (reason != null) {
+                String routingKey = delivery.getEnvelope().getRoutingKey();
+                if (routingKey == null && queue != null) { // "" is a valid routing key: never replaced
+                    routingKey = queue;
+                }
+                // §8 rule 4 event: exactly these five members, tenant_id the consumer's own. Never a
+                // signature, a nonce, a key or any part of the body.
                 logger.warn(
-                        "axiam_sdk_security: AMQP NEW-4 replay-protection check failed ({}); nacking without "
-                                + "requeue (exchange={}, routingKey={})",
-                        replayRejectReason, delivery.getEnvelope().getExchange(),
-                        delivery.getEnvelope().getRoutingKey());
+                        "axiam_sdk_security: AMQP event discarded; nacking without requeue "
+                                + "(timestamp={}, exchange={}, routing_key={}, tenant_id={}, reason={})",
+                        clock.instant(), delivery.getEnvelope().getExchange(), routingKey, tenantId,
+                        reason.wire());
                 channel.basicNack(deliveryTag, false, false); // multiple=false, requeue=false
-                return; // handler is structurally unreachable for a replay/stale/downgraded message
+                return; // handler is structurally unreachable for a discarded message
             }
 
             try {
@@ -229,56 +225,63 @@ public final class AmqpConsumer {
         };
     }
 
+    private static final Pattern UUID_FORM = Pattern.compile(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
     /**
-     * Evaluates the NEW-4 replay-protection checks against an
-     * already-HMAC-verified {@code body}, returning {@code null} if the
-     * message passes all of them or a short, HMAC-value-free rejection
-     * reason string otherwise. Never throws: any parse failure is treated as
-     * a rejection (default-deny), matching &sect;8.3's strict-mode posture
-     * for the HMAC check itself.
+     * Rule 4 positions (5) to (8) over the verified canonical bytes: decode into {@code type}, then the v2 gates.
+     * Returns {@code null} when the message passes (and its nonce is now recorded), else the reason. Never throws.
      */
-    private static String replayProtectionFailureReason(byte[] body, Duration allowedClockSkew,
-                                                          Clock clock, NonceStore nonceStore) {
+    private static Hmac.Reason gates(byte[] canonical, EventType type, Duration allowedClockSkew, Clock clock,
+                                      NonceStore nonceStore) {
         try {
-            JsonNode root = MAPPER.readTree(body);
+            JsonNode root = MAPPER.readTree(canonical);
             if (!(root instanceof ObjectNode node)) {
-                return "unparseable message body";
+                return Hmac.Reason.MALFORMED;
             }
-
-            JsonNode keyVersionNode = node.get("key_version");
-            if (keyVersionNode == null || keyVersionNode.isNull() || !keyVersionNode.canConvertToInt()
-                    || keyVersionNode.asInt() < 2) {
-                return "key_version < 2";
+            // (5) Decode: every member present has its declared JSON type.
+            for (EventType.Member member : type.members()) {
+                JsonNode value = node.get(member.name());
+                if (value == null) {
+                    continue; // absent: the layout check already required it where it is required
+                }
+                if (value.isNull() && member.optional()) {
+                    continue;
+                }
+                boolean ok = switch (member.kind()) {
+                    case UUID -> value.isTextual() && UUID_FORM.matcher(value.asText()).matches();
+                    case STRING -> value.isTextual();
+                    case INT -> value.isIntegralNumber() && value.canConvertToInt();
+                    case OBJECT -> value.isObject();
+                    case TIMESTAMP -> {
+                        try {
+                            yield value.isTextual() && OffsetDateTime.parse(value.asText()) != null;
+                        } catch (DateTimeParseException e) {
+                            yield false;
+                        }
+                    }
+                };
+                if (!ok) {
+                    return Hmac.Reason.MALFORMED;
+                }
             }
-
-            JsonNode issuedAtNode = node.get("issued_at");
-            if (issuedAtNode == null || issuedAtNode.isNull() || issuedAtNode.asText().isBlank()) {
-                return "issued_at missing";
+            // (6) key_version below 2.
+            if (node.get("key_version").asInt() < 2) {
+                return Hmac.Reason.KEY_VERSION;
             }
-            Instant issuedAt;
-            try {
-                issuedAt = OffsetDateTime.parse(issuedAtNode.asText()).toInstant();
-            } catch (DateTimeParseException e) {
-                return "issued_at unparseable";
-            }
+            // (7) issued_at outside the freshness window.
+            Instant issuedAt = OffsetDateTime.parse(node.get("issued_at").asText()).toInstant();
             Instant now = clock.instant();
-            Duration drift = Duration.between(issuedAt, now).abs();
-            if (drift.compareTo(allowedClockSkew) > 0) {
-                return "issued_at outside allowed clock skew";
+            if (Duration.between(issuedAt, now).abs().compareTo(allowedClockSkew) > 0) {
+                return Hmac.Reason.STALE;
             }
-
-            JsonNode nonceNode = node.get("nonce");
-            if (nonceNode == null || nonceNode.isNull() || nonceNode.asText().isBlank()) {
-                return "nonce missing";
+            // (8) the nonce was already seen; recorded only here, after the decode and every gate passed.
+            if (!nonceStore.observe(node.get("nonce").asText(), now)) {
+                return Hmac.Reason.REPLAY;
             }
-            String nonce = nonceNode.asText();
-            if (!nonceStore.observe(nonce, now)) {
-                return "nonce replay detected";
-            }
-
-            return null; // all NEW-4 checks passed
+            return null;
         } catch (Exception e) {
-            return "replay-protection validation error (" + e.getClass().getSimpleName() + ")";
+            return Hmac.Reason.MALFORMED;
         }
     }
 

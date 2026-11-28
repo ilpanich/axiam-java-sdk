@@ -33,7 +33,7 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration config = new AxiamAutoConfiguration();
 
         AxiamAuthenticationFilter filter =
-                config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a", "", "", 60L);
+                config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a", "", "", 60L, "");
 
         assertNotNull(filter, "the auto-configuration must produce a default authentication filter bean");
     }
@@ -43,7 +43,7 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration config = new AxiamAutoConfiguration();
 
         AxiamAuthenticationFilter filter = config.axiamAuthenticationFilter(
-                "http://localhost:8080", "tenant-a", "https://axiam.example", "axiam:user", 30L);
+                "http://localhost:8080", "tenant-a", "https://axiam.example", "axiam:user", 30L, "");
 
         assertNotNull(filter, "the §10.1 rule 5-7 properties must be accepted by the auto-configuration");
     }
@@ -57,7 +57,7 @@ class AxiamAutoConfigurationTest {
         // startup rather than silently widening acceptance.
         assertThrows(
                 IllegalArgumentException.class,
-                () -> config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a", "", "", 86_400L));
+                () -> config.axiamAuthenticationFilter("http://localhost:8080", "tenant-a", "", "", 86_400L, ""));
     }
 
     @Test
@@ -65,7 +65,7 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration.AxiamAuthorizationMvcConfiguration mvcConfig =
                 new AxiamAutoConfiguration.AxiamAuthorizationMvcConfiguration();
 
-        try (AxiamClient client = mvcConfig.axiamClient("http://localhost:8080", "tenant-a")) {
+        try (AxiamClient client = mvcConfig.axiamClient("http://localhost:8080", "tenant-a", "")) {
             assertNotNull(client, "the auto-configuration must produce a default AxiamClient bean");
         }
     }
@@ -75,7 +75,7 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration.AxiamAuthorizationMvcConfiguration mvcConfig =
                 new AxiamAutoConfiguration.AxiamAuthorizationMvcConfiguration();
 
-        try (AxiamClient client = mvcConfig.axiamClient("http://localhost:8080", "tenant-a")) {
+        try (AxiamClient client = mvcConfig.axiamClient("http://localhost:8080", "tenant-a", "")) {
             WebMvcConfigurer configurer = mvcConfig.axiamAuthorizationWebMvcConfigurer(client);
             assertNotNull(configurer, "the auto-configuration must produce a WebMvcConfigurer bean");
             // Exercise the registration callback — must not throw.
@@ -88,7 +88,7 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
                 new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
 
-        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "")) {
+        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "", "")) {
             assertNotNull(client, "the auto-configuration must produce a default OIDC-configured AxiamClient bean");
         }
     }
@@ -98,7 +98,7 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
                 new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
 
-        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "shh")) {
+        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "shh", "")) {
             assertNotNull(client);
         }
     }
@@ -119,12 +119,41 @@ class AxiamAutoConfigurationTest {
         AxiamAutoConfiguration.AxiamOidcMvcConfiguration oidcConfig =
                 new AxiamAutoConfiguration.AxiamOidcMvcConfiguration();
 
-        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "")) {
+        try (AxiamClient client = oidcConfig.axiamOidcClient("http://localhost:8080", "tenant-a", "my-app", "", "")) {
             RouterFunction<ServerResponse> routes = oidcConfig.axiamOidcLoginRoutes(
                     client, oidcConfig.axiamOidcStateStore(), "/oidc/login", "/oidc/callback",
                     "http://localhost:8080/oidc/callback", "", "");
 
             assertNotNull(routes, "the auto-configuration must produce the login-redirect + callback RouterFunction");
+        }
+    }
+
+    @Test
+    void anUnreadableCustomCaPathFailsStartupNamingThePath() {
+        AxiamAutoConfiguration config = new AxiamAutoConfiguration();
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> config.axiamAuthenticationFilter(
+                "http://localhost:8080", "tenant-a", "", "", 60L, "/nonexistent/axiam-ca.pem"));
+
+        assertTrue(e.getMessage().contains("/nonexistent/axiam-ca.pem"));
+    }
+
+    @Test
+    void aCustomCaPathIsAcceptedForTheFilterAndBothClients(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path ca = dir.resolve("ca.pem");
+        java.nio.file.Files.write(ca, io.axiam.sdk.testutil.TestCerts.selfSignedCertPem(dir, "axiam-spring-ca"));
+        AxiamAutoConfiguration config = new AxiamAutoConfiguration();
+
+        assertNotNull(config.axiamAuthenticationFilter(
+                "https://localhost:8443", "tenant-a", "", "", 60L, ca.toString()));
+        try (AxiamClient c = new AxiamAutoConfiguration.AxiamAuthorizationMvcConfiguration()
+                .axiamClient("https://localhost:8443", "tenant-a", ca.toString())) {
+            assertNotNull(c);
+        }
+        try (AxiamClient c = new AxiamAutoConfiguration.AxiamOidcMvcConfiguration()
+                .axiamOidcClient("https://localhost:8443", "tenant-a", "my-app", "", ca.toString())) {
+            assertNotNull(c);
         }
     }
 }

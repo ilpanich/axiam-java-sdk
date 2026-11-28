@@ -73,11 +73,16 @@ class AmqpConsumerC2Test {
     }
 
     private static Outcome run(byte[] body) throws Exception {
+        return run(EventType.AUTHZ_REQUEST, body);
+    }
+
+    private static Outcome run(EventType type, byte[] body) throws Exception {
         List<AckNack> calls = new ArrayList<>();
         List<byte[]> seen = new ArrayList<>();
         Channel channel = AmqpTestDoubles.recordingChannel(calls);
         Logger logger = AmqpTestDoubles.recordingLogger(new ArrayList<>());
-        DeliverCallback callback = AmqpConsumer.deliverCallback(channel, KEY, seen::add, logger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(channel, type, "11111111-1111-1111-1111-111111111111", KEY, seen::add,
+                logger,
                 Duration.ofSeconds(300), CLOCK, new NonceStore(Duration.ofSeconds(600)));
         callback.handle("tag", AmqpTestDoubles.delivery(1L, body));
         return new Outcome(seen, calls);
@@ -178,6 +183,85 @@ class AmqpConsumerC2Test {
         // The bytes handed over are the bytes the HMAC verifies over.
         assertEquals(sig, hmacHex(delivered));
         assertFalse(new String(delivered, StandardCharsets.UTF_8).contains("hmac_signature"));
+    }
+
+    // --- #882 pins: genuine server-shaped bodies verify and are delivered byte for byte -------------
+
+    /**
+     * A genuine message is the compact form serde_json wrote, signed as written. The consumer
+     * rebuilds nothing from a tree that could disagree with the signer's encoder, so a body whose
+     * fields hold {@code < > &}, non-ASCII text, escapes, a float, an integer above 2^53 or
+     * integer-like keys must verify, reach the handler, and arrive exactly as signed.
+     */
+    private static void assertGenuineBodyVerifiesAndIsDeliveredAsSigned(String name, String metadataJson)
+            throws Exception {
+        // An AuditEventMessage, the type whose `metadata` member carries arbitrary JSON (§8 rule 2c: a
+        // member outside the declared layout is refused).
+        String canonical = "{\"tenant_id\":\"" + SIGNED_TENANT + "\",\"actor_id\":\"" + SIGNED_SUBJECT
+                + "\",\"actor_type\":\"User\",\"action\":\"documents:read\",\"outcome\":\"Success\",\"metadata\":"
+                + metadataJson + "," + TAIL + "}";
+        String sig = sign(canonical);
+        String wire = canonical.substring(0, canonical.length() - 1) + ",\"hmac_signature\":\"" + sig + "\"}";
+
+        Outcome o = run(EventType.AUDIT_EVENT, wire.getBytes(StandardCharsets.UTF_8));
+
+        assertTrue(o.handlerRan(), name + ": a genuine body must verify and reach the handler");
+        assertEquals("ack", o.calls().get(0).type(), name);
+        assertEquals(canonical, new String(o.seen().get(0), StandardCharsets.UTF_8),
+                name + ": the handler gets exactly the signed bytes");
+    }
+
+    @Test
+    void pin882_htmlSensitiveAndNonAsciiCharactersVerify() throws Exception {
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("angle brackets and ampersand",
+                "{\"q\":\"a<b>c&d\"}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("non-ASCII", "{\"q\":\"caf\u00e9 \u65e5\u672c \ud83d\ude00\"}");
+    }
+
+    @Test
+    void pin882_escapesAsServerSerdeWritesThemVerify() throws Exception {
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("quote, backslash, short escapes",
+                "{\"q\":\"a\\\"b\\\\c\\n\\t\\r\\b\\f\"}");
+        // serde_json writes the other control characters as a backslash-u-00 escape with LOWER-case hex.
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("lower-case control escape",
+                "{\"q\":\"x\\u001fy\\u001bz\"}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("DEL is raw", "{\"q\":\"x\u007fy\"}");
+    }
+
+    @Test
+    void pin882_numbersAndKeyOrderVerify() throws Exception {
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("float 1.0", "{\"n\":1.0}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("float 0.1 and -2.5", "{\"a\":0.1,\"b\":-2.5}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("large exponent float", "{\"n\":1e21}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("integer above 2^53", "{\"n\":9007199254740993}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("u64 maximum", "{\"n\":18446744073709551615}");
+        assertGenuineBodyVerifiesAndIsDeliveredAsSigned("integer-like keys in wire order",
+                "{\"10\":1,\"9\":2,\"b\":3,\"a\":4}");
+    }
+
+    @Test
+    void pin882_aSignatureThatIsNotTheLastMemberOrIsNullIsNackedAndTheHandlerNeverRuns() throws Exception {
+        String canonical = canonical("documents:read");
+        String sig = sign(canonical);
+        // The signature in the middle (the vendored reference vectors' `message` shape is key-sorted
+        // with the signature inside it; a delivery is not).
+        String middle = canonical.replace("\"action\"", "\"hmac_signature\":\"" + sig + "\",\"action\"");
+        assertNackedAndHandlerNeverRan(run(middle.getBytes(StandardCharsets.UTF_8)));
+        String nul = canonical.replaceAll("}$", ",\"hmac_signature\":null}");
+        assertNackedAndHandlerNeverRan(run(nul.getBytes(StandardCharsets.UTF_8)));
+        String number = canonical.replaceAll("}$", ",\"hmac_signature\":1}");
+        assertNackedAndHandlerNeverRan(run(number.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void pin882_aNestedDuplicateMemberIsNackedAndTheHandlerNeverRuns() throws Exception {
+        // An AuditEventMessage whose metadata repeats a member: the layout is right, so only the
+        // duplicate-member rule can refuse it.
+        String canonical = "{\"tenant_id\":\"" + SIGNED_TENANT + "\",\"actor_id\":\"" + SIGNED_SUBJECT
+                + "\",\"actor_type\":\"User\",\"action\":\"documents:read\",\"outcome\":\"Success\","
+                + "\"metadata\":{\"a\":1,\"a\":2}," + TAIL + "}";
+        String wire = canonical.replaceAll("}$", ",\"hmac_signature\":\"" + sign(canonical) + "\"}");
+        assertNackedAndHandlerNeverRan(run(wire.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static String hmacHex(byte[] bytes) throws Exception {

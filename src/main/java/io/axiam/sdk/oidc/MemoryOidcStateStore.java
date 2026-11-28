@@ -2,8 +2,9 @@ package io.axiam.sdk.oidc;
 
 import org.jspecify.annotations.Nullable;
 
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * In-memory reference implementation of {@link OidcStateStore}
@@ -19,11 +20,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link OidcStateStore} yourself for that; nothing in the SDK assumes this
  * class.
  *
- * <p>Thread-safe: backed by a {@link ConcurrentHashMap}, so concurrent
- * {@link #save}/{@link #consume} calls never corrupt the underlying map, and
- * {@link ConcurrentHashMap#remove(Object)}'s atomic get-and-delete makes
- * {@link #consume} single-use even under concurrent callers racing the same
- * {@code state}.
+ * <p>Thread-safe: backed by a synchronized insertion-ordered map, so concurrent
+ * {@link #save}/{@link #consume} calls never corrupt it, and the atomic
+ * get-and-delete in {@link #consume} makes it single-use even under concurrent
+ * callers racing the same {@code state}.
  */
 public final class MemoryOidcStateStore implements OidcStateStore {
 
@@ -34,8 +34,21 @@ public final class MemoryOidcStateStore implements OidcStateStore {
      */
     public static final long OIDC_STATE_TTL_MILLIS = 600_000L;
 
+    /**
+     * Upper bound on held entries (N1). Every login start saves one entry that lives ten minutes, so
+     * an unauthenticated caller of the login route could otherwise grow the map without limit; when
+     * the bound is reached the entry closest to expiry is evicted to make room.
+     */
+    public static final int DEFAULT_MAX_ENTRIES = 10_000;
+
     private final long ttlMillis;
-    private final Map<String, Held> entries = new ConcurrentHashMap<>();
+    private final int maxEntries;
+    /**
+     * Insertion-ordered. Every entry has the same TTL, so insertion order is expiry order: expired
+     * entries are all at the head and the entry closest to expiry is the eldest, which keeps both
+     * the sweep and the eviction at the bound cheap. Guarded by {@code this}.
+     */
+    private final Map<String, Held> entries = new LinkedHashMap<>();
 
     /**
      * Builds a store with the default 10-minute TTL.
@@ -54,7 +67,21 @@ public final class MemoryOidcStateStore implements OidcStateStore {
      *                  as the maximum.
      */
     public MemoryOidcStateStore(long ttlMillis) {
+        this(ttlMillis, DEFAULT_MAX_ENTRIES);
+    }
+
+    /**
+     * Builds a store with a custom TTL and entry bound.
+     *
+     * @param ttlMillis  entry lifetime in milliseconds, clamped as in {@link #MemoryOidcStateStore(long)}
+     * @param maxEntries the most entries held at once; at least 1. The entry closest to expiry is evicted to make room
+     */
+    public MemoryOidcStateStore(long ttlMillis, int maxEntries) {
+        if (maxEntries < 1) {
+            throw new IllegalArgumentException("maxEntries must be at least 1");
+        }
         this.ttlMillis = Math.min(ttlMillis, OIDC_STATE_TTL_MILLIS);
+        this.maxEntries = maxEntries;
     }
 
     /**
@@ -63,19 +90,26 @@ public final class MemoryOidcStateStore implements OidcStateStore {
      *
      * @return the number of unexpired entries currently held
      */
-    public int size() {
+    public synchronized int size() {
         sweep();
         return entries.size();
     }
 
     @Override
-    public void save(OidcStateEntry entry) {
+    public synchronized void save(OidcStateEntry entry) {
         sweep();
+        // Re-saving a state moves it to the tail, as a new entry.
+        entries.remove(entry.state());
+        while (entries.size() >= maxEntries) {
+            Iterator<String> eldest = entries.keySet().iterator();
+            eldest.next();
+            eldest.remove();
+        }
         entries.put(entry.state(), new Held(entry, System.currentTimeMillis() + ttlMillis));
     }
 
     @Override
-    public @Nullable OidcStateEntry consume(String state) {
+    public synchronized @Nullable OidcStateEntry consume(String state) {
         Held held = entries.remove(state);
         if (held == null || held.expiresAtEpochMs <= System.currentTimeMillis()) {
             return null;
@@ -83,10 +117,13 @@ public final class MemoryOidcStateStore implements OidcStateStore {
         return held.entry;
     }
 
-    /** Drops every expired entry. Lazy housekeeping — no background timer. */
+    /** Drops every expired entry: they are contiguous at the head. No background timer. */
     private void sweep() {
         long now = System.currentTimeMillis();
-        entries.entrySet().removeIf(e -> e.getValue().expiresAtEpochMs <= now);
+        Iterator<Held> it = entries.values().iterator();
+        while (it.hasNext() && it.next().expiresAtEpochMs <= now) {
+            it.remove();
+        }
     }
 
     private record Held(OidcStateEntry entry, long expiresAtEpochMs) {

@@ -32,6 +32,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -75,11 +81,27 @@ import java.util.regex.Pattern;
  * does not close injection by another service of the same tenant; see the contract's "What the
  * signature proves" clause and this SDK's README.
  *
- * <p><strong>Against a server older than 1.68</strong> (unsigned responses) every response is
- * refused unless the integrator sets {@link Options#allowUnsignedResponses()} for one rolling
- * upgrade; with it, a response with <em>no</em> {@code hmac_signature} member is accepted on its
- * {@code correlation_id} alone, flagged {@link Decision#unsigned()} and logged as a warning. A
- * response that carries a signature member is verified in full whatever the option says.
+ * <p><strong>Server version.</strong> The AMQP authorization requester requires an AXIAM server of
+ * 1.68 or later (contract 1.68). Such a server signs every authorization response with the tenant's
+ * AMQP subkey and answers on the requester's private {@code reply_to} queue. A server older than
+ * 1.68 ignores {@code reply_to} and answers, unsigned, only on the shared
+ * {@code axiam.authz.response} queue, which this requester never reads: against it every check times
+ * out. There is no option to accept unsigned responses (CONTRACT 1.69 &sect;8): no AXIAM server sends
+ * one to a reply queue, so an unsigned response can only have been published by someone else, and it
+ * is discarded and logged. During a rolling upgrade from a pre-1.68 server, use REST or gRPC
+ * authorization until every replica runs 1.68 or later.
+ *
+ * <p><strong>Discard event.</strong> Every discarded response logs one warning (CONTRACT 1.69 &sect;8
+ * consumer obligation 4) carrying {@code timestamp}, {@code exchange}, {@code routing_key} (the reply
+ * queue), {@code tenant_id} (this requester's own tenant) and {@code reason}
+ * ({@code malformed}, {@code unsigned}, {@code signature}, {@code tenant} or
+ * {@code unknown_request}); never a signature, a nonce, the key, the body or any value read from it.
+ *
+ * <p><strong>Threading.</strong> Responses are verified on the RabbitMQ consumer thread, but the
+ * futures returned by {@link #checkAsync} are completed on an executor, never on that thread, so a
+ * continuation may block (for instance by calling {@link #check} again) without stalling the reply
+ * queue. The executor is {@link Options#executor()} when the caller supplies one, else a small
+ * daemon-thread pool owned by the requester and shut down by {@link #close()}.
  *
  * <p>Thread-safe: many {@link #check} calls may be outstanding at once.
  */
@@ -115,47 +137,36 @@ public final class AuthzRequester implements AutoCloseable {
     /**
      * A verified answer to one {@code AuthzRequest}.
      *
-     * @param allowed    the decision; {@code true} only for a response that verified under the tenant subkey (or,
-     *                   with the unsigned opt-out, one that carried no signature at all, see {@code unsigned})
+     * @param allowed    the decision; {@code true} only for a response that verified under the tenant subkey
      * @param reason     the server's human-readable reason, or {@code null} when absent
      * @param reasonCode the machine-readable code ({@code allowed}, {@code no_grant}, {@code denied_by_rule},
      *                   {@code tenant_suspended}, ...), or {@code null} when absent; a code this SDK does not know is
      *                   surfaced verbatim
-     * @param unsigned   {@code true} when the response carried no {@code hmac_signature} and was accepted only
-     *                   because the unsigned opt-out is set
      */
-    public record Decision(boolean allowed, @Nullable String reason, @Nullable String reasonCode, boolean unsigned) {
+    public record Decision(boolean allowed, @Nullable String reason, @Nullable String reasonCode) {
     }
 
     /**
      * Options for an {@link AuthzRequester}.
      *
-     * @param allowUnsignedResponses the explicit opt-out for ONE rolling upgrade against a server older than
-     *                               contract 1.68 (off by default); see the class documentation
-     * @param logger                 receives security events for discarded responses and for an unsigned response
-     *                               the opt-out admits; never given a signature value. {@code null} for the default
-     * @param timeout                bounds each check; {@code null} for {@link #DEFAULT_TIMEOUT}
-     * @param clock                  stamps {@code issued_at}; {@code null} for the system clock
+     * @param logger   receives the security event for every discarded response; never given a signature value.
+     *                 {@code null} for the default
+     * @param timeout  bounds each check; {@code null} for {@link #DEFAULT_TIMEOUT}
+     * @param clock    stamps {@code issued_at} and the discard event; {@code null} for the system clock
+     * @param executor completes the futures {@link #checkAsync} returns, so a continuation never runs on the
+     *                 RabbitMQ consumer thread. {@code null} for a small daemon-thread pool the requester owns;
+     *                 a caller-supplied executor is never shut down by the requester
      */
-    public record Options(boolean allowUnsignedResponses, @Nullable Logger logger, @Nullable Duration timeout,
-            @Nullable Clock clock) {
+    public record Options(@Nullable Logger logger, @Nullable Duration timeout, @Nullable Clock clock,
+            @Nullable Executor executor) {
 
         /**
-         * The defaults: unsigned responses refused, {@link #DEFAULT_TIMEOUT}, the system clock.
+         * The defaults: {@link #DEFAULT_TIMEOUT}, the system clock, a requester-owned executor.
          *
          * @return the default options
          */
         public static Options defaults() {
-            return new Options(false, null, null, null);
-        }
-
-        /**
-         * Copy with the explicit unsigned-response opt-out set (see the class documentation).
-         *
-         * @return the new options
-         */
-        public Options withAllowUnsignedResponses() {
-            return new Options(true, logger, timeout, clock);
+            return new Options(null, null, null, null);
         }
 
         /**
@@ -165,7 +176,7 @@ public final class AuthzRequester implements AutoCloseable {
          * @return the new options
          */
         public Options withLogger(Logger value) {
-            return new Options(allowUnsignedResponses, value, timeout, clock);
+            return new Options(value, timeout, clock, executor);
         }
 
         /**
@@ -175,17 +186,27 @@ public final class AuthzRequester implements AutoCloseable {
          * @return the new options
          */
         public Options withTimeout(Duration value) {
-            return new Options(allowUnsignedResponses, logger, value, clock);
+            return new Options(logger, value, clock, executor);
         }
 
         /**
-         * Copy with a clock for {@code issued_at}.
+         * Copy with a clock for {@code issued_at} and the discard event.
          *
          * @param value the clock
          * @return the new options
          */
         public Options withClock(Clock value) {
-            return new Options(allowUnsignedResponses, logger, timeout, value);
+            return new Options(logger, timeout, value, executor);
+        }
+
+        /**
+         * Copy with the executor that completes {@link #checkAsync} futures (see the class documentation).
+         *
+         * @param value the executor; the requester does not shut it down
+         * @return the new options
+         */
+        public Options withExecutor(Executor value) {
+            return new Options(logger, timeout, clock, value);
         }
     }
 
@@ -198,6 +219,26 @@ public final class AuthzRequester implements AutoCloseable {
          * @return the body bytes
          */
         byte[] body();
+
+        /**
+         * The exchange the broker reported for this delivery; {@code ""} for the default exchange, where
+         * the server publishes every answer. A transport that cannot report it keeps this default.
+         *
+         * @return the exchange name
+         */
+        default String exchange() {
+            return "";
+        }
+
+        /**
+         * The delivery's routing key (the reply queue name for the default exchange), or {@code null}
+         * when the transport cannot report it, in which case the requester uses its own reply queue.
+         *
+         * @return the routing key, or {@code null}
+         */
+        default @Nullable String routingKey() {
+            return null;
+        }
 
         /** Acknowledges the delivery (an accepted response). */
         void ack();
@@ -298,8 +339,9 @@ public final class AuthzRequester implements AutoCloseable {
     private final Transport transport;
     private final String tenantId;
     private final byte[] signingKey;
-    private final boolean allowUnsigned;
     private final Logger logger;
+    private final Executor executor;
+    private final @Nullable ExecutorService ownedExecutor;
     private final Duration timeout;
     private final Clock clock;
     private final String replyTo;
@@ -318,7 +360,6 @@ public final class AuthzRequester implements AutoCloseable {
         }
         this.transport = transport;
         this.signingKey = signingKey.clone();
-        this.allowUnsigned = options.allowUnsignedResponses();
         this.logger = options.logger() != null ? options.logger() : LoggerFactory.getLogger(AuthzRequester.class);
         Duration t = options.timeout() != null ? options.timeout() : DEFAULT_TIMEOUT;
         if (t.isZero() || t.isNegative()) {
@@ -326,6 +367,22 @@ public final class AuthzRequester implements AutoCloseable {
         }
         this.timeout = t;
         this.clock = options.clock() != null ? options.clock() : Clock.systemUTC();
+        if (options.executor() != null) {
+            this.executor = options.executor();
+            this.ownedExecutor = null;
+        } else {
+            this.ownedExecutor = Executors.newCachedThreadPool(new ThreadFactory() {
+                private final AtomicInteger n = new AtomicInteger();
+
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "axiam-authz-requester-" + n.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+            this.executor = ownedExecutor;
+        }
 
         String queue = transport.declareReplyQueue(new ResponseSink() {
             @Override
@@ -343,6 +400,9 @@ public final class AuthzRequester implements AutoCloseable {
             // axiam.authz.response instead (§8 rule 5), which would put this requester back on the
             // shared queue the contract forbids.
             transport.close();
+            if (ownedExecutor != null) {
+                ownedExecutor.shutdown();
+            }
             throw new IllegalArgumentException("the authz reply queue \"" + queue + "\" is not a private queue");
         }
         this.replyTo = queue;
@@ -373,6 +433,19 @@ public final class AuthzRequester implements AutoCloseable {
             p.future().completeExceptionally(error);
         }
         pending.clear();
+        if (ownedExecutor != null) {
+            // Completions already handed to it still run; later ones fall back to the caller's thread.
+            ownedExecutor.shutdown();
+        }
+    }
+
+    /** Completes {@code action} off the caller's thread; on a refused hand-off (closed) it runs inline. */
+    private void completeOffThread(Runnable action) {
+        try {
+            executor.execute(action);
+        } catch (RejectedExecutionException e) {
+            action.run();
+        }
     }
 
     // ---- requests -------------------------------------------------------------------------
@@ -381,7 +454,8 @@ public final class AuthzRequester implements AutoCloseable {
      * Asks the server whether {@code subjectId} may perform {@code action} on {@code resourceId}
      * (optionally narrowed by one {@code scope}) and waits for the verified answer. A response that
      * fails verification or binding is discarded and this keeps waiting for the genuine one until
-     * the timeout ends.
+     * the timeout ends. Must not be called from a thread the caller's own {@link Options#executor()}
+     * needs in order to complete a check (it would wait on itself).
      *
      * @param subjectId  the subject UUID
      * @param action     the action
@@ -404,7 +478,10 @@ public final class AuthzRequester implements AutoCloseable {
 
     /**
      * Asynchronous form of {@link #check}: the future completes with the verified decision, or
-     * exceptionally with a {@link NetworkError} on a timeout, a publish failure or a close.
+     * exceptionally with a {@link NetworkError} on a timeout, a publish failure or a close. The future
+     * is completed on the requester's executor, <strong>not</strong> on the RabbitMQ consumer thread,
+     * so a dependent stage may block (including by calling {@link #check}) without stalling the reply
+     * queue.
      *
      * @param subjectId  the subject UUID
      * @param action     the action
@@ -427,12 +504,16 @@ public final class AuthzRequester implements AutoCloseable {
         CompletableFuture<Decision> out = new CompletableFuture<>();
         p.future().orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS).whenComplete((decision, error) -> {
             pending.remove(correlationId, p);
+            // JAV-R1-6: never complete `out` on the thread that got here (the RabbitMQ consumer
+            // thread for an answer): its dependants run on the completing thread, and a blocking
+            // one would stall every later delivery and the ack behind it.
             if (error == null) {
-                out.complete(decision);
+                completeOffThread(() -> out.complete(decision));
             } else if (error instanceof TimeoutException) {
-                out.completeExceptionally(new NetworkError("timed out waiting for the authz response"));
+                completeOffThread(() -> out.completeExceptionally(
+                        new NetworkError("timed out waiting for the authz response")));
             } else {
-                out.completeExceptionally(error);
+                completeOffThread(() -> out.completeExceptionally(error));
             }
         });
         try {
@@ -551,34 +632,72 @@ public final class AuthzRequester implements AutoCloseable {
 
     /** Verifies one delivery and completes the matching request, or discards it. */
     void handle(ResponseDelivery delivery) {
+        if (closed) {
+            // After Close an answer is not decoded or dispatched and raises no event (CONTRACT 1.69 §8,
+            // consumer obligation 4): the requester no longer holds the requests it would match.
+            delivery.nackWithoutRequeue();
+            return;
+        }
         Verified verified;
         try {
             verified = verifyResponse(delivery.body());
         } catch (Discard d) {
-            // Fact of failure only — never a signature value (§8 protocol rule 4).
-            logger.warn("axiam_sdk_security: AMQP authz response discarded: {}", d.getMessage());
-            delivery.nackWithoutRequeue();
+            discard(delivery, d.reason());
             return;
         }
         // Retire on acceptance: a second response for the same request finds nothing to complete.
         if (!pending.remove(verified.correlationId(), verified.pending())) {
-            logger.warn("axiam_sdk_security: AMQP authz response discarded: no outstanding request");
-            delivery.nackWithoutRequeue();
+            discard(delivery, Reason.UNKNOWN_REQUEST);
             return;
         }
         verified.pending().future().complete(verified.decision());
         delivery.ack();
     }
 
+    /** Why a response was discarded: the {@code reason} member of the security event (A.2). */
+    private enum Reason {
+        MALFORMED("malformed"), UNSIGNED("unsigned"), SIGNATURE("signature"), TENANT("tenant"),
+        UNKNOWN_REQUEST("unknown_request");
+
+        private final String code;
+
+        Reason(String code) {
+            this.code = code;
+        }
+    }
+
+    /**
+     * Nacks without requeue and logs the one security event of CONTRACT 1.69 &sect;8 consumer
+     * obligation 4: timestamp, exchange, routing key, the requester's OWN tenant and the reason.
+     * Nothing read from the body, no signature (received or computed), no nonce, no key.
+     */
+    private void discard(ResponseDelivery delivery, Reason reason) {
+        String routingKey = delivery.routingKey();
+        if (routingKey == null || routingKey.isEmpty()) {
+            routingKey = replyTo;
+        }
+        String exchange = delivery.exchange() == null ? "" : delivery.exchange();
+        logger.warn("axiam_sdk_security: AMQP authz response discarded timestamp={} exchange=\"{}\" routing_key={} "
+                + "tenant_id={} reason={}",
+                clock.instant().truncatedTo(ChronoUnit.MILLIS), exchange, routingKey, tenantId, reason.code);
+        delivery.nackWithoutRequeue();
+    }
+
     private record Verified(Decision decision, String correlationId, Pending pending) {
     }
 
-    /** A response that is not a decision. The message names the failed check, never a value. */
+    /** A response that is not a decision; carries only the reason code, never a value. */
     private static final class Discard extends Exception {
         private static final long serialVersionUID = 1L;
+        private final transient Reason reason;
 
-        Discard(String message) {
-            super(message, null, false, false);
+        Discard(Reason reason) {
+            super(reason.code, null, false, false);
+            this.reason = reason;
+        }
+
+        Reason reason() {
+            return reason;
         }
     }
 
@@ -588,30 +707,32 @@ public final class AuthzRequester implements AutoCloseable {
      * decoded from those same bytes.
      */
     private Verified verifyResponse(byte[] body) throws Discard {
-        JsonNode root = parseStrict(body, "the body is not an object with unambiguous keys");
+        JsonNode root = parseStrict(body);
         if (!root.isObject()) {
-            throw new Discard("the body is not a JSON object");
+            throw new Discard(Reason.MALFORMED);
         }
         rejectCaseVariantKeys(root);
+        // Rule 1: no hmac_signature member at all is an unsigned response. There is no opt-out
+        // (CONTRACT 1.69 §8, A.1): no server sends one to a reply queue, so whoever did is not it.
+        if (!root.has("hmac_signature")) {
+            throw new Discard(Reason.UNSIGNED);
+        }
         // Rule 1 (strict parse) for the member every response carries.
         JsonNode allowed = root.get("allowed");
         if (allowed == null || !allowed.isBoolean()) {
-            throw new Discard("allowed is missing or not a boolean");
-        }
-        if (!root.has("hmac_signature")) {
-            return acceptUnsigned(root);
+            throw new Discard(Reason.MALFORMED);
         }
 
         // The canonical bytes: the body with the final `,"hmac_signature":"<64 hex>"` taken out of the
         // closing brace. A body that does not end in that member is discarded, never repaired.
         int suffixLength = SIGNATURE_MEMBER.length() + SIGNATURE_HEX_LENGTH + 2;
         if (body.length <= suffixLength || body[body.length - 2] != '"' || body[body.length - 1] != '}') {
-            throw new Discard("the body does not end in the hmac_signature member");
+            throw new Discard(Reason.MALFORMED);
         }
         int start = body.length - suffixLength;
         String member = new String(body, start, SIGNATURE_MEMBER.length(), StandardCharsets.ISO_8859_1);
         if (!SIGNATURE_MEMBER.equals(member)) {
-            throw new Discard("the body does not end in the hmac_signature member");
+            throw new Discard(Reason.MALFORMED);
         }
         String sigHex = new String(body, start + SIGNATURE_MEMBER.length(), SIGNATURE_HEX_LENGTH,
                 StandardCharsets.ISO_8859_1);
@@ -619,66 +740,50 @@ public final class AuthzRequester implements AutoCloseable {
         try {
             received = HexFormat.of().parseHex(sigHex);
         } catch (IllegalArgumentException e) {
-            throw new Discard("hmac_signature is not hex");
+            throw new Discard(Reason.MALFORMED);
         }
         JsonNode embedded = root.get("hmac_signature");
         if (!embedded.isTextual() || !embedded.asText().equals(sigHex)) {
-            throw new Discard("hmac_signature is not the trailing member");
+            throw new Discard(Reason.MALFORMED);
         }
         byte[] canonical = new byte[start + 1];
         System.arraycopy(body, 0, canonical, 0, start);
         canonical[start] = '}';
 
+        // Discard order 3 (before the HMAC, CONTRACT 1.69 §8): the members the binding reads must be
+        // present and strings, whatever the signature says; a response that lacks one is malformed, not a
+        // signature failure.
+        if (text(root, "correlation_id") == null || text(root, "tenant_id") == null
+                || text(root, "nonce") == null) {
+            throw new Discard(Reason.MALFORMED);
+        }
+
         // Rule 2: HMAC-SHA256 under the requester's own tenant subkey, in constant time.
         if (!MessageDigest.isEqual(hmac(canonical), received)) {
-            throw new Discard("the signature does not verify");
+            throw new Discard(Reason.SIGNATURE);
         }
 
         // Everything below reads the verified canonical bytes, never body (C2).
-        JsonNode verified = parseStrict(canonical, "the verified bytes do not decode");
+        JsonNode verified = parseStrict(canonical);
         String correlationId = text(verified, "correlation_id");
         String responseTenant = text(verified, "tenant_id");
         String nonce = text(verified, "nonce");
         JsonNode verifiedAllowed = verified.get("allowed");
         if (correlationId == null || responseTenant == null || nonce == null
                 || verifiedAllowed == null || !verifiedAllowed.isBoolean()) {
-            throw new Discard("tenant_id, nonce, correlation_id or allowed is missing");
+            throw new Discard(Reason.MALFORMED);
         }
 
         // Rule 3: bound to this requester's tenant and to one outstanding request.
         if (!responseTenant.equals(tenantId)) {
-            throw new Discard("tenant_id is not the requester's");
+            throw new Discard(Reason.TENANT);
         }
         Pending p = pending.get(correlationId);
         if (p == null || !p.nonce().equals(nonce)) {
-            throw new Discard("correlation_id and nonce match no outstanding request");
+            throw new Discard(Reason.UNKNOWN_REQUEST);
         }
         return new Verified(
-                new Decision(verifiedAllowed.booleanValue(), text(verified, "reason"), text(verified, "reason_code"),
-                        false),
-                correlationId, p);
-    }
-
-    /**
-     * A response with no {@code hmac_signature} member: refused unless the integrator set the
-     * opt-out, in which case it is accepted on its {@code correlation_id} alone (a pre-1.68 server
-     * answers with no {@code tenant_id} or {@code nonce}).
-     */
-    private Verified acceptUnsigned(JsonNode root) throws Discard {
-        if (!allowUnsigned) {
-            throw new Discard("the response is unsigned");
-        }
-        String correlationId = text(root, "correlation_id");
-        if (correlationId == null) {
-            throw new Discard("the unsigned response has no correlation_id");
-        }
-        Pending p = pending.get(correlationId);
-        if (p == null) {
-            throw new Discard("correlation_id matches no outstanding request");
-        }
-        logger.warn("axiam_sdk_security: AMQP authz response accepted UNSIGNED because allowUnsignedResponses is set");
-        return new Verified(
-                new Decision(root.get("allowed").booleanValue(), text(root, "reason"), text(root, "reason_code"), true),
+                new Decision(verifiedAllowed.booleanValue(), text(verified, "reason"), text(verified, "reason_code")),
                 correlationId, p);
     }
 
@@ -687,15 +792,18 @@ public final class AuthzRequester implements AutoCloseable {
         return value != null && value.isTextual() && !value.asText().isEmpty() ? value.asText() : null;
     }
 
-    private static JsonNode parseStrict(byte[] bytes, String failure) throws Discard {
+    private static JsonNode parseStrict(byte[] bytes) throws Discard {
+        if (bytes.length == 0 || bytes[0] != '{') {
+            throw new Discard(Reason.MALFORMED); // also keeps Jackson from skipping a UTF-8 byte order mark
+        }
         try {
             JsonNode node = STRICT.readTree(bytes);
             if (node == null) {
-                throw new Discard(failure);
+                throw new Discard(Reason.MALFORMED);
             }
             return node;
         } catch (IOException e) {
-            throw new Discard(failure);
+            throw new Discard(Reason.MALFORMED);
         }
     }
 
@@ -704,7 +812,7 @@ public final class AuthzRequester implements AutoCloseable {
         Set<String> folded = new HashSet<>();
         for (Iterator<String> names = root.fieldNames(); names.hasNext();) {
             if (!folded.add(names.next().toLowerCase(Locale.ROOT))) {
-                throw new Discard("the body has keys that differ only by case");
+                throw new Discard(Reason.MALFORMED);
             }
         }
     }
@@ -731,6 +839,17 @@ public final class AuthzRequester implements AutoCloseable {
                         @Override
                         public byte[] body() {
                             return delivery.getBody();
+                        }
+
+                        @Override
+                        public String exchange() {
+                            String exchange = delivery.getEnvelope().getExchange();
+                            return exchange == null ? "" : exchange;
+                        }
+
+                        @Override
+                        public String routingKey() {
+                            return delivery.getEnvelope().getRoutingKey();
                         }
 
                         @Override

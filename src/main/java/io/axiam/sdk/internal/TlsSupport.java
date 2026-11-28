@@ -33,20 +33,15 @@ import org.jspecify.annotations.Nullable;
  * transports already take: an optional custom CA for server verification, and
  * an optional client certificate/key pair for mutual TLS.
  *
- * <h2>On the duplication this does not yet remove</h2>
+ * <h2>What is shared, and what is not</h2>
  *
- * <p>Equivalent private copies of this logic already live in
- * {@code AxiamClient} (&sect;6, REST) and {@code grpc.AuthClientInterceptor}
- * (gRPC), each with its own nested {@code CompositeX509TrustManager}. Adding a
- * third copy inside the reactor package would have been the smaller diff and
- * the worse outcome: three independent implementations of server-certificate
- * verification drift, and the drift is invisible until the day one of them
- * stops verifying something.
- *
- * <p>This class is therefore the beginning of one implementation rather than a
- * fourth. It is deliberately scoped to the new caller — folding the two
- * existing transports into it changes established &sect;6/&sect;6.1 behaviour
- * and belongs in its own change, not in a &sect;8b fix.
+ * <p>Every transport parses {@code customCa} through {@link #customCaStore(byte[])}: REST
+ * ({@code AxiamClient}), gRPC ({@code grpc.AuthClientInterceptor}) and the JWKS and AMQP paths
+ * ({@link #trustManager(byte[])}) therefore agree on what a multi-certificate bundle means and on
+ * how an empty or non-PEM one is refused. The composite "system roots or custom CA" trust managers
+ * are still separate: REST keeps its own, and gRPC keeps its own because Netty needs an
+ * {@code X509ExtendedTrustManager} (so hostname verification reaches the delegates). Folding those
+ * into this class changes established &sect;6/&sect;6.1 behaviour and belongs in its own change.
  *
  * <h2>There is no bypass, by construction</h2>
  *
@@ -82,27 +77,52 @@ public final class TlsSupport {
                 return systemTm;
             }
 
-            KeyStore customStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            customStore.load(null, null);
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            Collection<? extends Certificate> certs =
-                    cf.generateCertificates(new ByteArrayInputStream(customCaPem));
-            if (certs.isEmpty()) {
-                throw new NetworkError("custom CA PEM contained no certificates");
-            }
-            int i = 0;
-            for (Certificate cert : certs) {
-                customStore.setCertificateEntry("custom-ca-" + i++, (X509Certificate) cert);
-            }
+            KeyStore customStore = customCaStore(customCaPem);
 
             TrustManagerFactory customTmf =
                     TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             customTmf.init(customStore);
             return new CompositeX509TrustManager(systemTm, firstX509(customTmf.getTrustManagers()));
-        } catch (GeneralSecurityException | IOException e) {
+        } catch (GeneralSecurityException e) {
             // A non-PEM / invalid custom CA MUST fail clearly at construction,
             // not at the first handshake.
             throw new NetworkError("invalid custom CA PEM: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Loads <strong>every</strong> certificate of a PEM bundle into an in-memory trust store.
+     *
+     * <p>The single place {@code customCa} is parsed, shared by the REST ({@code AxiamClient}) and
+     * JWKS/AMQP ({@link #trustManager(byte[])}) paths so they cannot disagree about what a
+     * multi-certificate bundle (a root plus an intermediate, or two roots during a CA rotation)
+     * means. An empty or non-PEM bundle is refused with a fixed message that never echoes the
+     * supplied bytes.
+     *
+     * @param customCaPem PEM CA bundle, non-null and non-empty
+     * @return a store holding each certificate of the bundle as a trust anchor
+     * @throws NetworkError when the bundle holds no parsable certificate
+     */
+    public static KeyStore customCaStore(byte[] customCaPem) {
+        try {
+            KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
+            store.load(null, null);
+            Collection<? extends Certificate> certs =
+                    CertificateFactory.getInstance("X.509")
+                            .generateCertificates(new ByteArrayInputStream(customCaPem));
+            if (certs.isEmpty()) {
+                throw new NetworkError("invalid custom CA PEM: no certificate found in the bundle");
+            }
+            int i = 0;
+            for (Certificate cert : certs) {
+                store.setCertificateEntry("custom-ca-" + i++, cert);
+            }
+            return store;
+        } catch (GeneralSecurityException | IOException e) {
+            // Deliberately not e.getMessage(): a parser message must never carry bundle content. The class
+            // name alone says which parse step refused the bundle.
+            throw new NetworkError(
+                    "invalid custom CA PEM: the bundle could not be parsed (" + e.getClass().getName() + ")", e);
         }
     }
 

@@ -101,8 +101,7 @@ class AmqpConsumerTest {
     @Test
     void validSignatureAndSuccessfulHandlerAcks() throws Exception {
         AtomicBoolean handlerInvoked = new AtomicBoolean(false);
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, signingKey, body -> handlerInvoked.set(true), fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", signingKey, body -> handlerInvoked.set(true), fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(42L, validBody));
@@ -120,8 +119,7 @@ class AmqpConsumerTest {
     @Test
     void invalidSignatureNacksWithoutRequeueAndNeverInvokesHandler() throws Exception {
         AtomicBoolean handlerInvoked = new AtomicBoolean(false);
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, signingKey, body -> handlerInvoked.set(true), fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", signingKey, body -> handlerInvoked.set(true), fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(7L, tamperedBody));
@@ -139,8 +137,7 @@ class AmqpConsumerTest {
 
     @Test
     void securityLogNeverContainsAnHmacHexValue() throws Exception {
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, signingKey, body -> { }, fakeLogger,
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", signingKey, body -> { }, fakeLogger,
                 Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
         callback.handle("consumer-tag", delivery(7L, tamperedBody));
@@ -160,8 +157,7 @@ class AmqpConsumerTest {
 
     @Test
     void errDropFromHandlerNacksWithoutRequeue() throws Exception {
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, signingKey, body -> {
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", signingKey, body -> {
                     throw new ErrDrop("poison message");
                 }, fakeLogger, Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 
@@ -179,8 +175,7 @@ class AmqpConsumerTest {
 
     @Test
     void transientHandlerExceptionNacksWithRequeue() throws Exception {
-        DeliverCallback callback = AmqpConsumer.deliverCallback(
-                fakeChannel, signingKey, body -> {
+        DeliverCallback callback = AmqpConsumer.deliverCallback(fakeChannel, EventType.AUTHZ_REQUEST, "11111111-1111-1111-1111-111111111111", signingKey, body -> {
                     throw new RuntimeException("transient downstream failure");
                 }, fakeLogger, Duration.ofSeconds(300), FIXED_CLOCK, nonceStore);
 

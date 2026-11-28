@@ -24,7 +24,7 @@ Source: [ilpanich/axiam-java-sdk](https://github.com/ilpanich/axiam-java-sdk)
 
 ## Contract conformance
 
-This SDK conforms to **contract 1.66**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
+This SDK conforms to **contract 1.69**: CONTRACT.md §1–§13 and §12.7, §14, §15, §17, §19,
 §20, §21, §22, §23, §24, §25, §26, §27, §28, §28.12, §29, §30, §31, §32, §33, §34, §36 and §37, with
 §32.7 and §33.2 signed — including §6.1 mTLS (client-certificate
 authentication) and its §6.1 rules 6–10 `authenticateDevice()` login, the §1.1
@@ -85,8 +85,7 @@ offered in any namespace (§27.10). Contract 1.63 (released as **1.1.1**) is met
 `/oauth2/*` request (§6.1 rule 11, §12.1 rule 3, §14.6), `ScimTargetResponse.updatedAtRaw()` sent as
 `expected_updated_at` (§31.3 rule 4), and the refusal of an unknown profile enumeration at `plan`
 (§27.6.2 item 4). This SDK ships no helper that builds or signs an `AuditEventMessage` (it is a consumer
-only), so the §8 local refusal of reserved actions does not apply; it generates no DPoP proof. The vendored `CONTRACT.md`, `openapi.json` and
-`management-registry.json` (and `proto/`) are `ilpanich/axiam` commit `5f9d079` (contract 1.66, `openapi.json` 1.2.0; 202 operations in 29 namespaces, none added). Contract 1.66 (§34.10) adds no operation: it binds a federated sign-in to the client that started it (§12.1 rule 12b) — `ssoStart`, `ssoStartOauth2` and the SAML login set the `__Host-axiam_fed_bind` cookie and the completions refuse with `401` without it, so an application must start and complete one sign-in through the same `AxiamClient` (one §4 cookie jar); the optional `reauthenticate` start input (rule 12c) is not exposed. Contract 1.65 adds the §37 native sign-in with a provider ID token (`loginWithProviderIdToken`, `AxiamClient.nativeNonce()` and `ProviderNonce`) and the optional `idp_hint` of `oidcBegin` and `oidcPar` (§12.1, §26.2 rule 8); the regenerated management members are `default_idp` on the OAuth2 client bodies, `refresh_reuse_response` on the settings bodies (with the new `OAuth2Policy` and `RefreshReuseResponse`), and `native_login` on the federation-config bodies; a replayed refresh token now ends the session server-side by default (§9), which §9's single-flight guard already keeps this SDK from causing. **Server floor:** federation-config admin calls (`federation.create_config`, `get_config`, `list_configs`, `update_config`) of this 1.2-line SDK need an AXIAM server **1.2.0 or later**: `FederationConfigResponse.native_login` is required from 1.2.0, and a response from an older server fails to decode (a Jackson `MismatchedInputException`). `oidcPar` pushes the begin URL's `axiam_idp_hint` when its own `idpHint` is unset (the argument wins). The 1.64 text that follows is what the previous vendoring met:  Contract 1.64 (released as **1.1.2**) adds one rule, met here: a `429 rate_limit_exceeded` on a device-code poll is not terminal — `deviceLogin` waits `Retry-After` (a minimum, capped at the `expires_in` deadline), counts it as one interval, does not raise the interval for it, and polls again (§14.2 rule 9, §14.6). The status decides, not the body: any `429` is that wait, a `429 slow_down` included, and a `5xx` is a transport failure whatever its body (rule 6). The refusal at `plan` of an unknown profile enumeration now quotes the raw value the read carried (length-capped), as §27.6.2 item 4 asks of an SDK that keeps the value.
+only), so the §8 local refusal of reserved actions does not apply; it generates no DPoP proof. The vendored `CONTRACT.md` is contract **1.69** (`ilpanich/axiam` commit `c4c4e44`; it adds §34.13: the back-channel logout token carries its JWKS `kid` and `verify_logout_token` selects by it, the requester's unsigned-response opt-out is removed and its discard event is fixed, and the AMQP verification rules; contract 1.67/1.68 added the §8 signed authorization responses, §10.1 rules 10–12, §11.2 rule 11 and §12.8, all met here). `openapi.json`, `management-registry.json` (and `proto/`) are unchanged since `ilpanich/axiam` commit `5f9d079` (contract 1.66, `openapi.json` 1.2.0; 202 operations in 29 namespaces, none added). Contract 1.66 (§34.10) adds no operation: it binds a federated sign-in to the client that started it (§12.1 rule 12b) — `ssoStart`, `ssoStartOauth2` and the SAML login set the `__Host-axiam_fed_bind` cookie and the completions refuse with `401` without it, so an application must start and complete one sign-in through the same `AxiamClient` (one §4 cookie jar); the optional `reauthenticate` start input (rule 12c) is not exposed. Contract 1.65 adds the §37 native sign-in with a provider ID token (`loginWithProviderIdToken`, `AxiamClient.nativeNonce()` and `ProviderNonce`) and the optional `idp_hint` of `oidcBegin` and `oidcPar` (§12.1, §26.2 rule 8); the regenerated management members are `default_idp` on the OAuth2 client bodies, `refresh_reuse_response` on the settings bodies (with the new `OAuth2Policy` and `RefreshReuseResponse`), and `native_login` on the federation-config bodies; a replayed refresh token now ends the session server-side by default (§9), which §9's single-flight guard already keeps this SDK from causing. **Server floor:** federation-config admin calls (`federation.create_config`, `get_config`, `list_configs`, `update_config`) of this 1.2-line SDK need an AXIAM server **1.2.0 or later**: `FederationConfigResponse.native_login` is required from 1.2.0, and a response from an older server fails to decode (a Jackson `MismatchedInputException`). `oidcPar` pushes the begin URL's `axiam_idp_hint` when its own `idpHint` is unset (the argument wins). The 1.64 text that follows is what the previous vendoring met:  Contract 1.64 (released as **1.1.2**) adds one rule, met here: a `429 rate_limit_exceeded` on a device-code poll is not terminal — `deviceLogin` waits `Retry-After` (a minimum, capped at the `expires_in` deadline), counts it as one interval, does not raise the interval for it, and polls again (§14.2 rule 9, §14.6). The status decides, not the body: any `429` is that wait, a `429 slow_down` included, and a `5xx` is a transport failure whatever its body (rule 6). The refusal at `plan` of an unknown profile enumeration now quotes the raw value the read carried (length-capped), as §27.6.2 item 4 asks of an SDK that keeps the value.
 
 **Versioning.** From 1.0.0 this SDK is stable and follows [Semantic
 Versioning](https://semver.org/): a breaking change to the public API ships only in a
@@ -219,6 +218,8 @@ axiam.tenant-id=acme-tenant
 axiam.expected-issuer=https://axiam.example.com
 axiam.expected-audience=axiam:user
 axiam.clock-skew-seconds=60
+# Optional: PEM CA bundle trusted (in addition to the system roots) for the JWKS fetch and the default clients.
+axiam.custom-ca-path=/etc/axiam/ca.pem
 ```
 
 ```java
@@ -399,7 +400,9 @@ chain plus its PKCS#8 private key — via `clientCertificate(...)`. The same
 identity is applied to **both** the REST and gRPC transports of the client, and
 strict server verification is never relaxed (a client certificate is purely
 additive; the system trust store, plus any `customCa(...)`, still validates the
-server):
+server). The JWKS fetch behind local verification honours `customCa(...)` too,
+and presents the client certificate only to a JWKS on the same origin as the
+base URL, never to a `jwks_uri` on another host:
 
 ```java
 byte[] certPem = Files.readAllBytes(Path.of("client-cert.pem")); // chain, leaf first
@@ -1264,6 +1267,26 @@ reader of the received bytes sees a value the signature never covered. A handler
 that parsed the body as JSON needs no change; one that read `hmac_signature` from
 the bytes, or compared the bytes to the delivery, no longer finds it.
 
+**Layout check (§8 rule 2c).** After the signature is cut, the canonical bytes' top-level member
+names must be exactly an `AuthzRequest`'s or an `AuditEventMessage`'s declared members in declaration
+order (optional members present in place or absent, nothing else). A tenant-signed `AuthzResponse`, a
+cache-invalidation message or a reordered body is nacked without requeue and never reaches the handler.
+There is no lenient mode for an unsigned message.
+
+**Typed consume and the discard event (1.4.0; contract 1.69, D-8, D-9, D-10).** A consumer is configured with
+the *one* signed type it consumes and its own tenant:
+`AmqpConsumer.consume(channel, queue, EventType.AUTHZ_REQUEST, tenantId, signingKey, handler, logger)`. The
+layout check is against that type's members only, so a genuine, correctly signed `AuditEventMessage` delivered
+to an `AUTHZ_REQUEST` consumer (and the reverse) is refused as `malformed` before the HMAC is computed. An
+application that consumes both types runs two consumers. **Source-incompatible change to a released API** (the untyped `consume` overloads shipped in 1.3.0 and 1.3.1;
+contract 1.69, D-9 forces it): `consume` gained the `EventType` and `tenantId` parameters. Migration: add
+`EventType.AUTHZ_REQUEST` (or `AUDIT_EVENT`) and your tenant id after `queue`. Every discard logs exactly one
+warning-level event with `timestamp`, `exchange`, `routing_key`, `tenant_id` (the consumer's own, never read
+from the body) and `reason`, one of `malformed`, `unsigned`, `signature`, `key_version`, `stale`, `replay`,
+chosen in the order of §8 rule 4; it never carries a signature, a nonce, a key or any part of the body. A body
+that starts with anything but `{`, a UTF-8 byte-order mark included, is `malformed` (never stripped), and no
+body can make either consumer throw or stop.
+
 ### Asking for an authorization decision over AMQP (`io.axiam.sdk.amqp.AuthzRequester`, 1.4.0)
 
 `AuthzRequester` publishes a signed `AuthzRequest` on `axiam.authz.request` and
@@ -1299,12 +1322,26 @@ narrower. Where more than one service of a tenant publishes authorization
 requests, each uses its own `AuthzRequester` (so its own private reply queue) and
 the broker should deny SDK principals read access on `axiam.authz.request`.
 
-**Against a server older than 1.68** (unsigned responses) every response is
-refused. `Options.defaults().withAllowUnsignedResponses()` is an explicit,
-off-by-default opt-out for one rolling upgrade: a response with *no*
-`hmac_signature` member is then accepted on its `correlation_id` alone, flagged
-`Decision.unsigned()` and logged as a warning; a response that carries a
-signature is verified in full whatever the option says.
+**Server version.** The AMQP authorization requester requires an AXIAM server of 1.68 or
+later (contract 1.68). Such a server signs every authorization response with the tenant's AMQP
+subkey and answers on the requester's private `reply_to` queue. A server older than 1.68 ignores
+`reply_to` and answers, unsigned, only on the shared `axiam.authz.response` queue, which this
+requester never reads: against it every check times out. There is no option to accept unsigned
+responses (CONTRACT 1.69 §8): no AXIAM server sends one to a reply queue, so an unsigned response
+can only have been published by someone else, and it is discarded and logged. During a rolling
+upgrade from a pre-1.68 server, use REST or gRPC authorization until every replica runs 1.68 or
+later.
+
+**Discarded responses.** Every discarded response logs one warning with `timestamp`, `exchange`,
+`routing_key` (the requester's reply queue), `tenant_id` (the requester's own tenant) and `reason`
+(`malformed`, `unsigned`, `signature`, `tenant` or `unknown_request`); never a signature, a nonce,
+the key or anything read from the body.
+
+**Threading.** Responses are verified on the RabbitMQ consumer thread, but the future returned by
+`checkAsync` is completed on an executor, never on that thread, so a dependent stage may block (for
+example by calling `check` again) without stalling the reply queue. Pass your own with
+`Options.withExecutor(...)`; otherwise the requester owns a small daemon-thread pool and shuts it
+down in `close()`.
 
 ## Reactors — AMQP extension actors (`io.axiam.sdk.reactor`, §22)
 
