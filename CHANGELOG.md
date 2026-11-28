@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-28
+
 ### Security
 
 Security release (security audit 2026-11-14; contract 1.68). **Three behaviour changes need
@@ -92,6 +94,28 @@ are regenerated (`AuditLogEntry`).
 - The AMQP consumer passes the handler the verified canonical bytes (compact JSON in wire order,
   `hmac_signature` removed), not the delivery body.
 - `Hmac.verify` is stricter: a repeated key or trailing content makes a body fail verification.
+
+- re-vendor CONTRACT.md 1.69 (§9 rule 7: oidc_refresh single-flight per tenant and token)
+
+- Assert the per-verifier client lifecycle through the HttpClient API (#140)
+
+- re-vendor CONTRACT.md after the server merged ilpanich/axiam#893
+
+- re-vendor CONTRACT.md 1.69 (typed consume, BOM refusal, bounded JWKS stale-if-error; axiam#883)
+
+- re-vendor CONTRACT.md 1.69 wire-form clarification (axiam#883)
+
+- re-vendor CONTRACT.md, openapi.json and the management registry
+
+- Bump the minor-patch group with 4 updates
+
+- Bump org.springframework.boot:spring-boot-starter-parent
+
+- Bump actions/setup-java from 6.2.0 to 6.3.0
+
+- Mint example access tokens with typ at+jwt (SA-24)
+
+- Monthly dependency and toolchain update (2026-11)
 
 ### Removed
 
@@ -216,6 +240,42 @@ are regenerated (`AuditLogEntry`).
   own flights and the second call replayed the token); different tenants remain separate flights. The
   refresh thread is shut down when the primary handle closes; a closed rebound handle's
   `oidcRefreshAsync` fails as a closed client.
+
+- Refuse oidc_refresh on a closed client before any request (#142)
+
+- Share the oidc_refresh flights across tenant-rebound handles (#142)
+
+- Give each oidc_refresh flight its own outcome and keep async callers off the common pool (#142)
+
+- Key the oidc_refresh single-flight per refresh token (#142)
+
+- Trust every certificate of a customCa bundle (#141)
+
+- Trust every certificate of a customCa bundle on REST (#141)
+
+- Release the per-verifier HTTP client on close (#140)
+
+- Honour customCa in the JWKS fetch, per-verifier client (#140)
+
+- OI-36 review round 2 (axiam#883)
+
+- OI-36 review round 1 (axiam#883)
+
+- Typed consume, discard event fields, BOM refusal, bounded JWKS stale-if-error (OI-36, #883)
+
+- layout-only authz response case, refuse a leading BOM (OI-14 alignment, round 1)
+
+- Align with contract 1.69 §8 (OI-14 alignment, axiam#882, axiam#883)
+
+- Publish the JWKS and its load time as one holder (OI wave B, round 3)
+
+- Bound the JWKS stale-if-error window, lock-free stale fast path (OI wave B, round 2)
+
+- JWKS stale-if-error, callback Error handling, Decision 7 rows (OI wave B, round 1)
+
+- follow-up review findings, contract 1.69 re-vendor (OI-14, #133, axiam#880, axiam#881, axiam#882, axiam#883)
+
+- Bound login glue, access-token rules, roles claim, verified AMQP bytes, refetch window, authz requester (SA-24, C7/N14/N15/C2/C5/N2)
 
 ### Migration
 
