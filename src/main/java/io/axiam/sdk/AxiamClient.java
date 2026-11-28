@@ -299,33 +299,43 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      */
     private final boolean isPrimaryHandle;
     /**
-     * CONTRACT.md &sect;9: the {@code oidc_refresh} single-flight is keyed PER refresh token and
-     * effective tenant — the key is a SHA-256 digest, never the raw token. A slot lives only while a
-     * caller is using it ({@link RefreshSlot#users}) and is removed by the last one out, so the map
-     * does not grow.
+     * CONTRACT.md &sect;9: the {@code oidc_refresh} single-flight, keyed PER refresh token and effective
+     * tenant — the key is a SHA-256 digest, never the raw token. Each flight owns its outcome holder and
+     * vacates its key once published, so the map does not grow.
      */
-    private final java.util.concurrent.ConcurrentHashMap<String, RefreshSlot> oidcRefreshSlots =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private final SingleFlight<OidcTokenSet> oidcRefreshFlights = new SingleFlight<>();
 
-    /** One key's single-flight plus the number of callers currently inside it (guarded by the map's per-key lock). */
-    private static final class RefreshSlot {
-        final SingleFlight<OidcTokenSet> flight = new SingleFlight<>();
-        int users;
-    }
+    /**
+     * Runs the leader's wire call for {@link #oidcRefreshAsync(Sensitive)}. Async callers join on their
+     * own thread and get a future; only a flight's leader takes a thread here, and none ever blocks on
+     * another flight, so distinct tokens are never starved by a burst of the same one. Owned by this
+     * handle and shut down by {@link #close()}.
+     */
+    private final java.util.concurrent.ExecutorService oidcRefreshExecutor =
+            java.util.concurrent.Executors.newCachedThreadPool(runnable -> {
+                Thread thread = new Thread(runnable, "axiam-oidc-refresh");
+                thread.setDaemon(true);
+                return thread;
+            });
 
-    /** Number of live {@code oidc_refresh} slots; test seam. */
+    /** Number of live {@code oidc_refresh} flights; test seam. */
     int oidcRefreshSlotCount() {
-        return oidcRefreshSlots.size();
+        return oidcRefreshFlights.size();
     }
 
-    /** Total callers currently inside any slot (running or joined); test seam. */
+    /** Callers that have claimed a live flight (leaders and joiners); test seam. */
     int oidcRefreshUsers() {
-        return oidcRefreshSlots.values().stream().mapToInt(s -> s.users).sum();
+        return oidcRefreshFlights.callers();
     }
 
-    /** The (digest) keys of the live slots; test seam. */
+    /** The (digest) keys of the live flights; test seam. */
     java.util.Set<String> oidcRefreshSlotKeys() {
-        return java.util.Set.copyOf(oidcRefreshSlots.keySet());
+        return oidcRefreshFlights.keys();
+    }
+
+    /** The {@code oidc_refresh} single-flight itself, for its publish/vacate hooks; test seam. */
+    SingleFlight<OidcTokenSet> oidcRefreshFlight() {
+        return oidcRefreshFlights;
     }
 
     /** SHA-256 over the canonical (lower-case hyphenated) tenant, a separator that cannot occur in it, and the token. */
@@ -912,6 +922,7 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         }
         // Every handle owns its own lazily-built OIDC jwks_uri verifiers; each holds an HTTP client with a thread.
         oidcJwksVerifiers.values().forEach(JwksVerifier::close);
+        oidcRefreshExecutor.shutdown(); // per handle; a running wire call finishes and publishes to its callers
         if (!isPrimaryHandle) {
             // A rebound handle (actingTenant(UUID)/clearActingTenant()) does not own
             // httpClient — every other handle over this same session is still using
@@ -2584,20 +2595,9 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
         String key = oidcRefreshKey(tenant, refreshToken);
 
         // §9 rules 2/6a-6d apply per key; other keys run independently and concurrently, and no lock shared
-        // with the §1 cookie-session refresh is held across the wire call (rule 7).
-        RefreshSlot slot = oidcRefreshSlots.compute(key, (k, existing) -> {
-            RefreshSlot s = existing != null ? existing : new RefreshSlot();
-            s.users++;
-            return s;
-        });
-        try {
-            return slot.flight.run(() -> doOidcRefresh(refreshToken, scope, tenant, configuration));
-        } finally {
-            // Identity-checked vacate: the slot is dropped only by the last caller out, and only if it is
-            // still the one this caller joined.
-            oidcRefreshSlots.computeIfPresent(key, (k, current) ->
-                    current == slot && --current.users == 0 ? null : current);
-        }
+        // with the §1 cookie-session refresh is held across the wire call (rule 7). The leader runs the wire
+        // call on this thread; a joiner waits on this thread for its flight's own outcome.
+        return oidcRefreshFlights.run(key, () -> doOidcRefresh(refreshToken, scope, tenant, configuration));
     }
 
     private OidcTokenSet doOidcRefresh(Sensitive refreshToken, @Nullable String scope, @Nullable UUID tenantId,
@@ -2640,7 +2640,28 @@ public final class AxiamClient implements AutoCloseable, OidcOperations {
      * @return a future resolving to the refreshed token set
      */
     public CompletableFuture<OidcTokenSet> oidcRefreshAsync(Sensitive refreshToken) {
-        return CompletableFuture.supplyAsync(() -> oidcRefresh(refreshToken));
+        // Resolve the tenant and key, and join or start the flight, on the CALLER's thread: a joiner gets a
+        // future of its flight's outcome and never parks a pool thread. Only the leader's wire call takes a
+        // thread, from this handle's own executor rather than the common pool.
+        UUID tenant;
+        String key;
+        try {
+            tenant = resolveOauth2TenantId(null);
+            key = oidcRefreshKey(tenant, refreshToken);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+        return oidcRefreshFlights.submit(key, () -> doOidcRefresh(refreshToken, null, tenant, null),
+                this::executeOidcRefresh);
+    }
+
+    /** Hands a leader's wire call to {@link #oidcRefreshExecutor}; after {@link #close()} that is a closed-client error. */
+    private void executeOidcRefresh(Runnable wireCall) {
+        try {
+            oidcRefreshExecutor.execute(wireCall);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            throw new NetworkError("client is closed: this AxiamClient was shut down with close()");
+        }
     }
 
     @Override

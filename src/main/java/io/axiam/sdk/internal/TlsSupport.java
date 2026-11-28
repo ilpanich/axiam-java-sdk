@@ -119,8 +119,10 @@ public final class TlsSupport {
             }
             return store;
         } catch (GeneralSecurityException | IOException e) {
-            // Deliberately not e.getMessage(): a parser message must never carry bundle content.
-            throw new NetworkError("invalid custom CA PEM: the bundle could not be parsed");
+            // Deliberately not e.getMessage(): a parser message must never carry bundle content. The class
+            // name alone says which parse step refused the bundle.
+            throw new NetworkError(
+                    "invalid custom CA PEM: the bundle could not be parsed (" + e.getClass().getName() + ")", e);
         }
     }
 

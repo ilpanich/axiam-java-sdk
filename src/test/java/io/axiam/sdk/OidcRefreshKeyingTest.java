@@ -29,9 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * refresh token and the same effective tenant form one burst and share one wire call; a caller with a
  * different token, or a different tenant, never joins it and never receives its outcome.
  *
- * <p>{@code SingleFlight} publishes the outcome and vacates the slot in ONE step under its lock, so there is no
- * publish-before-vacate window to hold open; the "earliest reachable instant after A's outcome" is asserted
- * instead (B issued the moment A's call returns gets its own wire call).
+ * <p>{@code SingleFlight} publishes a flight's outcome to the flight's own holder and only then vacates its key;
+ * the window between the two is held open with its after-publish test hook. Inside it, a same-token caller
+ * joins the published flight and a different-token caller gets its own wire call.
  */
 class OidcRefreshKeyingTest {
 
@@ -57,6 +57,9 @@ class OidcRefreshKeyingTest {
                     String token = body.replaceAll(".*refresh_token=([^&]*).*", "$1");
                     String tenant = HttpUrl.get(r.getRequestUrl().toString()).queryParameter("tenant_id");
                     calls.add(token + "@" + tenant);
+                    if (token.startsWith("fail-")) {
+                        return OidcTestSupport.oauthError(400, "invalid_grant");
+                    }
                     if (token.startsWith("hold-")) {
                         firstArrived.countDown();
                         gate.await(10, TimeUnit.SECONDS);
@@ -122,15 +125,61 @@ class OidcRefreshKeyingTest {
         }
     }
 
+    /** Runs {@code inWindow} once, on A's thread, between A's publish and A's vacate. */
+    private static void holdPublishWindow(AxiamClient c, ThrowingRunnable inWindow) {
+        java.util.concurrent.atomic.AtomicBoolean fired = new java.util.concurrent.atomic.AtomicBoolean();
+        c.oidcRefreshFlight().setTestHooks(() -> {
+            if (fired.compareAndSet(false, true)) {
+                assertEquals(1, c.oidcRefreshSlotCount(), "A's published flight still holds its key");
+                try {
+                    inWindow.run();
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+        }, null);
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
     @Test
-    void aDifferentTokenRightAfterAsOutcomeIsPublishedGetsItsOwnCall() throws Exception {
+    void aDifferentTokenInsideAsPublishBeforeVacateWindowGetsItsOwnCall() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
+            java.util.concurrent.atomic.AtomicReference<String> b = new java.util.concurrent.atomic.AtomicReference<>();
+            holdPublishWindow(c, () -> b.set(access(get(async(() -> c.oidcRefresh("B"))))));
+            assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(c.oidcRefresh("A")));
+            assertEquals("access-for-B-at-" + DEFAULT_TENANT, b.get(), "B got its own result");
+            assertEquals(List.of("A@" + DEFAULT_TENANT, "B@" + DEFAULT_TENANT), rig.calls, "B had its own wire call");
+        }
+    }
+
+    @Test
+    void theSameTokenInsideAsPublishBeforeVacateWindowJoinsAsFlight() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
+            java.util.concurrent.atomic.AtomicReference<String> sync = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<String> viaAsync = new java.util.concurrent.atomic.AtomicReference<>();
+            holdPublishWindow(c, () -> {
+                sync.set(access(get(async(() -> c.oidcRefresh("A")))));
+                viaAsync.set(access(get(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("A")))));
+            });
+            assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(c.oidcRefresh("A")));
+            assertEquals("access-for-A-at-" + DEFAULT_TENANT, sync.get());
+            assertEquals("access-for-A-at-" + DEFAULT_TENANT, viaAsync.get());
+            assertEquals(1, rig.calls.size(), "callers in the window join the published flight: " + rig.calls);
+        }
+    }
+
+    @Test
+    void theSameTokenAfterFullVacateIsAFreshWireCall() throws Exception {
         try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
             assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(c.oidcRefresh("A")));
             assertEquals("access-for-B-at-" + DEFAULT_TENANT, access(c.oidcRefresh("B")));
             assertEquals(2, rig.calls.size());
-            // same token after full vacate: a fresh wire call (existing rule, kept)
             assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(c.oidcRefresh("A")));
-            assertEquals(3, rig.calls.size());
+            assertEquals("access-for-A-at-" + DEFAULT_TENANT, access(get(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("A")))));
+            assertEquals(4, rig.calls.size());
         }
     }
 
@@ -166,6 +215,8 @@ class OidcRefreshKeyingTest {
             assertTrue(rig.firstArrived.await(10, TimeUnit.SECONDS));
             CompletableFuture<OidcTokenSet> second = async(
                     () -> c.oidcRefresh(io.axiam.sdk.Sensitive.of("hold-T"), null, OTHER_TENANT, null));
+            awaitCalls(rig, 2); // the second tenant's call is on the wire while the first is still held
+            assertFalse(first.isDone(), "the first tenant's call is still held");
             rig.gate.countDown();
             assertEquals("access-for-hold-T-at-" + DEFAULT_TENANT, access(get(first)));
             assertEquals("access-for-hold-T-at-" + OTHER_TENANT, access(get(second)));
@@ -179,7 +230,13 @@ class OidcRefreshKeyingTest {
     void anUnresolvableTenantFailsImmediatelyWithNoSlotAndNoRequest() throws Exception {
         try (Rig rig = new Rig();
              AxiamClient c = AxiamClient.builder(rig.base, "acme-slug").oidcClientId("my-app").build()) {
-            assertThrows(AuthError.class, () -> c.oidcRefresh("A"));
+            AuthError e = assertThrows(AuthError.class, () -> c.oidcRefresh("raw-secret-unresolvable"));
+            assertNoRawToken(e, "raw-secret-unresolvable");
+            CompletableFuture<OidcTokenSet> async = c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("raw-secret-unresolvable"));
+            java.util.concurrent.ExecutionException ae =
+                    assertThrows(java.util.concurrent.ExecutionException.class, () -> get(async));
+            assertTrue(ae.getCause() instanceof AuthError, "async twin fails the same way: " + ae.getCause());
+            assertNoRawToken(ae.getCause(), "raw-secret-unresolvable");
             assertEquals(0, rig.server.getRequestCount(), "no discovery fetch and no token call");
             assertTrue(c.oidcRefreshSlotCount() == 0, "no slot left behind");
         }
@@ -224,6 +281,115 @@ class OidcRefreshKeyingTest {
             } finally {
                 pool.shutdownNow();
             }
+        }
+    }
+
+    /** Waits until {@code n} token calls have reached the transport. */
+    private static void awaitCalls(Rig rig, int n) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (rig.calls.size() < n) {
+            assertTrue(System.nanoTime() < deadline, "only " + rig.calls.size() + " of " + n + " calls reached the wire");
+            Thread.sleep(5);
+        }
+    }
+
+    /** No message, toString or cause of {@code t} may carry the raw refresh token. */
+    private static void assertNoRawToken(Throwable t, String rawToken) {
+        for (Throwable x = t; x != null; x = x.getCause()) {
+            assertFalse(String.valueOf(x.getMessage()).contains(rawToken), "message leaks the token: " + x.getClass());
+            assertFalse(x.toString().contains(rawToken), "toString leaks the token: " + x.getClass());
+        }
+    }
+
+    /** More concurrent callers than the common pool has threads, so parked callers would starve it. */
+    private static int beyondCommonPool() {
+        return Math.max(20, 2 * java.util.concurrent.ForkJoinPool.getCommonPoolParallelism());
+    }
+
+    @Test
+    void asyncSameTokenCallersBeyondTheCommonPoolShareOneWireCall() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
+            int n = beyondCommonPool();
+            java.util.List<CompletableFuture<OidcTokenSet>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                futures.add(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("hold-A")));
+            }
+            assertTrue(rig.firstArrived.await(10, TimeUnit.SECONDS));
+            // Every caller joins A's one flight while it is held on the wire (bounded wait, then judge the wire).
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (c.oidcRefreshUsers() < n && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+            int joined = c.oidcRefreshUsers();
+            rig.gate.countDown();
+            for (CompletableFuture<OidcTokenSet> f : futures) {
+                assertEquals("access-for-hold-A-at-" + DEFAULT_TENANT, access(get(f)));
+            }
+            assertEquals(1, rig.calls.size(), "one wire call for one single-use token, got " + rig.calls.size());
+            assertEquals(n, joined, "every async caller joined the held flight");
+        }
+    }
+
+    @Test
+    void asyncDistinctTokensBeyondTheCommonPoolAreAllOnTheWireConcurrently() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
+            int n = beyondCommonPool();
+            java.util.List<CompletableFuture<OidcTokenSet>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                futures.add(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("hold-" + i)));
+            }
+            awaitCalls(rig, n); // all n held on the transport at once
+            rig.gate.countDown();
+            for (int i = 0; i < n; i++) {
+                assertEquals("access-for-hold-" + i + "-at-" + DEFAULT_TENANT, access(get(futures.get(i))));
+            }
+            assertEquals(n, rig.calls.size());
+        }
+    }
+
+    @Test
+    void asyncUnrelatedTokenStartsWhileASameTokenFlightIsHeld() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
+            java.util.List<CompletableFuture<OidcTokenSet>> held = new java.util.ArrayList<>();
+            for (int i = 0; i < beyondCommonPool(); i++) {
+                held.add(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("hold-A")));
+            }
+            assertTrue(rig.firstArrived.await(10, TimeUnit.SECONDS));
+            CompletableFuture<OidcTokenSet> unrelated = c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("B"));
+            assertEquals("access-for-B-at-" + DEFAULT_TENANT, access(get(unrelated)), "B must not starve behind A");
+            assertTrue(held.stream().noneMatch(CompletableFuture::isDone), "A is still held");
+            rig.gate.countDown();
+            for (CompletableFuture<OidcTokenSet> f : held) {
+                assertEquals("access-for-hold-A-at-" + DEFAULT_TENANT, access(get(f)));
+            }
+            assertEquals(2, rig.calls.size(), rig.calls.toString());
+        }
+    }
+
+    @Test
+    void aFailedRefreshNeverCarriesTheRawTokenToAnyCaller() throws Exception {
+        try (Rig rig = new Rig(); AxiamClient c = rig.client()) {
+            String raw = "fail-raw-secret-refresh-token";
+            RuntimeException sync = assertThrows(RuntimeException.class, () -> c.oidcRefresh(raw));
+            assertNoRawToken(sync, raw);
+            java.util.concurrent.ExecutionException async = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> get(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of(raw))));
+            assertNoRawToken(async, raw);
+            assertEquals(2, rig.calls.size(), "after a full vacate each attempt is its own call");
+        }
+    }
+
+    @Test
+    void oidcRefreshAsyncAfterCloseFailsAsAClosedClient() throws Exception {
+        try (Rig rig = new Rig()) {
+            AxiamClient c = rig.client();
+            c.close();
+            java.util.concurrent.ExecutionException e = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> get(c.oidcRefreshAsync(io.axiam.sdk.Sensitive.of("raw-secret-after-close"))));
+            assertTrue(e.getCause() instanceof io.axiam.sdk.errors.NetworkError, String.valueOf(e.getCause()));
+            assertNoRawToken(e, "raw-secret-after-close");
+            assertEquals(0, c.oidcRefreshSlotCount());
+            assertEquals(0, rig.server.getRequestCount());
         }
     }
 }

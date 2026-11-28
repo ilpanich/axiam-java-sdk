@@ -187,7 +187,8 @@ are regenerated (`AuditLogEntry`).
   parser (`TlsSupport.customCaStore`) that trusts every certificate and refuses an empty or non-PEM
   bundle with a message that never echoes the content. The system roots are still trusted alongside
   the bundle, and chain and hostname verification are unchanged. The gRPC transport had the same
-  first-certificate defect and now uses the same parser.
+  first-certificate defect and now uses the same parser. An unparsable bundle's error names the parser
+  exception's class, never its message or the bundle's content.
 
 - **`oidcRefresh` with a different refresh token could receive another grant's token set (#142).**
   The `oidc_refresh` single-flight was one slot per client, so a call for token B made while token A's
@@ -198,7 +199,15 @@ are regenerated (`AuditLogEntry`).
   one flight, and `scope` is not part of the key); a different token or tenant gets its own call and result.
   A slot is removed once vacated. An unresolvable tenant now fails with `AuthError` before any discovery
   fetch or token call. `oidcRefresh` no longer holds the cookie-session refresh lock across its wire call,
-  so refreshes of different tokens run concurrently.
+  so refreshes of different tokens run concurrently. Each flight now owns its outcome: a caller that
+  joined a flight gets that flight's result even if a later flight of the same token has started, and an
+  `Error` thrown during the refresh reaches every caller instead of leaving them waiting. A caller arriving
+  after the outcome is published but before the slot is removed joins it without a second call.
+  `oidcRefreshAsync` no longer runs on the common `ForkJoinPool`: it joins or starts the flight on the
+  calling thread and returns a future, and only the one wire call runs, on a daemon thread the client
+  owns and shuts down on `close()`. Before, async callers beyond the pool's size could each send the same
+  single-use token, ending the session, and could starve refreshes of other tokens.
+  `RefreshGuard.runExclusive`, which nothing called any more, is removed.
 
 ### Migration
 

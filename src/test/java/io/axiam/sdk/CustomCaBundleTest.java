@@ -148,4 +148,16 @@ class CustomCaBundleTest {
             assertTrue(e.getMessage().contains("custom CA"), "got: " + e.getMessage());
         }
     }
+
+    @Test
+    void anUnparsableBundleNamesTheParserExceptionClassButNeverItsMessageOrContent() {
+        String armoredJunk = "-----BEGIN CERTIFICATE-----\nS3CR3TS3CR3TS3CR3T\n-----END CERTIFICATE-----\n";
+        NetworkError e = assertThrows(NetworkError.class,
+                () -> TlsSupport.customCaStore(armoredJunk.getBytes(StandardCharsets.UTF_8)));
+        assertTrue(e.getMessage().startsWith("invalid custom CA PEM: the bundle could not be parsed ("),
+                "got: " + e.getMessage());
+        assertTrue(e.getMessage().matches(".*\\(java\\.([a-z]+\\.)+[A-Za-z]+Exception\\)$"),
+                "a parser exception class name is appended: " + e.getMessage());
+        assertFalse(e.getMessage().contains("S3CR3T"), "got: " + e.getMessage());
+    }
 }
